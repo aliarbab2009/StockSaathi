@@ -19,8 +19,13 @@ import { getState } from "../state.js";
 const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
-const QUOTE_PERSIST_KEY = "ss.quotes.v2";
-const PERSIST_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;   // 14 days — weekends/holidays must still paint
+// Bumped v2 → v3: v2 had pre-split Reliance etc cached for up to 14 days; we
+// evict the lot so nobody paints with 2024-era numbers after the SW refresh.
+const QUOTE_PERSIST_KEY = "ss.quotes.v3";
+const LEGACY_QUOTE_KEYS = ["ss.quotes.v2", "ss.quotes.v1"];
+// 48 h — enough to paint over Fri→Mon weekend gaps, tight enough that the
+// Reliance post-split story can't be hidden for weeks.
+const PERSIST_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 const _quoteCache = new Map();
 const _historyCache = new Map();
@@ -28,18 +33,21 @@ const _fundamentalsCache = new Map();
 
 // ---------- localStorage cache so the page paints with REAL prices instantly
 function loadPersistedQuotes() {
+  // Nuke any legacy cache keys on boot — one-shot migration so users who
+  // had stale "Reliance = ₹3,130" saved in ss.quotes.v2 never see it again.
+  for (const k of LEGACY_QUOTE_KEYS) {
+    try { localStorage.removeItem(k); } catch {}
+  }
   try {
     const raw = localStorage.getItem(QUOTE_PERSIST_KEY);
     if (!raw) return;
     const obj = JSON.parse(raw);
     const now = Date.now();
     for (const [sym, entry] of Object.entries(obj)) {
-      // entry = { data: {...quote}, savedAt: ms }  (new format)
-      const data = entry?.data || entry;   // back-compat
+      const data = entry?.data || entry;
       const savedAt = entry?.savedAt || data?.ts;
       if (!data || !savedAt) continue;
       if (now - savedAt > PERSIST_MAX_AGE_MS) continue;
-      // Mark as stale on load so UI can show a soft indicator
       _quoteCache.set(sym, { data: { ...data, stale: true }, ts: savedAt });
     }
   } catch {}

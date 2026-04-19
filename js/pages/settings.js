@@ -132,10 +132,40 @@ export function renderSettings(main) {
     main.querySelector("#ejs-template").addEventListener("change", saveEJS);
     main.querySelector("#ejs-public").addEventListener("change", () => { saveEJS(); toast({ kind: "success", message: "EmailJS config saved." }); });
 
-    main.querySelector("#reset-pf-btn").addEventListener("click", () => {
-      if (confirm("Reset your portfolio, trades, coach messages, and transfers? Your account stays.")) {
+    main.querySelector("#reset-pf-btn").addEventListener("click", async () => {
+      if (!confirm("Reset your portfolio, trades, coach messages, and transfers? Your account stays.")) return;
+      const btn = main.querySelector("#reset-pf-btn");
+      btn.disabled = true;
+      btn.textContent = "Resetting…";
+      try {
+        // Supabase-mode: hit the server RPC so the DB is the source of truth.
+        // Without this, a user in server-mode would reset locally but the next
+        // loadAllFromDb would restore their stale ₹3,130 Reliance position.
+        const { sb } = await import("../db/supabase.js");
+        const client = await sb();
+        if (client) {
+          const { data: s } = await client.auth.getSession();
+          if (s?.session?.access_token) {
+            const { error } = await client.rpc("reset_my_portfolio");
+            if (error) throw new Error(error.message);
+          }
+        }
         resetCurrentPortfolio();
-        toast({ kind: "success", message: "Portfolio reset." });
+        // Also nuke persisted quote cache so the page paints fresh from Yahoo,
+        // not from some ancient localStorage entry.
+        try {
+          localStorage.removeItem("ss.quotes.v3");
+          localStorage.removeItem("ss.quotes.v2");
+          localStorage.removeItem("ss.quotes.v1");
+          localStorage.removeItem("ss.coachchat.v1");
+          localStorage.removeItem("ss.chatlog.v1");
+        } catch {}
+        toast({ kind: "success", message: "Portfolio reset. Fresh start!" });
+      } catch (e) {
+        toast({ kind: "error", message: "Reset failed: " + (e.message || e) });
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Reset portfolio";
       }
     });
     main.querySelector("#delete-account-btn").addEventListener("click", () => {

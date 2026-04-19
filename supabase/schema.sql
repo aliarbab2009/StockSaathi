@@ -404,6 +404,47 @@ $$;
 grant execute on function public.redeem_transfer_code(text) to authenticated;
 
 -- =============================================================================
+-- ATOMIC RPC: reset_my_portfolio
+-- Server-side version of the "Reset portfolio" settings button. Clears
+-- holdings, transactions, transfers (both sides), coach_messages, watchlist,
+-- and limit_orders for the caller. Cash is restored to the original starting
+-- amount. Profile, friends, and account are preserved.
+-- =============================================================================
+create or replace function public.reset_my_portfolio()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_start   bigint;
+begin
+  if v_user_id is null then raise exception 'not logged in'; end if;
+
+  select starting_cash_paise into v_start
+    from public.portfolios where user_id = v_user_id;
+  if v_start is null then v_start := 10000000; end if;  -- ₹1,00,000 default
+
+  update public.portfolios
+    set cash_paise = v_start, updated_at = now()
+    where user_id = v_user_id;
+
+  delete from public.holdings      where user_id = v_user_id;
+  delete from public.transactions  where user_id = v_user_id;
+  delete from public.coach_messages where user_id = v_user_id;
+  delete from public.watchlist     where user_id = v_user_id;
+  delete from public.limit_orders  where user_id = v_user_id;
+  -- Only delete transfers where THIS user is the sender. Cancelled pending
+  -- codes get refunded via the code's sender side.
+  delete from public.transfers where sender_id = v_user_id;
+
+  return jsonb_build_object('ok', true, 'cash_paise', v_start);
+end;
+$$;
+grant execute on function public.reset_my_portfolio() to authenticated;
+
+-- =============================================================================
 -- ATOMIC RPC: place_limit_order
 -- Reserves cash for BUY orders. SELL orders reserve the qty (validated at fill).
 -- =============================================================================

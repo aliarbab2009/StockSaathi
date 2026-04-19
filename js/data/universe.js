@@ -7,7 +7,10 @@
 
 export const STOCKS = [
   // Large-cap conglomerates
-  { symbol: "RELIANCE",   name: "Reliance Industries",       sector: "Energy",        marketCap: "21.0L Cr", price: 313000, pe: 28.4, pb: 2.9, divYield: 0.35, beta: 0.95, risk: "low",  logo: "RIL" },
+  // Post 1:1 bonus issue (Oct 2024) — share count doubled, price halved. The
+  // old 313000 paise (₹3,130) fallback paints pre-bonus data for anyone who
+  // loads the page while the Yahoo proxy is unreachable.
+  { symbol: "RELIANCE",   name: "Reliance Industries",       sector: "Energy",        marketCap: "18.5L Cr", price: 136490, pe: 25.4, pb: 2.1, divYield: 0.35, beta: 0.95, risk: "low",  logo: "RIL" },
   { symbol: "TCS",        name: "Tata Consultancy Services", sector: "IT Services",   marketCap: "14.8L Cr", price: 410000, pe: 31.2, pb: 14.1, divYield: 1.40, beta: 0.85, risk: "low",  logo: "TCS" },
   { symbol: "HDFCBANK",   name: "HDFC Bank",                 sector: "Banking",       marketCap: "13.2L Cr", price: 174500, pe: 20.1, pb: 2.9, divYield: 1.05, beta: 0.98, risk: "low",  logo: "HDB" },
   { symbol: "INFY",       name: "Infosys",                   sector: "IT Services",   marketCap: "7.5L Cr",  price: 181200, pe: 28.6, pb: 9.3, divYield: 2.35, beta: 0.91, risk: "low",  logo: "INF" },
