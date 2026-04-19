@@ -118,11 +118,17 @@ export async function verifySignupOtp({ email, code }) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
   const cleanCode = String(code).trim().replace(/\s+/g, "");
-  if (!/^\d{6}$/.test(cleanCode)) throw new Error("Code must be 6 digits.");
-  const { data, error } = await client.auth.verifyOtp({
+  if (!/^\d{4,10}$/.test(cleanCode)) throw new Error("Code must be a 4-10 digit number.");
+  // Supabase accepts both 'signup' and 'email' OTP types; email is the newer one
+  let { data, error } = await client.auth.verifyOtp({
     email, token: cleanCode, type: "signup",
   });
-  if (error) throw new Error(prettifySbError(error.message));
+  if (error) {
+    // Retry with the 'email' type (newer Supabase projects use this)
+    const retry = await client.auth.verifyOtp({ email, token: cleanCode, type: "email" });
+    if (retry.error) throw new Error(prettifySbError(error.message || retry.error.message));
+    data = retry.data;
+  }
   return { ok: true, user: data.user, session: data.session };
 }
 
@@ -222,8 +228,6 @@ export async function refreshCurrentUser() {
       classCode: profile.class_code,
       age: profile.age,
       riskProfile: profile.risk_profile,
-      parentEmail: profile.parent_email,
-      parentConsentAt: profile.parent_consent_at,
       onboarded: profile.onboarded,
       createdAt: profile.created_at,
       _supabase: true,
@@ -252,7 +256,6 @@ export async function updateProfile(patch) {
     const map = {
       displayName: "display_name", school: "school", classCode: "class_code",
       city: "city", age: "age", riskProfile: "risk_profile",
-      parentEmail: "parent_email", parentConsentAt: "parent_consent_at",
       onboarded: "onboarded",
     };
     for (const [k, v] of Object.entries(patch || {})) {
