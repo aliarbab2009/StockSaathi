@@ -5,7 +5,7 @@
 // Bump this on every deploy so old cached JS/HTML isn't served forever. The
 // activate step below deletes any cache whose name doesn't match. Include a
 // date so it is obvious in DevTools which build is live.
-const CACHE_NAME = "stocksaathi-v3-20260420";
+const CACHE_NAME = "stocksaathi-v4-20260420b";
 const STATIC = [
   "./",
   "./index.html",
@@ -17,7 +17,6 @@ const STATIC = [
   "./js/money.js",
   "./js/router.js",
   "./js/auth/accounts.js",
-  "./js/auth/email.js",
   "./js/features/transfers.js",
   "./js/components/nav.js",
   "./js/components/coachPanel.js",
@@ -60,10 +59,20 @@ const STATIC = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC))
-      .then(() => self.skipWaiting())
-  );
+  // Use cache.add per-entry inside allSettled so a single 404 (e.g. a path
+  // that was renamed since the last deploy) doesn't reject the whole install
+  // — previously this made the SW fail forever and left the OLD SW in
+  // charge, which is how stale caches lived for weeks.
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await Promise.allSettled(STATIC.map(async (url) => {
+      try {
+        const res = await fetch(url, { cache: "reload" });
+        if (res && res.ok) await cache.put(url, res);
+      } catch {}
+    }));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (event) => {
