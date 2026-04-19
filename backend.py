@@ -62,7 +62,11 @@ def load_env():
 
 load_env()
 
-PORT = int(os.environ.get("STOCKSAATHI_PORT", "7348"))
+# Railway / Render / Heroku set $PORT; fall back to our local convention.
+PORT = int(os.environ.get("PORT") or os.environ.get("STOCKSAATHI_PORT") or "7348")
+# Bind to 0.0.0.0 in hosted environments; 127.0.0.1 locally.
+HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
+PUBLIC_ORIGIN = os.environ.get("PUBLIC_ORIGIN", "").rstrip("/")
 
 
 # --------------------------------------------------------------------------
@@ -153,7 +157,7 @@ def log_email(to_email, subject, body):
     return str(path)
 
 
-def send_email(to_email, subject, body):
+def send_email(to_email, subject, body, token=None):
     # SMTP first — sends to ANY recipient. Resend sandbox only delivers to the
     # account owner's email, so it's a fallback for when SMTP isn't configured.
     attempts = []
@@ -168,15 +172,18 @@ def send_email(to_email, subject, body):
             return r
         attempts.append({"provider": "resend", **r})
     path = log_email(to_email, subject, body)
+    # IMPORTANT: in dev-log mode we echo the token back so the onboarding flow
+    # still completes end-to-end (for cloners who haven't configured email yet).
     return {
         "ok": True,
         "provider": "devlog",
         "logged_to": path,
         "attempts": attempts,
+        "dev_token": token,   # so the UI can display it directly in dev mode
         "warning": ("Email providers tried and failed (see 'attempts'). "
-                    "Logged to disk instead.") if attempts else
-                   ("No email provider configured. Logged to disk. "
-                    "Set SMTP_USER/SMTP_PASS or RESEND_API_KEY in app/.env."),
+                    "Logged to disk. Dev token included so you can test the flow.") if attempts else
+                   ("No email provider configured — running in dev mode. "
+                    "For real delivery, set RESEND_API_KEY or SMTP_* in .env (see .env.example)."),
     }
 
 
@@ -272,7 +279,7 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
             return
         subject = f"StockSaathi - Consent requested for {teen}"
         body = consent_body(teen, to, token, consent_url)
-        result = send_email(to, subject, body)
+        result = send_email(to, subject, body, token=token)
         code = 200 if result.get("ok") else 500
         self._json(code, result)
 
@@ -284,25 +291,24 @@ class ThreadingServer(ThreadingMixIn, socketserver.TCPServer):
 
 def main():
     os.chdir(str(APP_DIR))
-    host = "127.0.0.1"
     try:
-        with ThreadingServer((host, PORT), SSHandler) as httpd:
+        with ThreadingServer((HOST, PORT), SSHandler) as httpd:
             print()
             print(" " + "=" * 55)
             print("       StockSaathi backend  -  Python SMTP + static")
             print(" " + "=" * 55)
-            print(f"   http://{host}:{PORT}/")
+            print(f"   http://{HOST}:{PORT}/")
             resend = "on " if os.environ.get("RESEND_API_KEY") else "off"
             smtp = "on " if (os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS")) else "off"
             print(f"   email providers:  Resend [{resend}]  SMTP [{smtp}]")
             if resend == "off" and smtp == "off":
-                print(f"   (no provider configured -- emails will log to {LOG_DIR})")
+                print(f"   (no provider configured -- dev-log mode, emails echo token)")
             print(f"   Ctrl+C to stop.")
             print()
+            sys.stdout.flush()
             httpd.serve_forever()
     except OSError as e:
-        print(f"Cannot bind {host}:{PORT} -- {e}")
-        print(f"Try: set STOCKSAATHI_PORT=7349 && python backend.py")
+        print(f"Cannot bind {HOST}:{PORT} -- {e}")
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nShutting down.")

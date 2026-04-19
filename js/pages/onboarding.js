@@ -120,10 +120,15 @@ function renderStep(s) {
         ` : `
           <div class="${form.consentMode === 'smtp' || form.consentMode === 'resend' ? 'success-msg' : 'info-msg'}" style="display: flex; flex-direction: column; gap: 8px;">
             ${form.consentMode === 'smtp' || form.consentMode === 'resend'
-              ? `<div>✅ Email sent via ${form.consentMode.toUpperCase()} to <strong>${escapeHtml(form.parentEmail)}</strong>. Ask them to read you the 6-digit code from the email.</div>`
-              : `<div>⚠️ Backend dev-log mode — your email was logged to <code>app/logs/emails/</code> on the server instead of being sent. To actually deliver, configure SMTP or Resend in <code>app/.env</code> (see .env.example).</div>`
+              ? `<div>✅ Email sent via ${form.consentMode.toUpperCase()} to <strong>${escapeHtml(form.parentEmail)}</strong>. Ask them to read you the 6-digit code from the email.</div>
+                 <div class="text-xs muted" style="margin-top: 6px;">Code not arrived? Check spam, or resend.</div>`
+              : `<div><strong>Demo mode.</strong> This instance isn't configured to send real email, so we're showing the code directly so you can try the app end-to-end.</div>
+                 <div style="margin-top: 8px; padding: 10px 14px; background: var(--surface); border: 1.5px dashed var(--brand); border-radius: var(--r); text-align: center;">
+                   <div class="text-xs muted" style="letter-spacing: 0.06em; text-transform: uppercase;">Your consent code</div>
+                   <div style="font-family: var(--font-mono); font-size: 28px; font-weight: 800; letter-spacing: 0.2em; color: var(--text-strong); margin-top: 2px;">${escapeHtml(form.devToken || form.consentToken?.token || "—")}</div>
+                 </div>
+                 <div class="text-xs muted" style="margin-top: 6px;">In production, a real email is delivered to the parent and only they see the code.</div>`
             }
-            <div class="text-xs muted" style="margin-top: 6px;">Code not arrived? Check spam, or resend.</div>
           </div>
 
           <div>
@@ -228,11 +233,12 @@ function attachStepListeners(main) {
       form.consentToken = token;
       form.consentMode = res.mode;
       form.consentNote = res.note;
+      form.devToken = res.devToken || null;
       render(main);
       if (res.mode === "smtp" || res.mode === "resend") {
         toast({ kind: "success", message: `Email sent via ${res.mode.toUpperCase()}.` });
       } else if (res.mode === "devlog") {
-        toast({ kind: "warn", message: "Backend running in dev-log mode (no SMTP). See Settings." });
+        toast({ kind: "info", message: "Demo mode — code shown below. Use it to continue." });
       }
     } catch (e) {
       alert("Couldn't send consent email: " + e.message);

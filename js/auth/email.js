@@ -50,6 +50,7 @@ export async function deliverConsent({ teenName, parentEmail, token }) {
       mode: data.provider || "unknown",
       note: data.warning || null,
       loggedTo: data.logged_to || null,
+      devToken: data.dev_token || null,
     };
   } catch (e) {
     clearTimeout(t);

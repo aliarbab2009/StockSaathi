@@ -1,0 +1,3 @@
+# StockSaathi backend — uses only Python standard library (3.9+).
+# No runtime dependencies needed. File exists so Railway/Render/Heroku
+# recognise this as a Python project.
