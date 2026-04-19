@@ -68,24 +68,40 @@ function pickAvatarColor(username) {
 // =========================================================================
 
 export async function registerAccount({ username, email, password, displayName }) {
+  // Always normalize: email + username lowercase, trimmed. This is the ONLY
+  // identity we ever write to the DB — keeps "Alice" and "alice" as one user.
+  const emailN = String(email || "").trim().toLowerCase();
+  const usernameN = String(username || "").trim().toLowerCase();
+  const displayN = String(displayName || username || "").trim();
+
   const client = await sb();
   if (client) {
-    // Supabase Auth
-    const avatar_color = pickAvatarColor(username);
+    // --- Pre-checks: fail fast before creating an auth.users row -----------
+    // 1. Username uniqueness in profiles (email uniqueness is enforced by
+    //    auth.users automatically).
+    try {
+      const { data: dup } = await client.from("profiles")
+        .select("id").ilike("username", usernameN).limit(1).maybeSingle();
+      if (dup) throw new Error("This username is already taken. Try another.");
+    } catch (e) {
+      // Only surface the username error — not the table-permission error if
+      // RLS blocks anonymous reads.
+      if (/already taken/i.test(e.message)) throw e;
+    }
+
+    const avatar_color = pickAvatarColor(usernameN);
     const { data, error } = await client.auth.signUp({
-      email,
+      email: emailN,
       password,
       options: {
-        data: { username: username.trim(), display_name: displayName, avatar_color },
+        data: { username: usernameN, display_name: displayN, avatar_color },
       },
     });
     if (error) throw new Error(prettifySbError(error.message));
-    // If Supabase email-confirmation is ON, data.session is null — user is
-    // created but not logged in. The caller branches on needsConfirmation.
     const hasSession = !!data.session;
     return {
       id: data.user?.id,
-      username, email, displayName,
+      username: usernameN, email: emailN, displayName: displayN,
       hasSession,
       needsConfirmation: !hasSession,
     };
@@ -93,16 +109,14 @@ export async function registerAccount({ username, email, password, displayName }
 
   // Fallback: local mode
   const accs = readLocalAccounts();
-  const emailL = email.trim().toLowerCase();
-  const handleL = username.trim().toLowerCase();
-  if (accs.some(a => a.email.toLowerCase() === emailL)) throw new Error("An account with this email already exists. Try logging in.");
-  if (accs.some(a => a.username.toLowerCase() === handleL)) throw new Error("This username is taken. Try another.");
+  if (accs.some(a => a.email.toLowerCase() === emailN)) throw new Error("An account with this email already exists. Try logging in.");
+  if (accs.some(a => a.username.toLowerCase() === usernameN)) throw new Error("This username is already taken. Try another.");
   const { hash, salt } = await hashPassword(password);
   const account = {
     id: `u_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-    username: username.trim(), email: email.trim(), displayName: displayName || username.trim(),
+    username: usernameN, email: emailN, displayName: displayN,
     passwordHash: hash, passwordSalt: salt, createdAt: Date.now(),
-    avatarColor: pickAvatarColor(username),
+    avatarColor: pickAvatarColor(usernameN),
   };
   accs.push(account);
   writeLocalAccounts(accs);
@@ -117,15 +131,15 @@ export async function registerAccount({ username, email, password, displayName }
 export async function verifySignupOtp({ email, code }) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
+  const emailN = String(email || "").trim().toLowerCase();
   const cleanCode = String(code).trim().replace(/\s+/g, "");
-  if (!/^\d{4,10}$/.test(cleanCode)) throw new Error("Code must be a 4-10 digit number.");
+  if (!/^\d{4,10}$/.test(cleanCode)) throw new Error("Code must be 4-10 digits.");
   // Supabase accepts both 'signup' and 'email' OTP types; email is the newer one
   let { data, error } = await client.auth.verifyOtp({
-    email, token: cleanCode, type: "signup",
+    email: emailN, token: cleanCode, type: "signup",
   });
   if (error) {
-    // Retry with the 'email' type (newer Supabase projects use this)
-    const retry = await client.auth.verifyOtp({ email, token: cleanCode, type: "email" });
+    const retry = await client.auth.verifyOtp({ email: emailN, token: cleanCode, type: "email" });
     if (retry.error) throw new Error(prettifySbError(error.message || retry.error.message));
     data = retry.data;
   }
@@ -138,18 +152,26 @@ export async function verifySignupOtp({ email, code }) {
 export async function resendSignupOtp(email) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
-  const { error } = await client.auth.resend({ type: "signup", email });
+  const emailN = String(email || "").trim().toLowerCase();
+  const { error } = await client.auth.resend({ type: "signup", email: emailN });
   if (error) throw new Error(prettifySbError(error.message));
   return { ok: true };
 }
 
 export async function loginAccount({ emailOrUsername, password }) {
+  const q = String(emailOrUsername || "").trim().replace(/^@/, "").toLowerCase();
+  if (!q) throw new Error("Enter your email or username.");
+  if (!password) throw new Error("Enter your password.");
+
   const client = await sb();
   if (client) {
-    // If the user provided a username, resolve email via profiles
-    let email = emailOrUsername.trim();
-    if (!email.includes("@")) {
-      const { data } = await client.from("profiles").select("email").eq("username", email).maybeSingle();
+    // Resolve to email. If input contains '@', treat as email directly (also
+    // try profiles lookup in case someone has @ in their username — unlikely
+    // but cheap).
+    let email = q;
+    if (!q.includes("@")) {
+      const { data } = await client.from("profiles")
+        .select("email").ilike("username", q).maybeSingle();
       if (!data?.email) throw new Error("No account with that username.");
       email = data.email;
     }
@@ -160,7 +182,6 @@ export async function loginAccount({ emailOrUsername, password }) {
 
   // Fallback: local
   const accs = readLocalAccounts();
-  const q = emailOrUsername.trim().toLowerCase();
   const acc = accs.find(a => a.email.toLowerCase() === q || a.username.toLowerCase() === q);
   if (!acc) throw new Error("No account with that email or username.");
   const ok = await verifyPassword(password, acc.passwordHash, acc.passwordSalt);
