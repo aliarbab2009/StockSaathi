@@ -99,12 +99,14 @@ function renderSend(body, state) {
   const msg = body.querySelector("#send-msg");
   const results = body.querySelector("#user-results");
 
-  handleInput.addEventListener("input", () => {
+  handleInput.addEventListener("input", async () => {
     const q = handleInput.value.trim();
     if (q.length < 2) { results.innerHTML = ""; return; }
-    const found = searchUsers(q.replace(/^@/, ""));
+    let found = [];
+    try { found = await searchUsers(q.replace(/^@/, "")); } catch { found = []; }
+    if (!Array.isArray(found)) found = [];
     results.innerHTML = found.map(u => `
-      <button class="btn btn-ghost btn-sm" data-pick="${u.username}" style="margin-right: 6px; margin-top: 4px;">@${u.username} · ${escapeHtml(u.displayName)}</button>
+      <button class="btn btn-ghost btn-sm" data-pick="${u.username}" style="margin-right: 6px; margin-top: 4px;">@${u.username} · ${escapeHtml(u.displayName || u.username)}</button>
     `).join("");
     results.querySelectorAll("[data-pick]").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -122,7 +124,7 @@ function renderSend(body, state) {
   body.querySelector("#send-quick-500").addEventListener("click", () => amountInput.value = 500);
   body.querySelector("#send-quick-1000").addEventListener("click", () => amountInput.value = 1000);
 
-  body.querySelector("#send-btn").addEventListener("click", () => {
+  body.querySelector("#send-btn").addEventListener("click", async () => {
     msg.innerHTML = "";
     const handle = handleInput.value.trim().replace(/^@/, "");
     const amount = parseFloat(amountInput.value);
@@ -130,13 +132,21 @@ function renderSend(body, state) {
     if (!handle) return showErr(msg, "Enter a recipient.");
     if (!Number.isFinite(amount) || amount <= 0) return showErr(msg, "Enter a valid amount.");
 
+    const btn = body.querySelector("#send-btn");
+    btn.disabled = true;
+    const origLabel = btn.textContent;
+    btn.textContent = "Sending…";
     try {
-      const res = sendTransfer({ recipientHandle: handle, amountPaise: rupeesToPaise(amount), note });
-      toast({ kind: "success", message: `Sent ${formatRupees(res.amountPaise)} to ${res.recipient.displayName}` });
+      const res = await sendTransfer({ recipientHandle: handle, amountPaise: rupeesToPaise(amount), note });
+      const who = res?.recipient?.displayName || res?.recipient?.username || handle;
+      toast({ kind: "success", message: `Sent ${formatRupees(res.amountPaise)} to ${who}` });
       handleInput.value = ""; amountInput.value = ""; noteInput.value = "";
       msg.innerHTML = `<div class="success-msg">Transfer complete.</div>`;
     } catch (e) {
-      showErr(msg, e.message);
+      showErr(msg, e.message || "Transfer failed.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origLabel;
     }
   });
 }
@@ -198,13 +208,13 @@ function renderCodes(body, state) {
     </div>
   `;
 
-  body.querySelector("#code-gen-btn").addEventListener("click", () => {
+  body.querySelector("#code-gen-btn").addEventListener("click", async () => {
     const result = body.querySelector("#code-result");
     const amount = parseFloat(body.querySelector("#code-amount").value);
     const note = body.querySelector("#code-note").value.trim();
     if (!Number.isFinite(amount) || amount <= 0) { result.innerHTML = `<div class="error-msg">Enter a valid amount.</div>`; return; }
     try {
-      const res = createTransferCode({ amountPaise: rupeesToPaise(amount), note });
+      const res = await createTransferCode({ amountPaise: rupeesToPaise(amount), note });
       result.innerHTML = `
         <div class="success-msg" style="display: flex; flex-direction: column; gap: 8px;">
           <div>Code ready. Share it with the recipient:</div>
@@ -212,19 +222,19 @@ function renderCodes(body, state) {
           <div style="font-size: var(--text-xs); color: var(--text-muted);">Amount: ${formatRupees(res.amountPaise)}. Expires if unredeemed.</div>
         </div>
       `;
-    } catch (e) { result.innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`; }
+    } catch (e) { result.innerHTML = `<div class="error-msg">${escapeHtml(e.message || "Failed.")}</div>`; }
   });
 
-  body.querySelector("#redeem-btn").addEventListener("click", () => {
+  body.querySelector("#redeem-btn").addEventListener("click", async () => {
     const msg = body.querySelector("#redeem-msg");
     const code = body.querySelector("#redeem-code").value.trim().toUpperCase();
     try {
-      const res = redeemTransferCode(code);
+      const res = await redeemTransferCode(code);
       toast({ kind: "success", message: `Received ${formatRupees(res.amountPaise)}` });
       msg.innerHTML = `<div class="success-msg">Code redeemed. ${formatRupees(res.amountPaise)} added to your cash.</div>`;
       body.querySelector("#redeem-code").value = "";
     } catch (e) {
-      msg.innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`;
+      msg.innerHTML = `<div class="error-msg">${escapeHtml(e.message || "Failed.")}</div>`;
     }
   });
 }
@@ -319,17 +329,18 @@ function renderFriendsList(body, state) {
     </div>
   `;
 
-  body.querySelector("#fr-add").addEventListener("click", () => {
+  body.querySelector("#fr-add").addEventListener("click", async () => {
     const msg = body.querySelector("#fr-msg");
     const handle = body.querySelector("#fr-handle").value.trim().replace(/^@/, "");
     if (!handle) return;
     try {
-      const res = addFriend(handle);
-      toast({ kind: "success", message: `Added ${res.friend.displayName}` });
+      const res = await addFriend(handle);
+      const who = res?.friend?.displayName || res?.friend?.username || handle;
+      toast({ kind: "success", message: `Added ${who}` });
       body.querySelector("#fr-handle").value = "";
       msg.innerHTML = "";
     } catch (e) {
-      msg.innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`;
+      msg.innerHTML = `<div class="error-msg">${escapeHtml(e.message || "Failed.")}</div>`;
     }
   });
 
