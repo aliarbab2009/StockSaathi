@@ -396,41 +396,59 @@ export async function runAgent({ apiKey, system, messages, onStep }) {
   while (loops < MAX_TOOL_LOOPS) {
     loops++;
     const resp = await callLLM({ apiKey, system, messages: conv, tools: TOOLS });
-    if (!resp || resp.error) {
-      console.warn("LLM response empty/error:", resp?.error);
+    if (!resp) {
+      console.warn("LLM unreachable (attempt", loops, ")");
+      return null;
+    }
+    if (resp.error) {
+      console.warn("LLM error:", JSON.stringify(resp.error).slice(0, 200));
       return null;
     }
     const choice = resp.choices?.[0];
-    if (!choice) return null;
-    const msg = choice.message;
+    if (!choice) {
+      console.warn("LLM empty choices");
+      return null;
+    }
+    const msg = choice.message || {};
 
-    // If tool calls requested, execute and loop
-    if (choice.finish_reason === "tool_calls" && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
-      onStep?.({ stepIndex: loops, action: "tool_calls", tools: msg.tool_calls.map(tc => tc.function.name) });
+    // Tool-use branch: Groq/OpenAI format has msg.tool_calls array
+    const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+    const wantsTools = toolCalls.length > 0 &&
+      (choice.finish_reason === "tool_calls" || choice.finish_reason === "function_call" || !msg.content);
 
-      // Add assistant's tool-call message to history
+    if (wantsTools) {
+      onStep?.({ stepIndex: loops, action: "tool_calls", tools: toolCalls.map(tc => tc.function?.name) });
+
+      // Append assistant tool-call turn as-is
       conv.push({
         role: "assistant",
-        content: msg.content || "",
-        tool_calls: msg.tool_calls,
+        content: msg.content ?? "",
+        tool_calls: toolCalls,
       });
 
-      // Execute each tool in parallel, then append tool results
-      const results = await Promise.all(msg.tool_calls.map(async (tc) => {
-        const name = tc.function.name;
+      // Execute tools in parallel, collect results
+      const results = await Promise.all(toolCalls.map(async (tc) => {
+        const name = tc.function?.name || "";
         let args = {};
-        try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
+        const rawArgs = tc.function?.arguments ?? "{}";
+        try {
+          args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : (rawArgs || {});
+        } catch (e) {
+          args = {};
+          console.warn("tool arg parse fail:", rawArgs);
+        }
         const executor = EXECUTORS[name];
         let result;
-        if (!executor) result = { ok: false, error: `Unknown tool: ${name}` };
-        else {
+        if (!executor) {
+          result = { ok: false, error: `Unknown tool: ${name}. Available: ${Object.keys(EXECUTORS).join(", ")}` };
+        } else {
           try { result = await executor(args); }
           catch (e) { result = { ok: false, error: String(e?.message || e) }; }
         }
         return {
           role: "tool",
           tool_call_id: tc.id,
-          content: JSON.stringify(result),
+          content: JSON.stringify(result).slice(0, 4000),   // cap large payloads
         };
       }));
 
@@ -438,10 +456,11 @@ export async function runAgent({ apiKey, system, messages, onStep }) {
       continue;
     }
 
-    // Final text response
+    // Final text response — return even if empty so caller can template-fallback
     const text = (msg.content || "").trim();
     return text || null;
   }
+
   console.warn("Agent: hit MAX_TOOL_LOOPS");
   return null;
 }

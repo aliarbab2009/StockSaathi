@@ -1,21 +1,22 @@
 // =============================================================================
-// MARKET DATA — Real-time quote + chart with CORS-proxy chain fallback.
+// MARKET DATA — brute-force reliable live quotes.
 //
-// SOURCE PRIORITY:
-//   1. Yahoo Finance (direct) — works in many regions
-//   2. Yahoo Finance via corsproxy.io — when direct is CORS-blocked
-//   3. Yahoo Finance via allorigins.win — backup proxy
-//   4. Finnhub (user-provided key)
-//   5. Synthetic deterministic cache — ALWAYS works
+// Priority:
+//   1. /api/quote?symbol=X           — normalized single-symbol endpoint
+//   2. /api/quotes?symbols=A,B,C     — parallel batch endpoint (for lists)
+//   3. Direct Yahoo (many browsers)  — if browser allows CORS
+//   4. Public CORS proxies           — last resort
+//   5. Synthetic baseline            — never fails; clearly marked "stale"
 //
-// All responses normalised; prices in PAISE.
+// All prices paise. TTL 8s (tight for live feel). Batch uses all 50+ symbols
+// in parallel server-side for the Markets page.
 // =============================================================================
 
 import { getSeries as synthSeries, getPriceAt as synthPriceAt } from "./prices.js";
 import { getInstrument } from "./universe.js";
 import { getState } from "../state.js";
 
-const QUOTE_TTL_MS = 15_000;          // 15s cache — tight so prices feel live
+const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -28,32 +29,98 @@ export function getDataSource() {
   return { name: "Yahoo Finance", tier: "public" };
 }
 
+function normalizeFromApi(payload, symbol) {
+  if (!payload?.ok) return null;
+  return {
+    symbol,
+    pricePaise: Math.round(payload.price * 100),
+    prevClosePaise: Math.round(payload.prev_close * 100),
+    changePct: payload.change_pct ?? 0,
+    high: Math.round(payload.day_high * 100),
+    low: Math.round(payload.day_low * 100),
+    volume: payload.volume || 0,
+    currency: payload.currency || "INR",
+    ts: payload.ts_ms || Date.now(),
+    stale: false,
+    source: payload.source || "yahoo",
+  };
+}
+
+// ---------- Public API -----------------------------------------------------
+
 export async function getQuote(symbol) {
   const cached = _quoteCache.get(symbol);
   if (cached && Date.now() - cached.ts < QUOTE_TTL_MS) return cached.data;
+
   const inst = getInstrument(symbol);
   if (!inst) return null;
 
+  // MFs have no real-time feed — synthetic
   if (inst.kind === "MF") {
-    const q = await fetchMFQuote(symbol, inst).catch(() => null);
-    if (q) { _quoteCache.set(symbol, { data: q, ts: Date.now() }); return q; }
-    return synthQuote(symbol);
+    const q = synthMFQuote(symbol, inst);
+    _quoteCache.set(symbol, { data: q, ts: Date.now() });
+    return q;
   }
 
-  let q = await fetchYahooQuote(symbol).catch(() => null);
-  if (!q) {
-    const key = getState().settings.finnhubKey;
-    if (key) q = await fetchFinnhubQuote(symbol, key).catch(() => null);
+  // 1. New normalized single endpoint
+  const apiRes = await fetchJsonWithTimeout(`/api/quote?symbol=${encodeURIComponent(symbol)}`);
+  const apiQuote = normalizeFromApi(apiRes, symbol);
+  if (apiQuote) {
+    _quoteCache.set(symbol, { data: apiQuote, ts: Date.now() });
+    return apiQuote;
   }
-  if (!q) q = synthQuote(symbol);
-  _quoteCache.set(symbol, { data: q, ts: Date.now() });
-  return q;
+
+  // 2. Legacy path through /api/yahoo/chart
+  const fallback = await fetchYahooQuote(symbol).catch(() => null);
+  if (fallback) {
+    _quoteCache.set(symbol, { data: fallback, ts: Date.now() });
+    return fallback;
+  }
+
+  // 3. Synthetic last resort — marked stale so UI can flag it
+  const synth = synthQuote(symbol);
+  _quoteCache.set(symbol, { data: synth, ts: Date.now() });
+  return synth;
 }
 
 export async function getQuoteBatch(symbols) {
-  const results = await Promise.all(symbols.map(s => getQuote(s).catch(() => null)));
+  if (!symbols?.length) return {};
+  const uniq = [...new Set(symbols)];
   const out = {};
-  for (let i = 0; i < symbols.length; i++) if (results[i]) out[symbols[i]] = results[i];
+  const need = [];
+
+  // Serve from cache first
+  for (const s of uniq) {
+    const c = _quoteCache.get(s);
+    if (c && Date.now() - c.ts < QUOTE_TTL_MS) out[s] = c.data;
+    else need.push(s);
+  }
+  if (!need.length) return out;
+
+  // Try batch endpoint — fetches all missing symbols in parallel server-side
+  const batchUrl = `/api/quotes?symbols=${encodeURIComponent(need.join(","))}`;
+  const batch = await fetchJsonWithTimeout(batchUrl);
+  if (batch?.ok && batch.quotes) {
+    for (const s of need) {
+      const q = batch.quotes[s];
+      if (q) {
+        const norm = normalizeFromApi({ ok: true, ...q }, s);
+        if (norm) {
+          out[s] = norm;
+          _quoteCache.set(s, { data: norm, ts: Date.now() });
+        }
+      }
+    }
+  }
+
+  // Fill any remaining misses one by one (usually empty)
+  const missing = need.filter(s => !out[s]);
+  if (missing.length) {
+    const results = await Promise.all(missing.map(s => getQuote(s).catch(() => null)));
+    for (let i = 0; i < missing.length; i++) {
+      if (results[i]) out[missing[i]] = results[i];
+    }
+  }
   return out;
 }
 
@@ -73,46 +140,50 @@ export async function getHistory(symbol, range = "1y", interval = "1d") {
   return h;
 }
 
-// --------------------------------------------------------------------------
-// Yahoo Finance with progressive CORS-proxy fallback
-// --------------------------------------------------------------------------
+// ---------- Live polling ---------------------------------------------------
 
-const YAHOO_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
-
-function yahooTicker(sym) {
-  if (sym.includes(".")) return sym;
-  return `${sym}.NS`;
+export function subscribeToQuotes(symbols, onUpdate, intervalMs = 10_000) {
+  if (!symbols?.length) return () => {};
+  let cancelled = false;
+  async function tick() {
+    if (cancelled) return;
+    const quotes = await getQuoteBatch(symbols);
+    if (cancelled) return;
+    onUpdate(quotes);
+  }
+  tick();
+  const h = setInterval(tick, intervalMs);
+  return () => { cancelled = true; clearInterval(h); };
 }
 
-/**
- * Fetch a Yahoo chart URL. Strategy:
- * 1. Our own backend proxy (/api/yahoo/chart/...) — guaranteed CORS-free.
- * 2. Direct Yahoo — works in many browsers/regions.
- * 3. corsproxy.io — free public proxy fallback.
- * 4. allorigins.win — wraps JSON in { contents }.
- */
+export function quoteAge(quote) {
+  if (!quote?.ts) return null;
+  return Date.now() - quote.ts;
+}
+
+// ---------- Legacy Yahoo proxy chain (kept as fallback) --------------------
+
+const YAHOO_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
+function yahooTicker(sym) { return sym.includes(".") ? sym : `${sym}.NS`; }
+
 async function fetchYahooUrl(yahooUrl) {
-  // Extract path + query from the Yahoo URL so we can hit our own proxy
+  // Try legacy /api/yahoo/chart route
   const m = yahooUrl.match(/\/v8\/finance\/chart\/(.+)$/);
   if (m) {
     const ourProxy = `/api/yahoo/chart/${m[1]}`;
     const res = await fetchJsonWithTimeout(ourProxy);
     if (res && !res.error) return res;
   }
-
-  // Direct (works from browser in many regions)
+  // Direct
   let res = await fetchJsonWithTimeout(yahooUrl);
   if (res) return res;
-
-  // Public CORS proxies as last resort
+  // Public proxies
   const p1 = `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`;
   res = await fetchJsonWithTimeout(p1);
   if (res) return res;
-
   const p2 = `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`;
   const w = await fetchJsonWithTimeout(p2);
   if (w?.contents) { try { return JSON.parse(w.contents); } catch {} }
-
   return null;
 }
 
@@ -162,26 +233,7 @@ async function fetchYahooHistory(symbol, range, interval) {
   return { ohlc, source: "yahoo" };
 }
 
-async function fetchFinnhubQuote(symbol, key) {
-  const url = `https://finnhub.io/api/v1/quote?symbol=NSE:${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`;
-  const data = await fetchJsonWithTimeout(url);
-  if (!data || data.c == null || data.c === 0) return null;
-  return {
-    symbol,
-    pricePaise: Math.round(data.c * 100),
-    prevClosePaise: Math.round((data.pc || data.c) * 100),
-    changePct: data.pc ? (data.c - data.pc) / data.pc : 0,
-    high: Math.round((data.h || data.c) * 100),
-    low: Math.round((data.l || data.c) * 100),
-    volume: 0,
-    currency: "INR",
-    ts: (data.t || Math.floor(Date.now() / 1000)) * 1000,
-    stale: false,
-    source: "finnhub",
-  };
-}
-
-async function fetchMFQuote(symbol, inst) {
+function synthMFQuote(symbol, inst) {
   const basePaise = inst.price;
   const drift = (Math.sin(Date.now() / 3_600_000) * 0.005) + (Math.random() * 0.002 - 0.001);
   const cur = Math.round(basePaise * (1 + drift));
@@ -221,24 +273,4 @@ function fetchJsonWithTimeout(url, options = {}) {
       .then(j => resolve(j || null))
       .catch(() => { clearTimeout(t); resolve(null); });
   });
-}
-
-export function subscribeToQuotes(symbols, onUpdate, intervalMs = 15_000) {
-  if (!symbols?.length) return () => {};
-  let cancelled = false;
-  async function tick() {
-    if (cancelled) return;
-    const quotes = await getQuoteBatch(symbols);
-    if (cancelled) return;
-    onUpdate(quotes);
-  }
-  tick();
-  const h = setInterval(tick, intervalMs);
-  return () => { cancelled = true; clearInterval(h); };
-}
-
-/** Milliseconds since a quote was fetched — for "updated Xs ago" UI. */
-export function quoteAge(quote) {
-  if (!quote?.ts) return null;
-  return Date.now() - quote.ts;
 }
