@@ -6,22 +6,53 @@
 import { LEADERBOARD as SEED } from "../data/leaderboard.js";
 import { getState, getPortfolioReturnPct, subscribe } from "../state.js";
 import { listAccountsPublic } from "../auth/accounts.js";
+import { dbLeaderboard } from "../db/sync.js";
+import { sb } from "../db/supabase.js";
 
 let scope = "GLOBAL";
 let windowTf = "WEEKLY";
 
 export function renderLeaderboard(main) {
+  let cancelled = false;
+  let dbRows = null;
   render();
-  const unsub = subscribe(render);
-  window.addEventListener("hashchange", () => unsub?.(), { once: true });
+  const unsub = subscribe(() => { if (!cancelled) render(); });
+  window.addEventListener("hashchange", () => { cancelled = true; unsub?.(); }, { once: true });
+
+  // Poll real leaderboard every 20s
+  (async function liveLoop() {
+    while (!cancelled) {
+      try {
+        const client = await sb();
+        if (client) {
+          dbRows = await dbLeaderboard({ scope, limit: 50 });
+          if (!cancelled) render();
+        }
+      } catch (e) { console.warn("leaderboard:", e); }
+      await new Promise(r => setTimeout(r, 20_000));
+    }
+  })();
 
   function render() {
     const state = getState();
     const myReturn = getPortfolioReturnPct(state) * 100;
     const myName = state.user.displayName || state.user.username || "You";
 
-    // Base seeded competitors
-    let entries = SEED.map(u => ({ ...u }));
+    // Real rows from DB (preferred) or seeded competitors (fallback)
+    let entries;
+    if (dbRows && dbRows.length) {
+      entries = dbRows.map(r => ({
+        id: r.user_id,
+        name: r.display_name,
+        school: r.school || "StockSaathi user",
+        returnPct: Math.round(Number(r.return_bps) / 10) / 10,  // bps → %
+        trades: Number(r.trades) || 0,
+        realUser: true,
+        me: r.user_id === state.user.id,
+      }));
+    } else {
+      entries = SEED.map(u => ({ ...u }));
+    }
 
     // Augment with real StockSaathi users on this device (other accounts)
     const realUsers = listAccountsPublic().filter(u => u.id !== state.user.id);
@@ -52,12 +83,14 @@ export function renderLeaderboard(main) {
       } catch {}
     }
 
-    // Append me
-    entries.push({
-      id: "me", name: myName, school: state.user.school || "Your school",
-      class: "", returnPct: Math.round(myReturn * 10) / 10,
-      trades: state.transactions.length, daysActive: 1, me: true,
-    });
+    // Append me (if not already present from DB)
+    if (!entries.some(e => e.me)) {
+      entries.push({
+        id: "me", name: myName, school: state.user.school || "Your school",
+        class: "", returnPct: Math.round(myReturn * 10) / 10,
+        trades: state.transactions.length, daysActive: 1, me: true,
+      });
+    }
 
     // Filter by scope
     if (scope === "SCHOOL" && state.user.school) {

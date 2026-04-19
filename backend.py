@@ -318,7 +318,16 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
                     "resend": bool(os.environ.get("RESEND_API_KEY")),
                     "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
                     "groq": bool(os.environ.get("GROQ_API_KEY")),
+                    "supabase": bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY")),
                 },
+            })
+            return
+        if self.path == "/api/config":
+            self._json(200, {
+                "supabaseUrl": os.environ.get("SUPABASE_URL", "").strip(),
+                "supabaseAnonKey": os.environ.get("SUPABASE_ANON_KEY", "").strip(),
+                "appName": "StockSaathi",
+                "supportEmail": os.environ.get("SUPPORT_EMAIL", "accounts@stocksaathi.co.in"),
             })
             return
         # Yahoo Finance proxy — zero-CORS live prices for the frontend.

@@ -46,6 +46,12 @@ export function renderLogin(main) {
       const handle = main.querySelector("#l-handle").value;
       const pw = main.querySelector("#l-pw").value;
       await loginAccount({ emailOrUsername: handle, password: pw });
+      // Refresh Supabase user cache, then trigger store reload
+      const { refreshCurrentUser } = await import("../auth/accounts.js");
+      await refreshCurrentUser();
+      const { bootSync, loadAllFromDb } = await import("../db/sync.js");
+      await bootSync();
+      await loadAllFromDb();
       switchUser();
       const state = (await import("../state.js")).getState();
       if (!state.user.onboarded) navigate("/onboarding");

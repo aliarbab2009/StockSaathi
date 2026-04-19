@@ -6,7 +6,8 @@ import { getState, subscribe, setSetting, switchUser } from "./state.js";
 import { mountNav } from "./components/nav.js";
 import { mountCoachPanel } from "./components/coachPanel.js";
 import { mountRouter } from "./router.js";
-import { currentUser } from "./auth/accounts.js";
+import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
+import { bootSync } from "./db/sync.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -14,13 +15,22 @@ import { currentUser } from "./auth/accounts.js";
   document.documentElement.setAttribute("data-theme", theme);
 })();
 
-// Load user-scoped state on boot
+// Load user-scoped state on boot (local immediately)
 switchUser();
 
 // Mount components
 mountNav();
 mountCoachPanel();
 mountRouter();
+
+// If Supabase is configured, boot cross-device sync in the background
+(async () => {
+  try {
+    await refreshCurrentUser();
+    await bootSync();
+    switchUser();
+  } catch (e) { console.warn("Supabase boot skipped:", e); }
+})();
 
 // Reactively sync theme
 subscribe((s) => {

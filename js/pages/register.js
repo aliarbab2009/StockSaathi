@@ -79,6 +79,11 @@ export function renderRegister(main) {
     btn.textContent = "Creating account…";
     try {
       await registerAccount({ username, email, password: pw, displayName: name });
+      const { refreshCurrentUser } = await import("../auth/accounts.js");
+      await refreshCurrentUser();
+      const { bootSync, loadAllFromDb } = await import("../db/sync.js");
+      await bootSync();
+      await loadAllFromDb();
       switchUser();
       navigate("/onboarding");
     } catch (err) {

@@ -1,43 +1,37 @@
 // =============================================================================
-// STATE — Per-user reactive store, indexed by the logged-in account.
-// Each account has its own portfolio / holdings / trades / coach history /
-// friends / inbox. Persisted to localStorage under `ss.userstate.{userId}`.
+// STATE — dual-mode reactive store.
+//   Supabase mode: Postgres-backed. RLS enforces isolation. Cross-device.
+//   Local mode:   per-user localStorage (legacy fallback).
 //
-// All money is PAISE (integer). No floats.
+// All pages read from getState() synchronously regardless of mode. In Supabase
+// mode, js/db/sync.js populates this store from the DB on boot + auth change.
+// Writes call DB RPCs first, then update local cache for snappy UI.
+// All money is PAISE (integer).
 // =============================================================================
 
 import { currentUser } from "./auth/accounts.js";
+import { dbApplyTrade, dbAddWatchlist, dbRemoveWatchlist, dbAddCoachMessage } from "./db/sync.js";
+import { sb } from "./db/supabase.js";
 
 const STARTING_CASH_PAISE = 1_00_00_000;
-const VERSION = 2;
+const VERSION = 3;
 
 const DEFAULT_STATE = () => ({
   version: VERSION,
-  portfolio: {
-    cashPaise: STARTING_CASH_PAISE,
-    startingCashPaise: STARTING_CASH_PAISE,
-  },
-  holdings: {},           // { symbol: { qty, avgCostPaise, firstBoughtAt } }
-  transactions: [],       // trade log
-  transfers: [],          // { id, direction: "out"|"in", counterpartyId|counterpartyHandle, amountPaise, ts, note, status }
-  inbox: [],              // pending inbound transfer codes: { id, code, amountPaise, fromId, fromHandle, note, ts, status }
-  coachMessages: [],      // coach events
+  portfolio: { cashPaise: STARTING_CASH_PAISE, startingCashPaise: STARTING_CASH_PAISE },
+  holdings: {},
+  transactions: [],
+  transfers: [],
+  inbox: [],
+  coachMessages: [],
   watchlist: [],
-  friends: [],            // [{ id, username, displayName, addedAt, avatarColor }]
+  friends: [],
   badges: [],
   profile: {
-    riskProfile: null,    // 'cautious'|'balanced'|'bold'
-    school: null,
-    classCode: null,
-    age: null,
-    parentEmail: null,
-    parentConsentAt: null,
-    onboarded: false,
+    riskProfile: null, school: null, classCode: null, age: null,
+    parentEmail: null, parentConsentAt: null, onboarded: false,
   },
-  demo: {
-    crashReplayCompleted: [],
-    firstTradeDone: false,
-  },
+  demo: { crashReplayCompleted: [], firstTradeDone: false },
 });
 
 const GLOBAL_SETTINGS_KEY = "ss.settings.v1";
@@ -50,43 +44,29 @@ const GLOBAL_SETTINGS_DEFAULTS = {
   emailjs: { serviceId: "", templateId: "", publicKey: "" },
 };
 
-function keyFor(userId) {
-  return `ss.userstate.${userId}`;
-}
+function keyFor(userId) { return `ss.userstate.${userId}`; }
 
 function readUserState(userId) {
   try {
     const raw = localStorage.getItem(keyFor(userId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed?.version !== VERSION) return null;
     return parsed;
   } catch { return null; }
 }
-
 function writeUserState(userId, st) {
-  try {
-    localStorage.setItem(keyFor(userId), JSON.stringify(st));
-  } catch (e) {
-    console.warn("state persist failed:", e);
-  }
+  try { localStorage.setItem(keyFor(userId), JSON.stringify(st)); }
+  catch (e) { console.warn("state persist failed:", e); }
 }
 
 function readSettings() {
   try {
     const raw = localStorage.getItem(GLOBAL_SETTINGS_KEY);
     return raw ? { ...GLOBAL_SETTINGS_DEFAULTS, ...JSON.parse(raw) } : { ...GLOBAL_SETTINGS_DEFAULTS };
-  } catch {
-    return { ...GLOBAL_SETTINGS_DEFAULTS };
-  }
+  } catch { return { ...GLOBAL_SETTINGS_DEFAULTS }; }
 }
+function writeSettings(s) { localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(s)); }
 
-function writeSettings(s) {
-  localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(s));
-}
-
-// --------------------------------------------------------------------------
-// Reactive store
 // --------------------------------------------------------------------------
 const listeners = new Set();
 
@@ -96,11 +76,7 @@ let _settings = readSettings();
 
 function ensureUserLoaded() {
   const user = currentUser();
-  if (!user) {
-    _userState = null;
-    _activeUserId = null;
-    return null;
-  }
+  if (!user) { _userState = null; _activeUserId = null; return null; }
   if (_activeUserId !== user.id) {
     _activeUserId = user.id;
     _userState = readUserState(user.id) || DEFAULT_STATE();
@@ -123,11 +99,6 @@ function merge(base, over) {
   return out;
 }
 
-/**
- * Get a composite "state" object mirroring the legacy shape, so existing pages
- * can keep reading `state.user`, `state.holdings`, etc. `user` here is
- * {displayName, age, school, ...} merged from account + profile.
- */
 export function getState() {
   ensureUserLoaded();
   const user = currentUser();
@@ -139,13 +110,13 @@ export function getState() {
       displayName: user?.displayName || null,
       email: user?.email || null,
       avatarColor: user?.avatarColor || "green",
-      age: us.profile.age,
-      school: us.profile.school,
-      classCode: us.profile.classCode,
-      riskProfile: us.profile.riskProfile,
-      parentEmail: us.profile.parentEmail,
-      parentConsentAt: us.profile.parentConsentAt,
-      onboarded: us.profile.onboarded,
+      age: user?.age ?? us.profile.age,
+      school: user?.school ?? us.profile.school,
+      classCode: user?.classCode ?? us.profile.classCode,
+      riskProfile: user?.riskProfile ?? us.profile.riskProfile,
+      parentEmail: user?.parentEmail ?? us.profile.parentEmail,
+      parentConsentAt: user?.parentConsentAt ?? us.profile.parentConsentAt,
+      onboarded: user?.onboarded ?? us.profile.onboarded,
       createdAt: user?.createdAt || null,
     },
     portfolio: us.portfolio,
@@ -163,19 +134,10 @@ export function getState() {
   };
 }
 
-export function subscribe(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
-function emit(prev) {
-  for (const fn of listeners) fn(getState(), prev);
-}
+export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+function emit(prev) { for (const fn of listeners) fn(getState(), prev); }
 
 // --------------------------------------------------------------------------
-// Mutations
-// --------------------------------------------------------------------------
-
 export function setState(patch) {
   const prev = getState();
   if (typeof patch === "function") {
@@ -187,7 +149,6 @@ export function setState(patch) {
 }
 
 function applyFullPatch(full, prev) {
-  // Break apart into user-scoped state + global settings
   if (full.settings) {
     _settings = { ...GLOBAL_SETTINGS_DEFAULTS, ..._settings, ...full.settings };
     writeSettings(_settings);
@@ -225,14 +186,12 @@ export function setSetting(key, value) {
   writeSettings(_settings);
   emit(getState());
 }
-
 export function setSettings(patch) {
   _settings = { ..._settings, ...patch };
   writeSettings(_settings);
   emit(getState());
 }
 
-// Called by auth flow after login/logout — forces reload of user-scoped state.
 export function switchUser() {
   _activeUserId = null;
   _userState = null;
@@ -240,53 +199,70 @@ export function switchUser() {
   emit(getState());
 }
 
-export function completeOnboarding({ age, school, classCode, riskProfile, parentEmail, parentConsentAt }) {
+// ---- profile mutations (DB-backed via auth/accounts.js:updateProfile) ----
+import { updateProfile } from "./auth/accounts.js";
+
+export async function completeOnboarding({ age, school, classCode, riskProfile, parentEmail, parentConsentAt }) {
+  try {
+    await updateProfile({
+      age, school, classCode, riskProfile, parentEmail,
+      parentConsentAt: parentConsentAt || new Date().toISOString(),
+      onboarded: true,
+    });
+  } catch (e) { console.warn("onboarding profile update failed:", e); }
+  // Local mirror for instant UI
   setState(s => ({
     ...s,
     user: {
-      ...s.user,
-      age, school, classCode, riskProfile, parentEmail,
-      parentConsentAt: parentConsentAt || Date.now(),
-      onboarded: true,
+      ...s.user, age, school, classCode, riskProfile, parentEmail,
+      parentConsentAt: parentConsentAt || Date.now(), onboarded: true,
     },
   }));
 }
 
 export function recordCoachMessage(msg) {
-  setState(s => ({
-    ...s,
-    coachMessages: [...s.coachMessages, { ...msg, id: msg.id || genId(), ts: msg.ts || Date.now() }],
-  }));
+  const enriched = { ...msg, id: msg.id || genId(), ts: msg.ts || Date.now() };
+  setState(s => ({ ...s, coachMessages: [...s.coachMessages, enriched] }));
+  // Fire-and-forget DB write
+  dbAddCoachMessage(enriched).catch(() => {});
 }
 
 export function addToWatchlist(symbol) {
-  setState(s => ({
-    ...s,
-    watchlist: s.watchlist.includes(symbol) ? s.watchlist : [...s.watchlist, symbol],
-  }));
+  setState(s => ({ ...s, watchlist: s.watchlist.includes(symbol) ? s.watchlist : [...s.watchlist, symbol] }));
+  dbAddWatchlist(symbol).catch(() => {});
 }
 export function removeFromWatchlist(symbol) {
   setState(s => ({ ...s, watchlist: s.watchlist.filter(x => x !== symbol) }));
+  dbRemoveWatchlist(symbol).catch(() => {});
 }
 
 export function genId() {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/**
- * Apply a trade atomically. Money is paise (integer).
- * Trade: { symbol, side: "BUY"|"SELL", qty, pricePaise, biasFlags?, idempotencyKey? }
- */
-export function applyTrade({ symbol, side, qty, pricePaise, biasFlags = [], idempotencyKey }) {
+// ---- Trades — DB-backed if available, else local --------------------------
+export async function applyTrade({ symbol, side, qty, pricePaise, biasFlags = [], idempotencyKey }) {
   const valuePaise = Math.round(qty * pricePaise);
   const s = getState();
-
   if (!s.isAuthed) throw new Error("Please log in to trade.");
 
+  // Idempotency: check local cache
   if (idempotencyKey) {
     const existing = s.transactions.find(t => t.idempotencyKey === idempotencyKey);
     if (existing) return existing;
   }
+
+  const client = await sb();
+  if (client) {
+    // DB path — atomic RPC call
+    await dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyKey, biasFlags });
+    // Optimistic local update (sync.js will reconcile on next load)
+    const txn = makeLocalTxn({ symbol, side, qty, pricePaise, valuePaise, biasFlags, idempotencyKey });
+    applyLocalTradeEffect(txn);
+    return txn;
+  }
+
+  // Local fallback (same as before)
   if (side === "BUY") {
     if (valuePaise > s.portfolio.cashPaise) {
       throw new Error(`Insufficient cash. Need ₹${(valuePaise / 100).toLocaleString("en-IN")}, have ₹${(s.portfolio.cashPaise / 100).toLocaleString("en-IN")}.`);
@@ -297,15 +273,23 @@ export function applyTrade({ symbol, side, qty, pricePaise, biasFlags = [], idem
       throw new Error(`Insufficient quantity to sell. You hold ${h?.qty || 0}.`);
     }
   }
+  const txn = makeLocalTxn({ symbol, side, qty, pricePaise, valuePaise, biasFlags, idempotencyKey });
+  applyLocalTradeEffect(txn);
+  return txn;
+}
 
-  const txn = {
+function makeLocalTxn({ symbol, side, qty, pricePaise, valuePaise, biasFlags, idempotencyKey }) {
+  return {
     id: genId(),
     idempotencyKey: idempotencyKey || genId(),
     ts: Date.now(),
     symbol, side, qty, pricePaise, valuePaise, biasFlags,
   };
+}
 
+function applyLocalTradeEffect(txn) {
   setState(state => {
+    const { symbol, side, qty, pricePaise, valuePaise } = txn;
     const cur = state.holdings[symbol];
     let nextHoldings;
     if (side === "BUY") {
@@ -335,11 +319,9 @@ export function applyTrade({ symbol, side, qty, pricePaise, biasFlags = [], idem
       demo: { ...state.demo, firstTradeDone: true },
     };
   });
-
-  return txn;
 }
 
-// --- Derived selectors (use marketData where possible; fallback to synth) ---
+// --- Derived selectors ----------------------------------------------------
 import { getPriceAt } from "./data/prices.js";
 
 export function getHoldingsValue(state = getState()) {
@@ -350,24 +332,20 @@ export function getHoldingsValue(state = getState()) {
   }
   return total;
 }
-
 export function getPortfolioValue(state = getState()) {
   return state.portfolio.cashPaise + getHoldingsValue(state);
 }
-
 export function getPortfolioReturnPct(state = getState()) {
   const total = getPortfolioValue(state);
   const start = state.portfolio.startingCashPaise;
   return start ? (total - start) / start : 0;
 }
-
 export function getHoldingPLPaise(symbol, state = getState()) {
   const h = state.holdings[symbol];
   if (!h) return 0;
   const curPx = getPriceAt(symbol, 0);
   return Math.round((curPx - h.avgCostPaise) * h.qty);
 }
-
 export function getHoldingPLPct(symbol, state = getState()) {
   const h = state.holdings[symbol];
   if (!h) return 0;
@@ -379,23 +357,15 @@ export function resetCurrentPortfolio() {
   setState(s => ({
     ...s,
     portfolio: { cashPaise: STARTING_CASH_PAISE, startingCashPaise: STARTING_CASH_PAISE },
-    holdings: {},
-    transactions: [],
-    transfers: [],
-    inbox: [],
+    holdings: {}, transactions: [], transfers: [], inbox: [],
     coachMessages: [],
     demo: { crashReplayCompleted: [], firstTradeDone: false },
   }));
 }
 
-// Cross-tab sync
 window.addEventListener("storage", (e) => {
   if (!e.key) return;
-  if (e.key === GLOBAL_SETTINGS_KEY) {
-    _settings = readSettings();
-    emit(getState());
-    return;
-  }
+  if (e.key === GLOBAL_SETTINGS_KEY) { _settings = readSettings(); emit(getState()); return; }
   if (_activeUserId && e.key === keyFor(_activeUserId)) {
     _userState = readUserState(_activeUserId) || DEFAULT_STATE();
     emit(getState());

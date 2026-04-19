@@ -16,7 +16,7 @@ import { renderRegister } from "./pages/register.js";
 import { renderFriends } from "./pages/friends.js";
 import { renderNews } from "./pages/news.js";
 import { renderChat } from "./pages/chat.js";
-import { currentUser } from "./auth/accounts.js";
+import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
 import { getState } from "./state.js";
 
 const ROUTES = [
