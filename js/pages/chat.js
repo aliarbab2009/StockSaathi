@@ -6,6 +6,7 @@
 import { getState } from "../state.js";
 import { getInstrument } from "../data/universe.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
+import { answerPriceQuery, buildPriceContext } from "../coach/liveData.js";
 
 const CHAT_KEY = "ss.chatlog.v1";
 
@@ -190,13 +191,21 @@ async function sendAndReply(userText) {
   }
 
   let replyText = null;
-  if (key) {
+
+  // 1. Live price query — fetch real numbers before anything else
+  try {
+    replyText = await answerPriceQuery(userText);
+  } catch {}
+
+  // 2. LLM (if configured)
+  if (!replyText && key) {
     try {
       replyText = await callClaudeChat(key, chatLog);
     } catch (e) {
       console.warn("Claude chat failed, falling back:", e);
     }
   }
+  // 3. Template fallback
   if (!replyText) replyText = replyFor(userText);
 
   m_pending = false;
@@ -208,6 +217,16 @@ async function callClaudeChat(apiKey, history) {
     role: m.role === "user" ? "user" : "assistant",
     content: m.text,
   }));
+  const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
+
+  // Inject live price context if the user asked about a price
+  let priceCtx = "";
+  try {
+    const ctx = await buildPriceContext(lastUser);
+    if (ctx) priceCtx = `\n\n# LIVE PRICE CONTEXT (fetched seconds ago — use these numbers)\n${ctx.summary}`;
+  } catch {}
+
+  const sys = `${SYSTEM_PROMPT}${priceCtx}`;
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 15000);
@@ -222,9 +241,9 @@ async function callClaudeChat(apiKey, history) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5-20250929",
-        max_tokens: 300,
+        max_tokens: 320,
         temperature: 0.5,
-        system: SYSTEM_PROMPT,
+        system: sys,
         messages: recent,
       }),
       signal: controller.signal,

@@ -9,6 +9,7 @@ import { getInstrument } from "../data/universe.js";
 import { getNews } from "../data/news.js";
 import { formatRupees, formatPct } from "../money.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
+import { answerPriceQuery, buildPriceContext } from "../coach/liveData.js";
 
 const CHAT_LOG_KEY = "ss.coachchat.v1";
 
@@ -35,11 +36,19 @@ function smartTemplateReply(userText, state) {
 async function callClaudeChat(apiKey, history, state) {
   const portfolioSummary = summarisePortfolio(state);
   const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
-  const systemWithContext = `${SYSTEM_PROMPT}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}`;
 
   // Fast path: obvious off-topic asks don't burn tokens
   const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
   if (isOffTopic(lastUser)) return offTopicRedirect(lastUser);
+
+  // If the user is asking about a price, fetch real data and inject as context
+  let priceCtx = "";
+  try {
+    const ctx = await buildPriceContext(lastUser);
+    if (ctx) priceCtx = `\n\n## LIVE PRICE CONTEXT (real, fetched seconds ago — use these numbers)\n${ctx.summary}`;
+  } catch {}
+
+  const systemWithContext = `${SYSTEM_PROMPT}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}${priceCtx}`;
 
   const recent = history.slice(-10).map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
   const ctrl = new AbortController();
@@ -177,7 +186,15 @@ function render() {
 
     const s = getState();
     let reply = null;
-    if (s.settings.anthropicKey) {
+
+    // 1. Try live price lookup first — if the user asked about a specific stock/crypto,
+    //    we answer with REAL numbers, not a template.
+    try {
+      reply = await answerPriceQuery(text);
+    } catch {}
+
+    // 2. If no price query OR no key, fall back through LLM → template
+    if (!reply && s.settings.anthropicKey) {
       reply = await callClaudeChat(s.settings.anthropicKey, chatHistory, s).catch(() => null);
     }
     if (!reply) reply = smartTemplateReply(text, s);
