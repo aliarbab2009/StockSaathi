@@ -1,0 +1,13 @@
+backend.py
+run.bat
+run.sh
+.env
+.env.example
+.env.local
+SUPABASE_SETUP.md
+supabase/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/

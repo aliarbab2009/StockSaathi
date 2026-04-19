@@ -78,7 +78,27 @@ export function renderRegister(main) {
     btn.disabled = true;
     btn.textContent = "Creating account…";
     try {
-      await registerAccount({ username, email, password: pw, displayName: name });
+      const res = await registerAccount({ username, email, password: pw, displayName: name });
+
+      // If Supabase requires email confirmation, user has NO session yet.
+      // Show a clear "check your inbox" screen instead of bouncing to /login.
+      if (res && res.needsConfirmation) {
+        main.innerHTML = `
+          <div class="auth-wrap">
+            <div class="auth-card" style="text-align: center;">
+              <div style="font-size: 48px; margin-bottom: var(--sp-3);">📧</div>
+              <h1 style="margin-bottom: var(--sp-2);">Check your email</h1>
+              <p class="sub">We sent a confirmation link to <strong>${escapeHtml(email)}</strong>. Click it to activate your account, then come back and log in.</p>
+              <div class="info-msg" style="margin: var(--sp-4) 0; text-align: left;">
+                <strong>Heads up:</strong> the confirmation comes from Supabase by default. To have it come from <code>accounts@stocksaathi.co.in</code> instead, configure custom SMTP in the Supabase dashboard (Authentication → Email Templates → SMTP Settings). Or disable email confirmation entirely in Authentication → Providers → Email.
+              </div>
+              <a href="#/login" class="btn btn-primary btn-block btn-lg">Go to login</a>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
       const { refreshCurrentUser } = await import("../auth/accounts.js");
       await refreshCurrentUser();
       const { bootSync, loadAllFromDb } = await import("../db/sync.js");

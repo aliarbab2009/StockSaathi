@@ -421,19 +421,44 @@ function showConfirm(inst, symbol, curPrice, qty, biasResult) {
 }
 
 async function executeTrade(inst, side, qty, pricePaise, biasResult) {
+  // Simulate real-market execution: routing → match → fill, with small
+  // slippage (±0.08%) so prices feel like real fills, not simulator magic.
   try {
+    toast({ kind: "info", message: `Routing ${side.toLowerCase()} order…`, duration: 900 });
+    // Simulate exchange latency + matching
+    await new Promise(r => setTimeout(r, 400 + Math.random() * 500));
+
+    // Fetch fresh live quote at execution moment (may have ticked since review)
+    let fillPrice = pricePaise;
+    try {
+      const q = await getQuote(inst.symbol);
+      if (q && !q.stale) fillPrice = q.pricePaise;
+    } catch {}
+
+    // Realistic market slippage — BUY usually pays a hair above, SELL gets a
+    // hair below the mid. Max ±0.08% for liquid names.
+    const slipBps = (Math.random() * 8);
+    const slipFactor = side === "BUY" ? (1 + slipBps / 10000) : (1 - slipBps / 10000);
+    fillPrice = Math.round(fillPrice * slipFactor);
+
     const idempotencyKey = `${Date.now()}_${inst.symbol}_${side}_${qty}_${Math.random()}`;
-    const txn = applyTrade({
-      symbol: inst.symbol, side, qty, pricePaise, idempotencyKey,
+    const txn = await applyTrade({
+      symbol: inst.symbol, side, qty, pricePaise: fillPrice, idempotencyKey,
       biasFlags: biasResult ? [biasResult] : [],
     });
+
+    const slipText = slipBps > 0
+      ? ` (slippage ${side === "BUY" ? "+" : "−"}${(slipBps).toFixed(1)}bps)`
+      : "";
     toast({
       kind: "success",
-      message: `${side === "BUY" ? "Bought" : "Sold"} ${formatQty(qty, inst.kind)} ${inst.symbol} @ ${formatRupees(pricePaise)}`,
+      message: `Filled: ${side === "BUY" ? "Bought" : "Sold"} ${formatQty(qty, inst.kind)} ${inst.symbol} @ ${formatRupees(fillPrice)}${slipText}`,
+      duration: 4500,
     });
+
     const state = getState();
     const isFirstTrade = state.transactions.length === 1;
-    const msg = await coach({ type: side, symbol: inst.symbol, qty, pricePaise, txnId: txn.id, isFirstTrade });
+    const msg = await coach({ type: side, symbol: inst.symbol, qty, pricePaise: fillPrice, txnId: txn?.id, isFirstTrade });
     recordCoachMessage(msg);
   } catch (e) {
     toast({ kind: "error", message: e.message || "Trade failed" });

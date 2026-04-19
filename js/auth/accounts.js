@@ -332,10 +332,12 @@ export async function findAccountByHandle(handleOrEmail) {
 
 function prettifySbError(msg) {
   if (!msg) return "Something went wrong.";
-  if (/already registered/i.test(msg)) return "An account with this email already exists. Try logging in.";
+  if (/already registered/i.test(msg) || /user already/i.test(msg)) return "An account with this email already exists. Try logging in.";
   if (/invalid login/i.test(msg)) return "Incorrect email or password.";
   if (/invalid email/i.test(msg)) return "That email doesn't look valid.";
   if (/password should be/i.test(msg)) return "Password must be at least 6 characters.";
+  if (/rate limit/i.test(msg) || /too many requests/i.test(msg)) return "Too many signups from this address. Wait a few minutes and try again — or turn off email confirmation in Supabase (Authentication → Providers → Email).";
+  if (/email.*disabled/i.test(msg)) return "Email signups are disabled in your Supabase project. Enable them in Authentication → Providers → Email.";
   return msg;
 }
 
