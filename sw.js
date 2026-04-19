@@ -30,6 +30,7 @@ const STATIC = [
   "./js/coach/anthropic.js",
   "./js/coach/persona.js",
   "./js/coach/liveData.js",
+  "./js/coach/agent.js",
   "./js/data/universe.js",
   "./js/data/prices.js",
   "./js/data/crashes.js",

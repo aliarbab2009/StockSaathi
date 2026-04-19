@@ -6,7 +6,7 @@
 import { getState } from "../state.js";
 import { getInstrument } from "../data/universe.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
-import { answerPriceQuery, buildPriceContext } from "../coach/liveData.js";
+import { runAgent } from "../coach/agent.js";
 
 const CHAT_KEY = "ss.chatlog.v1";
 
@@ -181,9 +181,7 @@ async function sendAndReply(userText) {
   }
 
   const state = getState();
-  const key = state.settings.anthropicKey;
 
-  // Short-circuit obvious off-topic so we don't burn tokens
   if (isOffTopic(userText)) {
     m_pending = false;
     pushAssistant(offTopicRedirect(userText));
@@ -191,71 +189,23 @@ async function sendAndReply(userText) {
   }
 
   let replyText = null;
-
-  // 1. Live price query — fetch real numbers before anything else
   try {
-    replyText = await answerPriceQuery(userText);
-  } catch {}
+    const messages = chatLog.slice(-12).map(m => ({
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.text,
+    }));
+    const system = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.`;
+    replyText = await runAgent({
+      apiKey: state.settings.anthropicKey || null,
+      system,
+      messages,
+    });
+  } catch (e) { console.warn("agent:", e); }
 
-  // 2. LLM (if configured)
-  if (!replyText && key) {
-    try {
-      replyText = await callClaudeChat(key, chatLog);
-    } catch (e) {
-      console.warn("Claude chat failed, falling back:", e);
-    }
-  }
-  // 3. Template fallback
   if (!replyText) replyText = replyFor(userText);
 
   m_pending = false;
   pushAssistant(replyText);
-}
-
-async function callClaudeChat(apiKey, history) {
-  const recent = history.slice(-12).map(m => ({
-    role: m.role === "user" ? "user" : "assistant",
-    content: m.text,
-  }));
-  const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
-
-  // Inject live price context if the user asked about a price
-  let priceCtx = "";
-  try {
-    const ctx = await buildPriceContext(lastUser);
-    if (ctx) priceCtx = `\n\n# LIVE PRICE CONTEXT (fetched seconds ago — use these numbers)\n${ctx.summary}`;
-  } catch {}
-
-  const sys = `${SYSTEM_PROMPT}${priceCtx}`;
-
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 15000);
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
-        max_tokens: 320,
-        temperature: 0.5,
-        system: sys,
-        messages: recent,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(t);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.content?.[0]?.text?.trim() || null;
-  } catch {
-    clearTimeout(t);
-    return null;
-  }
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }

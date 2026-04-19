@@ -85,8 +85,10 @@ IS_UPSTREAM = os.environ.get("IS_UPSTREAM", "").strip() in ("1", "true", "yes")
 from collections import defaultdict, deque
 import threading as _threading
 _rate_lock = _threading.Lock()
-_rate_bucket = defaultdict(deque)   # ip -> deque of timestamps
+_rate_bucket = defaultdict(deque)   # email rate-limit bucket
+_chat_bucket = defaultdict(deque)   # chat rate-limit bucket
 RATE_LIMIT_PER_HOUR = int(os.environ.get("RATE_LIMIT_PER_HOUR", "20"))
+CHAT_RATE_PER_HOUR = int(os.environ.get("CHAT_RATE_PER_HOUR", "60"))
 
 
 # --------------------------------------------------------------------------
@@ -314,6 +316,7 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
                 "providers": {
                     "smtp": bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS")),
                     "resend": bool(os.environ.get("RESEND_API_KEY")),
+                    "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
                 },
             })
             return
@@ -323,6 +326,68 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
             self._proxy_yahoo_chart()
             return
         super().do_GET()
+
+    def _proxy_anthropic(self):
+        """Proxy POST /api/chat → Anthropic's /v1/messages so users without
+        their own API key can still use the real LLM. Uses ANTHROPIC_API_KEY
+        env var. Soft rate limit per IP."""
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not key:
+            self._json(501, {"error": "no_server_key",
+                             "detail": "Server has no ANTHROPIC_API_KEY configured. Add your own key in Settings."})
+            return
+        # Rate limit
+        ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
+        now = time.time()
+        with _rate_lock:
+            bucket = _chat_bucket[ip]
+            while bucket and now - bucket[0] > 3600:
+                bucket.popleft()
+            if len(bucket) >= CHAT_RATE_PER_HOUR:
+                self._json(429, {"error": "rate_limited",
+                                 "detail": f"Max {CHAT_RATE_PER_HOUR} chat calls/hour per IP."})
+                return
+            bucket.append(now)
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length else b"{}"
+            # Just forward the body as-is
+        except Exception as e:
+            self._json(400, {"error": "bad_body", "detail": str(e)})
+            return
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=raw,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "User-Agent": "StockSaathi-Backend/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                body = r.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except urllib.error.HTTPError as e:
+            try: err_body = e.read()
+            except Exception: err_body = b'{"error":{"message":"upstream error"}}'
+            self.send_response(e.code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err_body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err_body)
+        except Exception as e:
+            self._json(502, {"error": "anthropic_unreachable", "detail": str(e)})
 
     def _proxy_yahoo_chart(self):
         # Extract symbol + query string from /api/yahoo/chart/<symbol>?...
@@ -351,6 +416,9 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
             self._json(502, {"error": "yahoo_unreachable", "detail": str(e)})
 
     def do_POST(self):
+        if self.path == "/api/chat":
+            self._proxy_anthropic()
+            return
         if self.path not in ("/api/send-consent", "/api/send-email"):
             self._json(404, {"ok": False, "error": "not_found"})
             return

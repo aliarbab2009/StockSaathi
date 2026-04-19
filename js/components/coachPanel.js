@@ -9,7 +9,7 @@ import { getInstrument } from "../data/universe.js";
 import { getNews } from "../data/news.js";
 import { formatRupees, formatPct } from "../money.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
-import { answerPriceQuery, buildPriceContext } from "../coach/liveData.js";
+import { runAgent } from "../coach/agent.js";
 
 const CHAT_LOG_KEY = "ss.coachchat.v1";
 
@@ -33,52 +33,21 @@ function smartTemplateReply(userText, state) {
   });
 }
 
-async function callClaudeChat(apiKey, history, state) {
-  const portfolioSummary = summarisePortfolio(state);
-  const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
-
+async function callClaudeAgent(apiKey, history, state) {
   // Fast path: obvious off-topic asks don't burn tokens
   const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
   if (isOffTopic(lastUser)) return offTopicRedirect(lastUser);
 
-  // If the user is asking about a price, fetch real data and inject as context
-  let priceCtx = "";
-  try {
-    const ctx = await buildPriceContext(lastUser);
-    if (ctx) priceCtx = `\n\n## LIVE PRICE CONTEXT (real, fetched seconds ago — use these numbers)\n${ctx.summary}`;
-  } catch {}
+  const portfolioSummary = summarisePortfolio(state);
+  const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
+  const system = `${SYSTEM_PROMPT}\n\n# RUNTIME CONTEXT\n## User portfolio snapshot\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, the market right now, or their portfolio. Never guess prices or numbers — always call the tool.`;
 
-  const systemWithContext = `${SYSTEM_PROMPT}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}${priceCtx}`;
+  const messages = history.slice(-12).map(m => ({
+    role: m.role === "user" ? "user" : "assistant",
+    content: m.text,
+  }));
 
-  const recent = history.slice(-10).map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
-        max_tokens: 280,
-        temperature: 0.4,
-        system: systemWithContext,
-        messages: recent,
-      }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.content?.[0]?.text?.trim() || null;
-  } catch {
-    clearTimeout(t);
-    return null;
-  }
+  return await runAgent({ apiKey, system, messages });
 }
 
 function summarisePortfolio(state) {
@@ -187,16 +156,11 @@ function render() {
     const s = getState();
     let reply = null;
 
-    // 1. Try live price lookup first — if the user asked about a specific stock/crypto,
-    //    we answer with REAL numbers, not a template.
+    // REAL LLM agent with tool-use. Tries user's key first, then backend proxy,
+    // then (only if both fail) falls back to template matcher.
     try {
-      reply = await answerPriceQuery(text);
-    } catch {}
-
-    // 2. If no price query OR no key, fall back through LLM → template
-    if (!reply && s.settings.anthropicKey) {
-      reply = await callClaudeChat(s.settings.anthropicKey, chatHistory, s).catch(() => null);
-    }
+      reply = await callClaudeAgent(s.settings.anthropicKey || null, chatHistory, s);
+    } catch (e) { console.warn("agent:", e); }
     if (!reply) reply = smartTemplateReply(text, s);
 
     chatHistory.push({ role: "assistant", text: reply, ts: Date.now() });
