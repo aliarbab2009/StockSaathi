@@ -40,12 +40,32 @@ subscribe((s) => {
   document.documentElement.setAttribute("data-theme", s.settings.theme || "light");
 });
 
-// Service worker (offline)
+// Service worker (offline) — auto-update so users aren't stuck on a
+// months-old cached JS bundle. When a new SW installs, tell it to activate
+// immediately and reload the page once.
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(err => {
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
+      reg.update().catch(() => {});
+      reg.addEventListener("updatefound", () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", () => {
+          if (sw.state === "installed" && navigator.serviceWorker.controller) {
+            sw.postMessage("SKIP_WAITING");
+          }
+        });
+      });
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (reloaded) return;
+        reloaded = true;
+        window.location.reload();
+      });
+    } catch (err) {
       console.warn("SW registration failed (non-critical):", err);
-    });
+    }
   });
 }
 

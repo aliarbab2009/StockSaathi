@@ -146,8 +146,12 @@ def _write_security_headers(handler_self):
          "img-src 'self' data: https:; "
          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
          "font-src 'self' data: https://fonts.gstatic.com; "
-         "script-src 'self'; "
+         # esm.sh hosts the Supabase JS SDK which is loaded via dynamic
+         # import() from js/db/supabase.js. Without it the client can't
+         # connect to the DB and trades fall back to local-only.
+         "script-src 'self' https://esm.sh; "
          "connect-src 'self' https: wss:; "
+         "worker-src 'self'; "
          "frame-ancestors 'none'; "
          "base-uri 'self'; object-src 'none'")
     )
