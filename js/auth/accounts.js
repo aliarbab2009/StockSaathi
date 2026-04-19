@@ -223,10 +223,16 @@ let _cachedUser = null;
 let _cachedAt = 0;
 
 export function currentUser() {
-  // In Supabase mode, we surface the cached profile (updated via refreshCurrentUser).
-  // If no cache yet, return null (UI will handle).
+  // In Supabase mode, the ONLY source of truth is _cachedUser (populated by
+  // refreshCurrentUser from the Supabase client). Previously we fell back to
+  // the legacy ss.session.v1 localStorage key, which meant a stale local
+  // session could impersonate an authed user through needsAuth guards and
+  // then hit "not logged in" on every Supabase RPC. Now: if Supabase is
+  // configured anywhere, the local fallback is dead — return null until the
+  // async refreshCurrentUser resolves.
   if (_cachedUser) return _cachedUser;
-  // Local fallback
+  if (_supabaseConfiguredSync()) return null;
+  // Pure local mode (no Supabase env vars) — keep the legacy path.
   const sess = readSession();
   if (!sess) return null;
   const accs = readLocalAccounts();
@@ -236,13 +242,41 @@ export function currentUser() {
   return safe;
 }
 
+// Synchronous "is Supabase configured?" check. We stash a flag on window
+// during the first refreshCurrentUser run — avoids a second async trip.
+let _supabaseConfiguredCache = null;
+function _supabaseConfiguredSync() {
+  if (_supabaseConfiguredCache != null) return _supabaseConfiguredCache;
+  // Heuristic: presence of our persist key OR a cached config object means
+  // Supabase was at least attempted. Also check if window._supabaseReady
+  // flag was set by refreshCurrentUser below.
+  try {
+    if (typeof window !== "undefined" && window._ss_supabaseConfigured != null) {
+      _supabaseConfiguredCache = !!window._ss_supabaseConfigured;
+      return _supabaseConfiguredCache;
+    }
+  } catch {}
+  return false;
+}
+
 /**
  * ASYNC — refreshes the current-user cache from Supabase (or local).
  * Call on boot + after any auth mutation.
  */
 export async function refreshCurrentUser() {
   const client = await sb();
+  // Set the sync flag so currentUser() knows Supabase mode is live without
+  // another round-trip. Also wipe legacy localStorage keys so a ghost local
+  // session can't slip back in between tabs.
   if (client) {
+    try {
+      window._ss_supabaseConfigured = true;
+      _supabaseConfiguredCache = true;
+      // Clear legacy fallback sessions — they cause "not logged in" errors
+      // on every Supabase RPC when the Supabase session is missing/expired.
+      localStorage.removeItem("ss.session.v1");
+      localStorage.removeItem("ss.accounts.v1");
+    } catch {}
     const { data: userData } = await client.auth.getUser();
     const u = userData?.user;
     if (!u) { _cachedUser = null; return null; }

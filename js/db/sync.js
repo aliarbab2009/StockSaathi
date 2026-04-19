@@ -171,16 +171,17 @@ export async function dbAddCoachMessage(msg) {
 export async function dbAddFriend(friendUsername) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
-  // Single atomic RPC: resolves username → inserts friends row → returns
-  // the friend's public profile. Replaces the broken 2-step client flow
-  // that relied on anon SELECT from profiles.
+  await ensureAuthedOrRedirect(client);
   const { data, error } = await client.rpc("add_friend_by_username",
     { p_username: friendUsername.trim() });
   if (error) {
     const msg = String(error.message || "");
     if (/recipient not found/i.test(msg)) throw new Error(`No StockSaathi user "@${friendUsername}".`);
     if (/cannot add yourself/i.test(msg)) throw new Error("You can't add yourself.");
-    if (/not logged in/i.test(msg)) throw new Error("Not logged in.");
+    if (/not logged in/i.test(msg)) {
+      await handleSessionLost();
+      throw new Error("Your session expired. Please log in again.");
+    }
     throw new Error(prettifyErr(msg));
   }
   const row = Array.isArray(data) ? data[0] : data;
@@ -205,12 +206,16 @@ export async function dbRemoveFriend(friendId) {
 export async function dbSendTransfer({ recipientHandle, amountPaise, note }) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
+  await ensureAuthedOrRedirect(client);
   const { data, error } = await client.rpc("apply_transfer", {
     p_recipient_username: recipientHandle,
     p_amount_paise: amountPaise,
     p_note: note || "",
   });
-  if (error) throw new Error(prettifyErr(error.message));
+  if (error) {
+    if (/not logged in/i.test(error.message)) await handleSessionLost();
+    throw new Error(prettifyErr(error.message));
+  }
   return data;
 }
 
@@ -218,6 +223,7 @@ export async function dbSendTransfer({ recipientHandle, amountPaise, note }) {
 export async function dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyKey, biasFlags }) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
+  await ensureAuthedOrRedirect(client);
   const { data, error } = await client.rpc("apply_trade", {
     p_symbol: symbol,
     p_side: side,
@@ -226,7 +232,10 @@ export async function dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyK
     p_idempotency_key: idempotencyKey,
     p_bias_flags: biasFlags || [],
   });
-  if (error) throw new Error(prettifyErr(error.message));
+  if (error) {
+    if (/not logged in/i.test(error.message)) await handleSessionLost();
+    throw new Error(prettifyErr(error.message));
+  }
   return data;
 }
 
@@ -253,5 +262,27 @@ function prettifyErr(msg) {
   if (/insufficient holding/i.test(msg)) return "You don't have enough of that stock to sell.";
   if (/recipient not found/i.test(msg)) return "We couldn't find that StockSaathi user.";
   if (/cannot send to self/i.test(msg)) return "You can't send money to yourself.";
+  if (/not logged in/i.test(msg)) return "Your session expired. Please log in again.";
   return msg;
+}
+
+// Guard against the silent ghost-session bug: a stale ss.session.v1 used to
+// let users past needsAuth with no Supabase session at all. If that happens
+// now we clear the phantom cache, nudge them to /login, and surface a clean
+// error instead of the raw postgres "not logged in".
+async function ensureAuthedOrRedirect(client) {
+  try {
+    const { data } = await client.auth.getSession();
+    if (data?.session?.access_token) return;
+  } catch {}
+  await handleSessionLost();
+  throw new Error("Your session expired. Please log in again.");
+}
+
+async function handleSessionLost() {
+  try {
+    const { logoutAccount } = await import("../auth/accounts.js");
+    await logoutAccount();
+  } catch {}
+  try { window.location.hash = "#/login"; } catch {}
 }
