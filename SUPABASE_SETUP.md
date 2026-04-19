@@ -16,8 +16,22 @@ Ship to real users with a real Postgres backend, cross-device accounts, email fr
 4. Open **SQL Editor → New query** → paste the **entire contents** of `supabase/schema.sql` → **Run**.
    - Creates all tables, RPCs, RLS policies, triggers, the leaderboard view, and enables Realtime.
 5. **Authentication → Providers → Email**:
-   - Confirm email: **OFF** for launch (so users get in instantly). You can switch on later.
-6. **Project Settings → API** → copy two values:
+   - Confirm email: **ON** if you want the 6-digit code flow (recommended).
+   - Secure email change: optional.
+6. **Authentication → Email Templates → Confirm signup** — replace the body with this so the email contains a visible **6-digit code** instead of only a clickable link:
+
+   ```html
+   <h2>Welcome to StockSaathi</h2>
+   <p>Your 6-digit verification code:</p>
+   <p style="font-size: 28px; font-weight: 700; letter-spacing: 0.25em; font-family: monospace; background: #F1F3F7; padding: 16px 24px; border-radius: 10px; display: inline-block;">{{ .Token }}</p>
+   <p>Paste it into the StockSaathi signup screen to activate your account.</p>
+   <p style="color: #5C6473; font-size: 13px;">If copy-paste is easier, you can also just click this link: <a href="{{ .ConfirmationURL }}">Confirm signup</a></p>
+   <p style="color: #5C6473; font-size: 13px;">Didn't ask for this? Ignore this email — no account will be created.</p>
+   ```
+
+   The key variable is `{{ .Token }}` — it's what turns Supabase's default link-only template into a code-bearing email. The app's signup screen shows the 6-digit input as the primary field; the link still works as a fallback if the user prefers to click.
+
+7. **Project Settings → API** → copy two values:
    - `Project URL` (looks like `https://xxxxxxxx.supabase.co`)
    - `anon public` key (long JWT, safe to expose — RLS is what protects data)
 

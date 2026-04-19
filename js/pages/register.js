@@ -144,39 +144,37 @@ export function renderRegister(main) {
   }
 
   function renderOtp() {
-    // Supabase's default "Confirm signup" email template contains ONLY a
-    // clickable link (via {{ .ConfirmationURL }}) — no OTP code. So we show
-    // the LINK flow as primary ("click the button in your email") and keep
-    // the OTP input as a secondary fallback for projects that customized
-    // the template to include {{ .Token }}.
+    // OTP-first UX: the 6-digit code input is primary. The link in the same
+    // email also works (onAuthStateChange picks up the session) — we list it
+    // quietly as a fallback. Requires the Supabase "Confirm signup" template
+    // to include {{ .Token }} — see SUPABASE_SETUP.md.
     main.innerHTML = `
       <div class="auth-wrap">
         <div class="auth-card">
           <div style="text-align: center; margin-bottom: var(--sp-4);">
             <div style="font-size: 48px; margin-bottom: var(--sp-2);">📬</div>
             <h1>Check your email</h1>
-            <p class="sub">We sent a confirmation email to <strong>${escapeHtml(pendingEmail)}</strong>. <strong>Click the link inside</strong> to activate your account.</p>
+            <p class="sub">We sent a <strong>6-digit code</strong> to <strong>${escapeHtml(pendingEmail)}</strong>. Enter it below to activate your account.</p>
           </div>
 
-          <div id="otp-waiting" class="info-msg" style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-3);">
+          <form class="auth-form" id="otp-form" autocomplete="off">
+            <div class="field">
+              <label class="label" for="otp-input">Verification code</label>
+              <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]{4,10}" maxlength="10" required
+                placeholder="123456" autocomplete="one-time-code"
+                style="font-family: var(--font-mono); letter-spacing: 0.25em; text-align: center; font-size: var(--text-xl); font-weight: 700;" />
+              <div class="dim text-xs" style="margin-top: 6px; text-align: center;">6-digit code from the email.</div>
+            </div>
+
+            <div id="otp-error" role="alert"></div>
+
+            <button type="submit" class="btn btn-primary btn-block btn-lg" id="otp-btn">Verify and continue</button>
+          </form>
+
+          <div id="otp-waiting" class="dim text-xs" style="display:flex;align-items:center;justify-content:center;gap:var(--sp-2);margin-top:var(--sp-3);">
             <span class="spinner" aria-hidden="true"></span>
-            <span>Waiting for you to click the link…</span>
+            <span>Or click the link in the email — we'll sign you in automatically.</span>
           </div>
-
-          <details class="dim text-sm" style="margin-bottom: var(--sp-3);">
-            <summary style="cursor:pointer;">Got a numeric code instead?</summary>
-            <form class="auth-form" id="otp-form" autocomplete="off" style="margin-top: var(--sp-3);">
-              <div class="field">
-                <label class="label" for="otp-input">Verification code</label>
-                <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]{4,10}" maxlength="10"
-                  placeholder="6-digit code"
-                  style="font-family: var(--font-mono); letter-spacing: 0.25em; text-align: center; font-size: var(--text-xl); font-weight: 700;" />
-                <div class="dim text-xs" style="margin-top: 6px; text-align: center;">Only for projects that customised the email template to include a token.</div>
-              </div>
-              <div id="otp-error" role="alert"></div>
-              <button type="submit" class="btn btn-outline btn-block" id="otp-btn">Verify code</button>
-            </form>
-          </details>
 
           <div style="text-align: center; margin-top: var(--sp-3); font-size: var(--text-sm); color: var(--text-muted);">
             Didn't get it? <button type="button" class="btn-link" id="resend-btn"
@@ -195,6 +193,7 @@ export function renderRegister(main) {
     const errBox = main.querySelector("#otp-error");
     const btn = main.querySelector("#otp-btn");
     const resendBtn = main.querySelector("#resend-btn");
+    main.querySelector("#otp-input")?.focus();
 
     // ----- Primary path: auto-advance when Supabase establishes a session.
     // Fires when the user clicks the confirmation link (either in this tab
@@ -250,7 +249,7 @@ export function renderRegister(main) {
       } catch (err) {
         errBox.innerHTML = `<div class="error-msg">${escapeHtml(err.message)}</div>`;
         btn.disabled = false;
-        btn.textContent = "Verify code";
+        btn.textContent = "Verify and continue";
       }
     });
 
