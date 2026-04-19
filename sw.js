@@ -2,7 +2,10 @@
 // SERVICE WORKER — Offline-first cache. Demo-day insurance against flaky WiFi.
 // =============================================================================
 
-const CACHE_NAME = "stocksaathi-v2";
+// Bump this on every deploy so old cached JS/HTML isn't served forever. The
+// activate step below deletes any cache whose name doesn't match. Include a
+// date so it is obvious in DevTools which build is live.
+const CACHE_NAME = "stocksaathi-v3-20260420";
 const STATIC = [
   "./",
   "./index.html",
@@ -82,17 +85,47 @@ self.addEventListener("fetch", (event) => {
     "fonts.googleapis.com", "fonts.gstatic.com"];
   if (externalHosts.some(h => url.hostname.includes(h))) return;
 
-  if (url.origin === location.origin) {
+  if (url.origin !== location.origin) return;
+
+  // Never cache our own /api/* routes — they should always hit network.
+  // Previously these were cache-first and could return stale config / health /
+  // consent responses on subsequent loads.
+  if (url.pathname.startsWith("/api/")) return;
+
+  // Network-first for HTML shell so users get new builds fast. Fallback
+  // to cache on offline. This combines with the new CACHE_NAME bump so
+  // an old build can't stick around after a deploy.
+  const isHTML = event.request.mode === "navigate"
+                 || (event.request.headers.get("accept") || "").includes("text/html");
+
+  if (isHTML) {
     event.respondWith(
-      caches.match(event.request).then(cached => {
-        return cached || fetch(event.request).then(res => {
-          if (event.request.method === "GET" && res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
-          }
-          return res;
-        }).catch(() => cached);
-      })
+      fetch(event.request).then(res => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(event.request).then(c => c || caches.match("./index.html")))
     );
+    return;
   }
+
+  // Cache-first for assets (CSS, JS, fonts, icons) — fast on repeat.
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      return cached || fetch(event.request).then(res => {
+        if (event.request.method === "GET" && res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        }
+        return res;
+      }).catch(() => cached);
+    })
+  );
+});
+
+// Let the page tell the SW to activate a new build immediately.
+self.addEventListener("message", (event) => {
+  if (event.data === "SKIP_WAITING") self.skipWaiting();
 });

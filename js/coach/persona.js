@@ -107,12 +107,58 @@ const OFF_TOPIC_PATTERNS = [
   /\b(diagnose (my|me)|prescription for|medicine for|my symptoms|court case advice|legal advice)\b/i,
   /\b(minecraft|roblox|fortnite|valorant (tips|guide)|bgmi|freefire|recommend a movie|song lyrics|netflix shows|anime recommendation|k-?drama)\b/i,
   /\b(capital of [a-z]+|population of [a-z]+|distance from .+ to|weather (in|at)|translate .+ to)\b/i,
-  /\b(ignore (previous|all) (instructions|prompts)|roleplay as|pretend (you are|to be) (a|an|not)|dan mode|jailbreak|bypass (your|these) (rules|instructions))\b/i,
   /\b(write a poem|tell me a joke about (?!finance|money|stocks|markets)|horoscope|astrology|palm reading)\b/i,
 ];
 
+// Jailbreak patterns. Checked separately with a normalised string so typo'd
+// variants ("ignor previous", "role-play", "ignoor all prev instructions")
+// don't slip through the regex. We remove punctuation and collapse repeated
+// letters to a single one before testing.
+const JAILBREAK_NEEDLES = [
+  "ignore previous",
+  "ignore all previous",
+  "ignore prior",
+  "ignore earlier",
+  "ignor previous",            // common typo
+  "disregard previous",
+  "forget previous",
+  "forget instructions",
+  "system prompt",
+  "roleplay as",
+  "role play as",
+  "pretend you are",
+  "pretend to be",
+  "pretend u are",
+  "dan mode",
+  "do anything now",
+  "jailbreak",
+  "developer mode",
+  "bypass rules",
+  "bypass instructions",
+  "bypass these",
+  "override your",
+  "act as an unfiltered",
+  "you are not claude",
+  "you are not bound",
+];
+
+function normalizeForJailbreak(raw) {
+  const lower = String(raw || "").toLowerCase();
+  // Strip punctuation, collapse repeated letters (heeeelp → help), drop
+  // zero-width + combining marks.
+  return lower
+    .replace(/[\u0300-\u036f\u200b\u200c\u200d\ufeff]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/(.)\1{2,}/g, "$1$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function isOffTopic(text) {
-  return OFF_TOPIC_PATTERNS.some(re => re.test(String(text || "")));
+  const raw = String(text || "");
+  if (OFF_TOPIC_PATTERNS.some(re => re.test(raw))) return true;
+  const norm = normalizeForJailbreak(raw);
+  return JAILBREAK_NEEDLES.some(n => norm.includes(n));
 }
 
 const OFF_TOPIC_REPLIES = [

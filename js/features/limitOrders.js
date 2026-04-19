@@ -15,6 +15,9 @@ import { getQuoteBatch } from "../data/marketData.js";
 
 let _loopTimer = null;
 let _stopFn = null;
+let _matching = false;              // guard: never run two passes in parallel
+const _inFlight = new Set();        // order-ids currently being filled
+const _recentFills = new Map();     // order-id → ts, debounce re-fires
 
 export async function listPendingOrders() {
   const client = await sb();
@@ -45,6 +48,14 @@ export async function listAllOrders(limit = 50) {
 export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured — log in first.");
+  // Client-side input validation. The RPC validates too, but catching here
+  // gives a readable error and avoids a round-trip for obvious mistakes.
+  if (!symbol || typeof symbol !== "string") throw new Error("Missing symbol.");
+  if (!Number.isFinite(qty) || qty <= 0) throw new Error("Quantity must be greater than 0.");
+  if (!Number.isFinite(limitPricePaise) || limitPricePaise <= 0) {
+    throw new Error("Limit price must be greater than ₹0.");
+  }
+  if (side !== "BUY" && side !== "SELL") throw new Error("Side must be BUY or SELL.");
   const { data, error } = await client.rpc("place_limit_order", {
     p_symbol: symbol,
     p_side: side,
@@ -68,45 +79,70 @@ export async function cancelOrder(orderId) {
  * matcher loop. Server validates that the limit condition is actually met.
  */
 async function fillOrderAt(orderId, marketPaise) {
-  const client = await sb();
-  if (!client) return null;
-  const { data, error } = await client.rpc("fill_limit_order", {
-    p_order_id: orderId,
-    p_market_paise: Math.round(marketPaise),
-  });
-  if (error) {
-    // "market has not crossed limit" is expected — don't spam console
-    if (!/market has not crossed/i.test(error.message)) {
-      console.warn("fill_limit_order:", error.message);
+  // Idempotency at the client tier: never fire a second fill request while
+  // one is in-flight for the same order, and cool-down successful fills for
+  // 60 s so a slow DB commit can't be re-triggered before the status flip
+  // is visible via realtime.
+  if (_inFlight.has(orderId)) return null;
+  const lastFill = _recentFills.get(orderId);
+  if (lastFill && Date.now() - lastFill < 60_000) return null;
+  _inFlight.add(orderId);
+  try {
+    const client = await sb();
+    if (!client) return null;
+    const { data, error } = await client.rpc("fill_limit_order", {
+      p_order_id: orderId,
+      p_market_paise: Math.round(marketPaise),
+    });
+    if (error) {
+      if (!/market has not crossed|already /i.test(error.message)) {
+        console.warn("fill_limit_order:", error.message);
+      }
+      return null;
     }
-    return null;
+    if (data?.ok) _recentFills.set(orderId, Date.now());
+    return data;
+  } finally {
+    _inFlight.delete(orderId);
+    // bounded map — forget old entries after 10 minutes
+    if (_recentFills.size > 200) {
+      const cutoff = Date.now() - 600_000;
+      for (const [k, v] of _recentFills) if (v < cutoff) _recentFills.delete(k);
+    }
   }
-  return data;
 }
 
 /**
  * Run one matcher pass: fetch pending orders, fetch quotes, fill matching.
+ * The _matching guard means overlapping ticks (slow network → next setInterval
+ * fires before the previous finished) silently drop rather than double-fill.
  */
 async function matchOnce() {
-  const pending = await listPendingOrders();
-  if (!pending.length) return { checked: 0, filled: 0 };
+  if (_matching) return { checked: 0, filled: 0, skipped: true };
+  _matching = true;
+  try {
+    const pending = await listPendingOrders();
+    if (!pending.length) return { checked: 0, filled: 0 };
 
-  const symbols = [...new Set(pending.map(o => o.symbol))];
-  const quotes = await getQuoteBatch(symbols);
+    const symbols = [...new Set(pending.map(o => o.symbol))];
+    const quotes = await getQuoteBatch(symbols);
 
-  let filled = 0;
-  for (const order of pending) {
-    const q = quotes[order.symbol];
-    if (!q) continue;
-    const cur = q.pricePaise;
-    const limit = Number(order.limit_price_paise);
-    const matches = order.side === "BUY" ? cur <= limit : cur >= limit;
-    if (matches) {
-      const result = await fillOrderAt(order.id, cur);
-      if (result?.ok) filled++;
+    let filled = 0;
+    for (const order of pending) {
+      const q = quotes[order.symbol];
+      if (!q) continue;
+      const cur = q.pricePaise;
+      const limit = Number(order.limit_price_paise);
+      const matches = order.side === "BUY" ? cur <= limit : cur >= limit;
+      if (matches) {
+        const result = await fillOrderAt(order.id, cur);
+        if (result?.ok) filled++;
+      }
     }
+    return { checked: pending.length, filled };
+  } finally {
+    _matching = false;
   }
-  return { checked: pending.length, filled };
 }
 
 /**

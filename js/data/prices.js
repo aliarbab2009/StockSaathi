@@ -197,18 +197,29 @@ export function get52wRange(symbol) {
  */
 export function marketStatus() {
   const now = new Date();
-  // IST: UTC+5:30
-  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const istMinutes = (utcMinutes + 330) % 1440;
-  const day = (now.getUTCDay() + (istMinutes > (utcMinutes % 1440) ? 0 : 0)) % 7;
-  const dayOfWeekIST = (now.getUTCDay() + Math.floor((utcMinutes + 330) / 1440)) % 7;
-  const isWeekday = dayOfWeekIST >= 1 && dayOfWeekIST <= 5;
+  // Use Intl.DateTimeFormat with Asia/Kolkata — bulletproof against
+  // timezone maths errors around UTC day boundaries. (The old manual
+  // utcMinutes + 330 trick had a dead-code branch and drifted at midnight.)
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+    weekday: "short", year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const parts = fmt.formatToParts(now).reduce((acc, p) => {
+    acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const istHours = parseInt(parts.hour, 10);
+  const istMin = parseInt(parts.minute, 10);
+  const istMinutes = istHours * 60 + istMin;
+  const weekdayShort = (parts.weekday || "").toLowerCase();
+  const isWeekday = !["sat", "sun"].includes(weekdayShort);
   const openMin = 9 * 60 + 15;   // 9:15 IST
   const closeMin = 15 * 60 + 30; // 15:30 IST
   const open = isWeekday && istMinutes >= openMin && istMinutes < closeMin;
   return {
     open,
     label: open ? "Market Open" : "Market Closed",
-    istTime: `${String(Math.floor(istMinutes / 60)).padStart(2, "0")}:${String(istMinutes % 60).padStart(2, "0")} IST`,
+    istTime: `${String(istHours).padStart(2, "0")}:${String(istMin).padStart(2, "0")} IST`,
   };
 }

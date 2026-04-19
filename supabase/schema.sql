@@ -248,10 +248,14 @@ grant execute on function public.apply_trade(text, text, numeric, bigint, text, 
 -- =============================================================================
 -- ATOMIC RPC: apply_transfer (P2P virtual cash)
 -- =============================================================================
+-- Add idempotency + cap to apply_transfer. An idempotency_key stops the client
+-- from double-spending under network retry; the cap rejects absurd values
+-- early so errors are visibly bad, not silently huge.
 create or replace function public.apply_transfer(
   p_recipient_username text,
   p_amount_paise       bigint,
-  p_note               text
+  p_note               text,
+  p_idempotency_key    text default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -261,13 +265,27 @@ declare
   v_sender_id    uuid := auth.uid();
   v_recipient_id uuid;
   v_transfer_id  uuid;
+  v_max_paise    bigint := 100000000000; -- ₹100 cr cap, well above any legit sim transfer
+  v_existing_id  uuid;
 begin
   if v_sender_id is null then raise exception 'not logged in'; end if;
   if p_amount_paise <= 0 then raise exception 'amount must be positive'; end if;
+  if p_amount_paise > v_max_paise then raise exception 'amount exceeds cap'; end if;
+  -- Cap note length so UIs cannot render unbounded payloads.
+  p_note := substr(coalesce(p_note, ''), 1, 280);
+
+  if p_idempotency_key is not null and length(p_idempotency_key) > 0 then
+    select id into v_existing_id
+      from public.transfers
+      where sender_id = v_sender_id and code = p_idempotency_key
+      limit 1;
+    if v_existing_id is not null then
+      return jsonb_build_object('ok', true, 'transfer_id', v_existing_id, 'idempotent', true);
+    end if;
+  end if;
 
   select id into v_recipient_id from public.profiles
-    where lower(username) = lower(p_recipient_username)
-       or lower(email) = lower(p_recipient_username)
+    where lower(username) = lower(trim(p_recipient_username))
     limit 1;
   if v_recipient_id is null then raise exception 'recipient not found'; end if;
   if v_recipient_id = v_sender_id then raise exception 'cannot send to self'; end if;
@@ -281,15 +299,109 @@ begin
       cash_paise = public.portfolios.cash_paise + excluded.cash_paise,
       updated_at = now();
 
-  insert into public.transfers (sender_id, recipient_id, amount_paise, note, status, completed_at)
-    values (v_sender_id, v_recipient_id, p_amount_paise, p_note, 'completed', now())
+  insert into public.transfers (sender_id, recipient_id, amount_paise, note, status, completed_at, code)
+    values (v_sender_id, v_recipient_id, p_amount_paise, p_note, 'completed', now(),
+            p_idempotency_key)
     returning id into v_transfer_id;
 
   return jsonb_build_object('ok', true, 'transfer_id', v_transfer_id);
 end;
 $$;
 
+grant execute on function public.apply_transfer(text, bigint, text, text) to authenticated;
+-- Back-compat: old 3-arg signature still callable for already-deployed clients.
 grant execute on function public.apply_transfer(text, bigint, text) to authenticated;
+
+-- =============================================================================
+-- ATOMIC RPC: create_transfer_code + redeem_transfer_code
+-- Server-authoritative transfer codes. Removes the old client behaviour of
+-- iterating every ss.userstate.* localStorage key on the device (cross-user
+-- privacy leak + pending-code redeem theft).
+-- =============================================================================
+create or replace function public.create_transfer_code(
+  p_amount_paise bigint,
+  p_note         text,
+  p_code         text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sender_id   uuid := auth.uid();
+  v_transfer_id uuid;
+  v_clean_code  text;
+begin
+  if v_sender_id is null then raise exception 'not logged in'; end if;
+  if p_amount_paise <= 0 then raise exception 'amount must be positive'; end if;
+  if p_amount_paise > 100000000000 then raise exception 'amount exceeds cap'; end if;
+  v_clean_code := upper(regexp_replace(coalesce(p_code, ''), '[^A-Z0-9-]', '', 'g'));
+  if length(v_clean_code) < 6 or length(v_clean_code) > 12 then
+    raise exception 'bad code';
+  end if;
+
+  update public.portfolios
+    set cash_paise = cash_paise - p_amount_paise, updated_at = now()
+    where user_id = v_sender_id and cash_paise >= p_amount_paise;
+  if not found then raise exception 'insufficient cash'; end if;
+
+  insert into public.transfers (sender_id, recipient_id, code, amount_paise,
+                                note, status)
+    values (v_sender_id, null, v_clean_code, p_amount_paise,
+            substr(coalesce(p_note, ''), 1, 280), 'pending')
+    returning id into v_transfer_id;
+
+  return jsonb_build_object('ok', true, 'transfer_id', v_transfer_id,
+                            'code', v_clean_code);
+exception
+  when unique_violation then
+    -- Refund on dup-code race
+    update public.portfolios set cash_paise = cash_paise + p_amount_paise, updated_at = now()
+      where user_id = v_sender_id;
+    raise exception 'code already in use';
+end;
+$$;
+grant execute on function public.create_transfer_code(bigint, text, text) to authenticated;
+
+create or replace function public.redeem_transfer_code(p_code text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id     uuid := auth.uid();
+  v_transfer_id uuid;
+  v_sender_id   uuid;
+  v_amount      bigint;
+  v_clean       text;
+begin
+  if v_user_id is null then raise exception 'not logged in'; end if;
+  v_clean := upper(regexp_replace(coalesce(p_code, ''), '[^A-Z0-9-]', '', 'g'));
+  if length(v_clean) < 6 then raise exception 'bad code'; end if;
+
+  select id, sender_id, amount_paise
+    into v_transfer_id, v_sender_id, v_amount
+    from public.transfers
+    where code = v_clean and status = 'pending'
+    for update;
+  if not found then raise exception 'code not found or already redeemed'; end if;
+  if v_sender_id = v_user_id then raise exception 'cannot redeem your own code'; end if;
+
+  update public.transfers
+    set status = 'completed', recipient_id = v_user_id, completed_at = now()
+    where id = v_transfer_id;
+
+  insert into public.portfolios (user_id, cash_paise) values (v_user_id, v_amount)
+    on conflict (user_id) do update set
+      cash_paise = public.portfolios.cash_paise + excluded.cash_paise,
+      updated_at = now();
+
+  return jsonb_build_object('ok', true, 'transfer_id', v_transfer_id,
+                            'amount_paise', v_amount);
+end;
+$$;
+grant execute on function public.redeem_transfer_code(text) to authenticated;
 
 -- =============================================================================
 -- ATOMIC RPC: place_limit_order
@@ -534,32 +646,68 @@ create trigger on_auth_user_created
 -- =============================================================================
 -- Leaderboard view (public read, aggregates only)
 -- =============================================================================
-create or replace view public.leaderboard_view as
-select
-  p.id                as user_id,
-  p.username,
-  p.display_name,
-  p.school,
-  p.avatar_color,
-  pf.cash_paise + coalesce(hsum.hv, 0) as portfolio_value_paise,
-  pf.starting_cash_paise,
-  case when pf.starting_cash_paise > 0 then
-    round(((pf.cash_paise + coalesce(hsum.hv, 0) - pf.starting_cash_paise)::numeric /
-           pf.starting_cash_paise::numeric) * 10000)
-  else 0 end as return_bps,
-  coalesce(tcount.tx, 0) as trades,
-  p.onboarded,
-  p.created_at
-from public.profiles p
-join public.portfolios pf on pf.user_id = p.id
-left join lateral (
-  select sum(h.qty * h.avg_cost_paise)::bigint as hv from public.holdings h where h.user_id = p.id
-) hsum on true
-left join lateral (
-  select count(*)::int as tx from public.transactions t where t.user_id = p.id
-) tcount on true
-where p.onboarded = true;
+-- Leaderboard: a SECURITY DEFINER function bypasses the (tightened) profiles
+-- RLS so the public rankings still work for anon clients. It ONLY returns
+-- safe columns — never email/parent_email/age/class_code.
+create or replace function public.leaderboard(
+  p_limit int default 100,
+  p_school text default null
+)
+returns table (
+  user_id uuid,
+  username text,
+  display_name text,
+  school text,
+  avatar_color text,
+  portfolio_value_paise bigint,
+  starting_cash_paise bigint,
+  return_bps bigint,
+  trades int,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return query
+  select
+    p.id,
+    p.username,
+    p.display_name,
+    case when p_school is null then p.school else p.school end,
+    p.avatar_color,
+    (pf.cash_paise + coalesce(hsum.hv, 0))::bigint,
+    pf.starting_cash_paise,
+    case when pf.starting_cash_paise > 0 then
+      round(((pf.cash_paise + coalesce(hsum.hv, 0) - pf.starting_cash_paise)::numeric /
+             pf.starting_cash_paise::numeric) * 10000)::bigint
+    else 0::bigint end,
+    coalesce(tcount.tx, 0),
+    p.created_at
+  from public.profiles p
+  join public.portfolios pf on pf.user_id = p.id
+  left join lateral (
+    select sum(h.qty * h.avg_cost_paise)::bigint as hv
+    from public.holdings h where h.user_id = p.id
+  ) hsum on true
+  left join lateral (
+    select count(*)::int as tx
+    from public.transactions t where t.user_id = p.id
+  ) tcount on true
+  where p.onboarded = true
+    and (p_school is null or lower(p.school) = lower(p_school))
+  order by (pf.cash_paise + coalesce(hsum.hv, 0)) desc
+  limit greatest(1, least(coalesce(p_limit, 100), 200));
+end;
+$$;
+grant execute on function public.leaderboard(int, text) to anon, authenticated;
 
+-- Back-compat shim: keep the old `leaderboard_view` name as a view wrapping
+-- the SECURITY DEFINER function so existing client code keeps working.
+drop view if exists public.leaderboard_view;
+create or replace view public.leaderboard_view as
+  select * from public.leaderboard(200, null);
 grant select on public.leaderboard_view to anon, authenticated;
 
 -- =============================================================================
@@ -575,12 +723,75 @@ alter table public.coach_messages enable row level security;
 alter table public.watchlist      enable row level security;
 alter table public.limit_orders   enable row level security;
 
+-- Security fix: the old `profiles_read_all` exposed email + parent_email to
+-- every anon client. We now restrict the base table to self-reads only and
+-- route everyone else through the `public_profiles` view below, which omits
+-- the sensitive columns.
 drop policy if exists "profiles_read_all"      on public.profiles;
+drop policy if exists "profiles_self_read"     on public.profiles;
 drop policy if exists "profiles_update_self"   on public.profiles;
 drop policy if exists "profiles_insert_self"   on public.profiles;
-create policy "profiles_read_all"    on public.profiles for select using (true);
+create policy "profiles_self_read"   on public.profiles for select using (auth.uid() = id);
 create policy "profiles_update_self" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 create policy "profiles_insert_self" on public.profiles for insert with check (auth.uid() = id);
+
+-- Safe public directory: only non-sensitive columns. Used for friend-search
+-- and display in the UI. Email, parent_email, age, class_code stay private.
+create or replace view public.public_profiles
+with (security_invoker = true) as
+  select id, username, display_name, school, avatar_color, onboarded, created_at
+  from public.profiles
+  where onboarded = true;
+
+-- Make the view readable by anon + authenticated. The underlying RLS still
+-- enforces that nobody except `auth.uid() = id` can hit the base table, but
+-- the view uses `security_invoker` so anon can see rows where onboarded is
+-- true — we must re-grant via a SECURITY DEFINER function for cross-user
+-- directory access. Simpler: grant select on the columns via a definer RPC.
+
+create or replace function public.search_public_profiles(p_query text)
+returns table (
+  id uuid, username text, display_name text, school text,
+  avatar_color text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_q text := lower(trim(coalesce(p_query, '')));
+begin
+  if length(v_q) < 2 then return; end if;
+  return query
+    select p.id, p.username, p.display_name, p.school, p.avatar_color
+    from public.profiles p
+    where p.onboarded = true
+      and (lower(p.username) like v_q || '%'
+           or lower(p.display_name) like '%' || v_q || '%')
+    limit 10;
+end;
+$$;
+grant execute on function public.search_public_profiles(text) to authenticated, anon;
+
+-- Resolve a single profile by username for transfer UX (returns only safe
+-- columns — never email/parent_email).
+create or replace function public.profile_by_username(p_username text)
+returns table (
+  id uuid, username text, display_name text, avatar_color text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return query
+    select p.id, p.username, p.display_name, p.avatar_color
+    from public.profiles p
+    where lower(p.username) = lower(trim(coalesce(p_username, '')))
+    limit 1;
+end;
+$$;
+grant execute on function public.profile_by_username(text) to authenticated;
 
 drop policy if exists "portfolios_self_all" on public.portfolios;
 create policy "portfolios_self_all" on public.portfolios for all

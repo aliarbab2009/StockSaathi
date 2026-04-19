@@ -72,8 +72,10 @@ export function detectFOMO({ trade, holdingBefore }) {
   const today = closes[closes.length - 1];
   const pct = pctChange(weekAgo, today);
 
-  if (pct < 0.12) return null;                    // only fires on strong run-ups
-  const severity = Math.min(1, (pct - 0.12) / 0.18);
+  // Raised threshold from 12% → 18% to cut false positives during normal
+  // bull-run weeks (NSE large-caps often run 10–14% in good months).
+  if (pct < 0.18) return null;
+  const severity = Math.min(1, (pct - 0.18) / 0.18);
 
   return {
     bias: "fomo",
@@ -175,10 +177,18 @@ export function detectAnchoring({ trade }) {
   const distLo = Math.abs(pctChange(lo, trade.pricePaise));
   if (distHi > 0.02 && distLo > 0.02) return null;
   const anchor = distHi < distLo ? "52w_high" : "52w_low";
+  const dist = Math.min(distHi, distLo);
+  // Scale severity by how close we are. At the exact anchor → 0.7, fading
+  // linearly to 0.3 at the 2% boundary. Old code was a flat 0.4 regardless.
+  const severity = Math.max(0.3, Math.min(0.8, 0.7 - (dist / 0.02) * 0.4));
   return {
     bias: "anchoring",
-    severity: 0.4,
-    evidence: { anchor, symbol: trade.symbol },
+    severity,
+    evidence: {
+      anchor,
+      symbol: trade.symbol,
+      dist_pct: Math.round(dist * 1000) / 10,
+    },
   };
 }
 

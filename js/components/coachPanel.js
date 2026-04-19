@@ -37,7 +37,23 @@ function loadChat() {
   catch { return []; }
 }
 function saveChat() {
-  try { localStorage.setItem(CHAT_LOG_KEY, JSON.stringify(chatHistory.slice(-80))); } catch {}
+  // Cap to the last 80 messages. On QuotaExceededError, progressively halve
+  // until the write succeeds — losing old chat history is better than
+  // silently failing to persist new messages.
+  let keep = 80;
+  while (keep >= 10) {
+    try {
+      localStorage.setItem(CHAT_LOG_KEY, JSON.stringify(chatHistory.slice(-keep)));
+      return;
+    } catch (e) {
+      const isQuota = e && (e.name === "QuotaExceededError"
+                            || (e.code && (e.code === 22 || e.code === 1014)));
+      if (!isQuota) return;
+      keep = Math.floor(keep / 2);
+    }
+  }
+  // Last resort: drop everything
+  try { localStorage.removeItem(CHAT_LOG_KEY); } catch {}
 }
 
 function smartTemplateReply(userText, state) {

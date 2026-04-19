@@ -5,6 +5,7 @@ Yahoo Finance v7/quote endpoint (works without crumb cookie). Falls back to
 v10/quoteSummary on failure.
 """
 
+import re
 import json
 import urllib.request
 import urllib.error
@@ -21,10 +22,11 @@ V7_HOSTS = [
     "https://query2.finance.yahoo.com/v7/finance/quote",
 ]
 
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
+
 
 def fetch_fundamentals(symbol):
     ticker = symbol if "." in symbol else f"{symbol}.NS"
-    last = None
     for base in V7_HOSTS:
         try:
             url = f"{base}?symbols={ticker}"
@@ -68,18 +70,17 @@ def fetch_fundamentals(symbol):
                 "change_pct": q.get("regularMarketChangePercent"),
                 "source": "yahoo_v7",
             }
-        except Exception as e:
-            last = f"{type(e).__name__}: {e}"
+        except Exception:
             continue
-    return {"error": "yahoo_unreachable", "last": last}
+    return {"error": "yahoo_unreachable"}
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         q = parse_qs(urlparse(self.path).query)
         symbol = (q.get("symbol") or [""])[0].strip().upper()
-        if not symbol:
-            self._json(400, {"ok": False, "error": "missing symbol"})
+        if not symbol or not _SYMBOL_RE.match(symbol):
+            self._json(400, {"ok": False, "error": "bad_symbol"})
             return
         data = fetch_fundamentals(symbol)
         if data.get("error"):

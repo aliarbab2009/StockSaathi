@@ -5,6 +5,7 @@ threads). Returns a dict keyed by original symbol. Symbols without a
 dot get '.NS' appended automatically.
 """
 
+import re
 import json
 import urllib.request
 import urllib.error
@@ -24,6 +25,8 @@ HOSTS = [
 
 MAX_SYMBOLS = 60
 WORKERS = 40   # higher concurrency — one thread per symbol so tail latency = slowest single call
+
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
 
 
 def fetch_one(symbol):
@@ -67,9 +70,11 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         q = parse_qs(urlparse(self.path).query)
         raw = (q.get("symbols") or [""])[0]
-        syms = [s.strip().upper() for s in raw.split(",") if s.strip()][:MAX_SYMBOLS]
+        raw_syms = [s.strip().upper() for s in raw.split(",") if s.strip()][:MAX_SYMBOLS]
+        # Silently drop malformed symbols — one bad apple shouldn't 400 the whole batch.
+        syms = [s for s in raw_syms if _SYMBOL_RE.match(s)]
         if not syms:
-            self._json(400, {"ok": False, "error": "missing symbols"})
+            self._json(400, {"ok": False, "error": "no_valid_symbols"})
             return
 
         quotes = {}

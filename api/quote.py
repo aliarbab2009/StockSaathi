@@ -4,6 +4,7 @@ Normalized JSON output so the client doesn't need to parse Yahoo's nested
 structure. Tries query1 then query2 with a realistic User-Agent.
 """
 
+import re
 import json
 import urllib.request
 import urllib.error
@@ -20,6 +21,8 @@ HOSTS = [
     "https://query2.finance.yahoo.com/v8/finance/chart",
 ]
 
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
+
 
 def fetch_one(symbol):
     """Fetch a single symbol from Yahoo. Returns dict or None."""
@@ -27,7 +30,6 @@ def fetch_one(symbol):
         ticker = f"{symbol}.NS"
     else:
         ticker = symbol
-    last_err = None
     for base in HOSTS:
         try:
             url = f"{base}/{ticker}?interval=1d&range=5d"
@@ -62,18 +64,17 @@ def fetch_one(symbol):
                 "source": "yahoo",
                 "host": base.split("//")[1].split("/")[0],
             }
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
+        except Exception:
             continue
-    return {"error": "yahoo_unreachable", "last": last_err}
+    return {"error": "yahoo_unreachable"}
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         q = parse_qs(urlparse(self.path).query)
         symbol = (q.get("symbol") or [""])[0].strip().upper()
-        if not symbol:
-            self._json(400, {"ok": False, "error": "missing symbol"})
+        if not symbol or not _SYMBOL_RE.match(symbol):
+            self._json(400, {"ok": False, "error": "bad_symbol"})
             return
         data = fetch_one(symbol)
         if data.get("error"):

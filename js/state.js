@@ -56,8 +56,30 @@ function readUserState(userId) {
   } catch { return null; }
 }
 function writeUserState(userId, st) {
-  try { localStorage.setItem(keyFor(userId), JSON.stringify(st)); }
-  catch (e) { console.warn("state persist failed:", e); }
+  const stamped = { ...st, _persistedAt: Date.now() };
+  try {
+    localStorage.setItem(keyFor(userId), JSON.stringify(stamped));
+  } catch (e) {
+    // Quota handling: large coach histories can blow the 5 MB cap. Trim the
+    // heaviest arrays (coachMessages + transactions + transfers) and retry
+    // once — losing old chat history is better than losing new trades.
+    const isQuota = e && (e.name === "QuotaExceededError"
+                          || (e.code && (e.code === 22 || e.code === 1014)));
+    if (!isQuota) { console.warn("state persist failed:", e); return; }
+    try {
+      const trimmed = {
+        ...stamped,
+        coachMessages: (stamped.coachMessages || []).slice(-50),
+        transactions: (stamped.transactions || []).slice(-500),
+        transfers: (stamped.transfers || []).slice(-200),
+        inbox: (stamped.inbox || []).slice(-100),
+      };
+      localStorage.setItem(keyFor(userId), JSON.stringify(trimmed));
+      console.warn("state trimmed after QuotaExceededError (coach history shrunk).");
+    } catch (e2) {
+      console.error("state persist failed even after trim:", e2);
+    }
+  }
 }
 
 function readSettings() {
@@ -301,12 +323,22 @@ function applyLocalTradeEffect(txn) {
     let nextHoldings;
     if (side === "BUY") {
       const newQty = (cur?.qty || 0) + qty;
-      const newAvg = cur
-        ? Math.round((cur.avgCostPaise * cur.qty + valuePaise) / newQty)
+      // Compute avg cost without cumulative rounding: carry avgCostRaw (float)
+      // so 20 DCA buys don't drift the average by whole paise. Display still
+      // rounds, but the stored basis stays precise.
+      const prevAvgRaw = cur?.avgCostRaw ?? cur?.avgCostPaise ?? 0;
+      const prevQty = cur?.qty || 0;
+      const rawAvg = newQty > 0
+        ? (prevAvgRaw * prevQty + qty * pricePaise) / newQty
         : pricePaise;
       nextHoldings = {
         ...state.holdings,
-        [symbol]: { qty: newQty, avgCostPaise: newAvg, firstBoughtAt: cur?.firstBoughtAt || Date.now() },
+        [symbol]: {
+          qty: newQty,
+          avgCostPaise: Math.round(rawAvg),
+          avgCostRaw: rawAvg,
+          firstBoughtAt: cur?.firstBoughtAt || Date.now(),
+        },
       };
     } else {
       const remainingQty = cur.qty - qty;
@@ -314,6 +346,8 @@ function applyLocalTradeEffect(txn) {
         const { [symbol]: _, ...rest } = state.holdings;
         nextHoldings = rest;
       } else {
+        // Keep avgCostPaise + avgCostRaw on partial sells — cost basis per
+        // share is unchanged by selling any amount.
         nextHoldings = { ...state.holdings, [symbol]: { ...cur, qty: remainingQty } };
       }
     }
@@ -357,7 +391,15 @@ export function getHoldingPLPct(symbol, state = getState()) {
   const h = state.holdings[symbol];
   if (!h) return 0;
   const curPx = getPriceAt(symbol, 0);
-  return curPx ? (curPx - h.avgCostPaise) / h.avgCostPaise : 0;
+  // Guard against (a) missing current price, (b) zero avg cost (free grants).
+  // Capping at +999% / -100% keeps the UI & leaderboard sort stable; pure
+  // Infinity was breaking sorts and rendering "Infinity%".
+  if (!curPx) return 0;
+  const avg = h.avgCostPaise || 0;
+  if (avg <= 0) return curPx > 0 ? 9.99 : 0;
+  const pct = (curPx - avg) / avg;
+  if (!Number.isFinite(pct)) return 0;
+  return Math.max(-1, Math.min(9.99, pct));
 }
 
 export function resetCurrentPortfolio() {
@@ -370,11 +412,24 @@ export function resetCurrentPortfolio() {
   }));
 }
 
+// Multi-tab safety: only adopt another tab's state if it was persisted LATER
+// than ours. Prevents Tab A clobbering Tab B's in-flight trade after a rapid
+// A→B→A ping-pong. Ties favour the incoming value (slight bias toward the
+// most-recently active tab).
 window.addEventListener("storage", (e) => {
   if (!e.key) return;
-  if (e.key === GLOBAL_SETTINGS_KEY) { _settings = readSettings(); emit(getState()); return; }
+  if (e.key === GLOBAL_SETTINGS_KEY) {
+    _settings = readSettings();
+    emit(getState());
+    return;
+  }
   if (_activeUserId && e.key === keyFor(_activeUserId)) {
-    _userState = readUserState(_activeUserId) || DEFAULT_STATE();
+    const incoming = readUserState(_activeUserId);
+    if (!incoming) return;
+    const ourTs = _userState?._persistedAt || 0;
+    const theirTs = incoming._persistedAt || 0;
+    if (theirTs < ourTs - 50) return; // we're newer, ignore
+    _userState = incoming;
     emit(getState());
   }
 });

@@ -12,7 +12,10 @@ function frame(day, nifty, held, panic, narrationId = null) {
 }
 
 // ---------- COVID 2020 ---------------------------------------------------
-// Nifty Feb 19 2020 peak ~12125. Mar 23 2020 trough ~7610. Recovered to 13000+ by Dec.
+// Nifty Feb 19 2020 peak ~12125. Mar 23 2020 trough ~7610. Broke back above
+// the Feb 2020 peak on Nov 9, 2020. Recovery trading-day count from trough
+// → new all-time high: ~163 sessions (Mar 23 → Nov 9, excluding weekends &
+// holidays). The previous "148" figure undercounted NSE holidays.
 // 62 trading days window (Feb 19 – May 18, 2020).
 // Assumed ₹1,00,000 portfolio allocation: RELIANCE, HDFCBANK, INFY, ITC, TCS.
 // Panic-sell policy: sell everything on day 3 at market close.
@@ -20,14 +23,14 @@ const COVID_2020 = {
   id: "COVID_2020",
   title: "COVID-19 Crash",
   subtitle: "Feb 19 – May 18, 2020",
-  description: "India's fastest bear market. Sensex lost 35% in 33 days — and recovered 55% in the next 9 months.",
+  description: "India's fastest bear market. Sensex lost 35% in 33 days — and took about 8 months to fully recover.",
   startLabel: "Feb 19, 2020",
   endLabel: "May 18, 2020",
   finalDelta: 38.4,   // held outperformed panic by this %
   heldEnd: 92400,
   panicEnd: 66800,
   indexDrop: -35.3,
-  recoveryDays: 148,
+  recoveryDays: 163,
   frames: [
     frame(0,  12125, 100000, 100000, "n_start"),
     frame(1,  12089, 99700,  99700),

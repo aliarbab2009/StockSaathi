@@ -151,7 +151,11 @@ export const STOCKS = [
   { symbol: "MPHASIS",    name: "Mphasis",                   sector: "IT Services",   marketCap: "0.6L Cr",  price: 320000, pe: 30.2, pb: 5.4, divYield: 1.85, beta: 0.90, risk: "low",  logo: "MPH" },
   { symbol: "COFORGE",    name: "Coforge",                   sector: "IT Services",   marketCap: "0.6L Cr",  price: 825000, pe: 50.2, pb: 11.8, divYield: 0.95, beta: 0.95, risk: "med",  logo: "COF" },
 
-  { symbol: "IDEA",       name: "Vodafone Idea",             sector: "Telecom",       marketCap: "0.7L Cr",  price:    900, pe: null, pb: -1.2, divYield: 0.00, beta: 1.72, risk: "high", logo: "VOD" },
+  { symbol: "IDEA",       name: "Vodafone Idea",             sector: "Telecom",       marketCap: "0.7L Cr",  price:    900, pe: null, pb: -1.2, divYield: 0.00, beta: 1.72, risk: "high", logo: "VOD",
+    // Distressed-company flag — stock detail page renders a banner so teens
+    // don't learn the wrong lesson ("if I just hold, it recovers").
+    warning: "distress",
+    warningText: "This company has been financially distressed for years. Included as a cautionary example — a real portfolio should not rely on companies at bankruptcy risk." },
   { symbol: "INDIGO",     name: "InterGlobe Aviation",       sector: "Aviation",      marketCap: "1.7L Cr",  price: 430000, pe: 22.5, pb: 18.5, divYield: 0.00, beta: 1.25, risk: "high", logo: "IND" },
 
   { symbol: "IRFC",       name: "Indian Railway Finance",    sector: "NBFC",          marketCap: "1.8L Cr",  price:  13800, pe: 25.5, pb: 3.2, divYield: 1.10, beta: 1.35, risk: "med",  logo: "IRF" },

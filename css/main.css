@@ -36,6 +36,12 @@
   --warning: #F39C12;
   --warning-soft: #FEF4E4;
 
+  /* Chart palette — charts.js reads these with #10B981 / #EF4444 fallbacks.
+     Defining both light + dark values here is the single source of truth. */
+  --green: #10B981;
+  --red: #EF4444;
+  --yellow: #F39C12;
+
   --saffron: #FF8A2A;               /* India accent */
   --saffron-soft: #FFF0E2;
 
@@ -125,6 +131,45 @@
   --sh-sm: 0 2px 6px rgba(0, 0, 0, 0.45);
   --sh-md: 0 6px 18px rgba(0, 0, 0, 0.5);
   --sh-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  /* Brighter variants so charts/sparklines stay readable on dark bg. */
+  --green: #34D399;
+  --red: #F87171;
+  --yellow: #FBBF24;
+}
+
+/* Respect users who opted out of motion. Disables page transitions, shake
+   animations on the intervention modal, scroll smoothing, etc. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Give the intervention modal the shake animation referenced from JS. */
+@keyframes ss-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+.btn.shake { animation: ss-shake 0.3s ease-in-out; }
+.modal-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--yellow);
+}
+.intervention-caption {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.intervention-fineprint {
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* -------------------- Reset / base -------------------- */

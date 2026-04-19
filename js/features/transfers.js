@@ -11,11 +11,31 @@ import { dbSendTransfer } from "../db/sync.js";
 
 const USERSTATE_PREFIX = "ss.userstate.";
 
+// Local-mode P2P relies on reading other users' state from the same device.
+// This is ONLY used when there is no Supabase session (demo mode on a shared
+// laptop). The Supabase path is strongly preferred and runs in real RLS,
+// so we never reach here for authed users.
 function readOtherUserState(userId) {
   try { const raw = localStorage.getItem(USERSTATE_PREFIX + userId); return raw ? JSON.parse(raw) : null; }
   catch { return null; }
 }
-function writeOtherUserState(userId, st) { localStorage.setItem(USERSTATE_PREFIX + userId, JSON.stringify(st)); }
+function writeOtherUserState(userId, st) {
+  const stamped = { ...st, _persistedAt: Date.now() };
+  try { localStorage.setItem(USERSTATE_PREFIX + userId, JSON.stringify(stamped)); }
+  catch (e) { console.warn("writeOtherUserState failed:", e?.name || e); }
+}
+
+// Crypto-strong transfer code (8 chars from a 32-char alphabet → ~10^12
+// space). Replaces Math.random() which is predictable enough that a sibling
+// on the same computer could guess recent codes.
+function cryptoCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const out = new Uint32Array(8);
+  (window.crypto || window.msCrypto).getRandomValues(out);
+  let s = "";
+  for (let i = 0; i < 8; i++) s += chars[out[i] % chars.length];
+  return s.slice(0, 4) + "-" + s.slice(4);
+}
 
 // --------------------------------------------------------------------------
 export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) {
@@ -25,18 +45,30 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
 
   const client = await sb();
   if (client) {
-    const res = await dbSendTransfer({ recipientHandle: recipientHandle.replace(/^@/, ""), amountPaise: Math.round(amountPaise), note });
-    // Optimistic local update — subtract cash immediately
+    // Only apply the optimistic UI update AFTER the RPC succeeds. The RPC is
+    // atomic + idempotent, so this is the safe order: no rollback needed on
+    // failure, and a retry on transient network errors can't double-spend
+    // (dbSendTransfer passes an idempotencyKey).
+    const amt = Math.round(amountPaise);
+    let res;
+    try {
+      res = await dbSendTransfer({
+        recipientHandle: recipientHandle.replace(/^@/, ""),
+        amountPaise: amt, note,
+      });
+    } catch (e) {
+      throw new Error(prettifyTransferError(e));
+    }
     setState(s => ({
       ...s,
-      portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise - Math.round(amountPaise) },
+      portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise - amt },
       transfers: [
         {
           id: res.transfer_id || genId(),
           direction: "out",
           counterpartyHandle: recipientHandle,
           counterpartyName: recipientHandle,
-          amountPaise: Math.round(amountPaise),
+          amountPaise: amt,
           ts: Date.now(),
           note,
           status: "completed",
@@ -44,7 +76,7 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
         ...s.transfers,
       ],
     }));
-    return { ok: true, recipient: { username: recipientHandle }, amountPaise: Math.round(amountPaise) };
+    return { ok: true, recipient: { username: recipientHandle }, amountPaise: amt };
   }
 
   // Local fallback
@@ -70,35 +102,33 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
     }],
   }));
 
+  // Local-mode credit: only if the recipient actually has existing state on
+  // this device. Refuse to conjure a new account with ₹1 lakh starter cash —
+  // that was a bug: sending to a typo'd handle would create a phantom user
+  // and burn sender cash into it.
   const recState = readOtherUserState(recipient.id);
-  if (recState) {
-    recState.portfolio = {
-      ...recState.portfolio,
-      cashPaise: (recState.portfolio?.cashPaise || 0) + amount,
-    };
-    recState.transfers = [
-      ...(recState.transfers || []),
-      {
-        id: transferId + "_in", direction: "in",
-        counterpartyId: me.id, counterpartyHandle: me.username, counterpartyName: me.displayName,
-        amountPaise: amount, ts, note, status: "completed",
-      },
-    ];
-    writeOtherUserState(recipient.id, recState);
-  } else {
-    writeOtherUserState(recipient.id, {
-      version: 3,
-      portfolio: { cashPaise: 1_00_00_000 + amount, startingCashPaise: 1_00_00_000 },
-      holdings: {}, transactions: [],
-      transfers: [{
-        id: transferId + "_in", direction: "in",
-        counterpartyId: me.id, counterpartyHandle: me.username, counterpartyName: me.displayName,
-        amountPaise: amount, ts, note, status: "completed",
-      }],
-      inbox: [], coachMessages: [], watchlist: [], friends: [], badges: [],
-      profile: { onboarded: false }, demo: { crashReplayCompleted: [], firstTradeDone: false },
-    });
+  if (!recState) {
+    // Roll back the sender-side debit we just applied.
+    setState(s => ({
+      ...s,
+      portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise + amount },
+      transfers: s.transfers.filter(t => t.id !== transferId),
+    }));
+    throw new Error("Recipient hasn't signed in on this device yet. Ask them to open StockSaathi first, then retry.");
   }
+  recState.portfolio = {
+    ...recState.portfolio,
+    cashPaise: (recState.portfolio?.cashPaise || 0) + amount,
+  };
+  recState.transfers = [
+    ...(recState.transfers || []),
+    {
+      id: transferId + "_in", direction: "in",
+      counterpartyId: me.id, counterpartyHandle: me.username, counterpartyName: me.displayName,
+      amountPaise: amount, ts, note, status: "completed",
+    },
+  ];
+  writeOtherUserState(recipient.id, recState);
 
   return {
     ok: true,
@@ -109,16 +139,47 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
 
 // --------------------------------------------------------------------------
 export async function createTransferCode({ amountPaise, note = "" }) {
-  // Transfer codes are kept as a local-mode feature (simpler UX for demo).
   const me = currentUser();
   if (!me) throw new Error("Log in to create a transfer.");
   if (!Number.isFinite(amountPaise) || amountPaise <= 0) throw new Error("Enter a valid amount.");
+  const amount = Math.round(amountPaise);
   const state = getState();
-  if (amountPaise > state.portfolio.cashPaise) {
+  if (amount > state.portfolio.cashPaise) {
     throw new Error(`Not enough cash. You have ₹${(state.portfolio.cashPaise / 100).toLocaleString("en-IN")}.`);
   }
   const code = generateCode();
-  const amount = Math.round(amountPaise);
+  const client = await sb();
+
+  // Server path — the transfers table is authoritative, which kills the
+  // old cross-device "pending code on the sender's laptop only" limitation
+  // AND removes the need to rummage through other users' localStorage on
+  // redeem.
+  if (client) {
+    try {
+      const { data: hasSession } = await client.auth.getSession();
+      if (hasSession?.session?.access_token) {
+        const { data, error } = await client.rpc("create_transfer_code", {
+          p_amount_paise: amount, p_note: note, p_code: code,
+        });
+        if (error) throw error;
+        const ts = Date.now();
+        setState(s => ({
+          ...s,
+          portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise - amount },
+          transfers: [...s.transfers, {
+            id: data?.transfer_id || genId(), direction: "out", code, status: "pending",
+            amountPaise: amount, ts, note,
+            counterpartyId: null, counterpartyHandle: null, counterpartyName: `Code: ${code}`,
+          }],
+        }));
+        return { code, amountPaise: amount };
+      }
+    } catch (e) {
+      throw new Error(prettifyTransferError(e));
+    }
+  }
+
+  // Local fallback: used only in pure-demo mode without Supabase.
   const ts = Date.now();
   setState(s => ({
     ...s,
@@ -133,25 +194,60 @@ export async function createTransferCode({ amountPaise, note = "" }) {
 }
 
 export async function redeemTransferCode(code) {
-  // Local-only for now — codes are in local state.
   const me = currentUser();
   if (!me) throw new Error("Log in to redeem.");
   const cleanCode = String(code || "").trim().toUpperCase();
+  if (cleanCode.length < 6) throw new Error("Code is too short.");
+  const client = await sb();
+
+  // Server path — does NOT leak any other user's state. The RPC is
+  // SECURITY DEFINER and only returns the amount of the redeemed code.
+  if (client) {
+    try {
+      const { data: hasSession } = await client.auth.getSession();
+      if (hasSession?.session?.access_token) {
+        const { data, error } = await client.rpc("redeem_transfer_code",
+          { p_code: cleanCode });
+        if (error) throw error;
+        const amount = Number(data?.amount_paise || 0);
+        setState(s => ({
+          ...s,
+          portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise + amount },
+          transfers: [...s.transfers, {
+            id: data?.transfer_id || genId(), direction: "in", code: cleanCode,
+            counterpartyId: null, counterpartyHandle: null,
+            counterpartyName: "Code redeemed",
+            amountPaise: amount, ts: Date.now(), status: "completed",
+          }],
+        }));
+        return { ok: true, amountPaise: amount };
+      }
+    } catch (e) {
+      throw new Error(prettifyTransferError(e));
+    }
+  }
+
+  // Local fallback: ONLY look in accounts the user has explicitly added as
+  // a friend. No more iterating every ss.userstate.* key. This still works
+  // for the demo-day "two laptops, shared code" case because both students
+  // would friend each other before redeeming.
+  const state = getState();
+  const friendIds = (state.friends || []).map(f => f.id).filter(Boolean);
   let found = null;
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (!k?.startsWith(USERSTATE_PREFIX)) continue;
-    const userId = k.slice(USERSTATE_PREFIX.length);
-    if (userId === me.id) continue;
-    const st = readOtherUserState(userId);
+  for (const uid of friendIds) {
+    if (uid === me.id) continue;
+    const st = readOtherUserState(uid);
     if (!st?.transfers) continue;
     const match = st.transfers.find(t => t.code === cleanCode && t.status === "pending");
-    if (match) { found = { userId, state: st, transfer: match }; break; }
+    if (match) { found = { userId: uid, state: st, transfer: match }; break; }
   }
-  if (!found) throw new Error("Code not found or already redeemed.");
+  if (!found) throw new Error("Code not found or already redeemed. (In local-only mode, the sender must be in your friends list.)");
   const { userId: senderId, state: senderState, transfer } = found;
   senderState.transfers = senderState.transfers.map(t =>
-    t.id === transfer.id ? { ...t, status: "completed", counterpartyId: me.id, counterpartyHandle: me.username, counterpartyName: me.displayName } : t
+    t.id === transfer.id
+      ? { ...t, status: "completed", counterpartyId: me.id,
+          counterpartyHandle: me.username, counterpartyName: me.displayName }
+      : t
   );
   writeOtherUserState(senderId, senderState);
   setState(s => ({
@@ -159,8 +255,10 @@ export async function redeemTransferCode(code) {
     portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise + transfer.amountPaise },
     transfers: [...s.transfers, {
       id: genId(), direction: "in", code: cleanCode,
-      counterpartyId: senderId, counterpartyHandle: null, counterpartyName: "Code redeemed",
-      amountPaise: transfer.amountPaise, ts: Date.now(), note: transfer.note, status: "completed",
+      counterpartyId: senderId, counterpartyHandle: null,
+      counterpartyName: "Code redeemed",
+      amountPaise: transfer.amountPaise, ts: Date.now(),
+      note: transfer.note, status: "completed",
     }],
   }));
   return { ok: true, amountPaise: transfer.amountPaise };
@@ -210,21 +308,50 @@ export async function removeFriend(friendId) {
 
 export async function searchUsers(query) {
   const q = String(query || "").trim().toLowerCase();
-  if (!q) return [];
+  if (q.length < 2) return []; // avoid 1-char fishnet queries
   const me = currentUser();
+  const client = await sb();
+  // Supabase mode: use the SECURITY DEFINER RPC which returns ONLY safe
+  // fields (id/username/display_name/school/avatar_color). Email is never
+  // exposed through this path.
+  if (client) {
+    try {
+      const { data, error } = await client.rpc("search_public_profiles", { p_query: q });
+      if (error) throw error;
+      return (data || [])
+        .filter(r => r.id !== me?.id)
+        .map(r => ({
+          id: r.id,
+          username: r.username,
+          displayName: r.display_name,
+          school: r.school,
+          avatarColor: r.avatar_color,
+        }));
+    } catch (e) {
+      console.warn("search_public_profiles RPC failed, falling back:", e?.message);
+    }
+  }
+  // Local fallback: narrow fields, never emails.
   const all = await listAccountsPublic();
   return all
     .filter(a => a.id !== me?.id && (
-      a.username.toLowerCase().includes(q) ||
-      a.displayName.toLowerCase().includes(q) ||
-      a.email.toLowerCase().includes(q)
+      a.username?.toLowerCase().includes(q) ||
+      a.displayName?.toLowerCase().includes(q)
     ))
+    .map(({ email, ...safe }) => safe)  // strip email from returned shape
     .slice(0, 10);
 }
 
 function generateCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let s = "";
-  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s.slice(0, 4) + "-" + s.slice(4);
+  return cryptoCode();
+}
+
+function prettifyTransferError(e) {
+  const msg = String(e?.message || e || "").toLowerCase();
+  if (msg.includes("insufficient cash")) return "Not enough virtual cash for this transfer.";
+  if (msg.includes("cannot send to self")) return "You can't send money to yourself.";
+  if (msg.includes("recipient not found")) return "No StockSaathi user with that handle.";
+  if (msg.includes("amount exceeds cap")) return "That amount is too large for a sim transfer.";
+  if (msg.includes("rate")) return "Too many transfers in a row — wait a minute.";
+  return e?.message || "Transfer failed. Please try again.";
 }

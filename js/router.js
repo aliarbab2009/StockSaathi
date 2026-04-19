@@ -82,7 +82,28 @@ export function mountRouter() {
     main.classList.remove("page-enter");
     void main.offsetWidth;
     main.classList.add("page-enter");
-    r.render(main, r.params);
+    // Error boundary — a single page throw used to blank the whole UI.
+    // Now the user sees a recoverable "something went wrong" card with a
+    // retry button, and the error is logged to the console for debugging.
+    try {
+      r.render(main, r.params);
+    } catch (err) {
+      console.error(`[router] ${r.name} render failed:`, err);
+      main.innerHTML = `
+        <div class="empty-state">
+          <span class="emoji" aria-hidden="true">⚠</span>
+          <h3>Something broke on this page</h3>
+          <p class="dim">We logged the error. You can reload or go back.</p>
+          <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px;">
+            <button class="btn btn-primary" id="route-retry">Reload page</button>
+            <a href="#/" class="btn btn-outline">Go home</a>
+          </div>
+        </div>
+      `;
+      main.querySelector("#route-retry")?.addEventListener("click", () => {
+        window.location.reload();
+      });
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
