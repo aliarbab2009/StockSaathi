@@ -27,6 +27,7 @@ const STATIC = [
   "./js/coach/orchestrator.js",
   "./js/coach/historicalAnalog.js",
   "./js/coach/anthropic.js",
+  "./js/coach/persona.js",
   "./js/data/universe.js",
   "./js/data/prices.js",
   "./js/data/crashes.js",
