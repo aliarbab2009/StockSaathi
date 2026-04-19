@@ -56,8 +56,8 @@ function renderSend(body, state) {
         </div>
         <div class="flex-col gap-3" style="max-width: 520px;">
           <div>
-            <label class="label" for="send-handle">Recipient (@username or email)</label>
-            <input class="input" id="send-handle" placeholder="e.g. @priya or priya@example.com" autocomplete="off" />
+            <label class="label" for="send-handle">Recipient (@username)</label>
+            <input class="input" id="send-handle" placeholder="e.g. @priya or priya_s" autocomplete="off" />
             <div id="user-results" style="margin-top: 6px;"></div>
           </div>
           <div>
@@ -84,8 +84,8 @@ function renderSend(body, state) {
       <div class="card">
         <div class="card-head"><h3>Quick pick from your friends</h3></div>
         ${state.friends.length
-          ? `<div class="flex gap-2 wrap">${state.friends.map(f => `
-              <button class="btn btn-ghost btn-sm friend-pick" data-handle="${f.username}">@${f.username}</button>
+          ? `<div class="flex gap-2 wrap">${state.friends.filter(f => f.username).map(f => `
+              <button class="btn btn-ghost btn-sm friend-pick" data-handle="${escapeAttr(f.username)}">@${escapeHtml(f.username)}</button>
             `).join("")}</div>`
           : `<p class="muted" style="font-size: var(--text-sm);">You haven't added any friends yet. Switch to the Friends tab to add some.</p>`
         }
@@ -99,21 +99,30 @@ function renderSend(body, state) {
   const msg = body.querySelector("#send-msg");
   const results = body.querySelector("#user-results");
 
-  handleInput.addEventListener("input", async () => {
+  let searchTimer = null;
+  let searchSeq = 0;
+  handleInput.addEventListener("input", () => {
     const q = handleInput.value.trim();
+    if (searchTimer) clearTimeout(searchTimer);
     if (q.length < 2) { results.innerHTML = ""; return; }
-    let found = [];
-    try { found = await searchUsers(q.replace(/^@/, "")); } catch { found = []; }
-    if (!Array.isArray(found)) found = [];
-    results.innerHTML = found.map(u => `
-      <button class="btn btn-ghost btn-sm" data-pick="${u.username}" style="margin-right: 6px; margin-top: 4px;">@${u.username} · ${escapeHtml(u.displayName || u.username)}</button>
-    `).join("");
-    results.querySelectorAll("[data-pick]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        handleInput.value = "@" + btn.dataset.pick;
-        results.innerHTML = "";
+    // Debounce: 220ms after the last keystroke. Also track a sequence so a
+    // slow in-flight search for "an" can't overwrite the newer "ana" result.
+    const mySeq = ++searchSeq;
+    searchTimer = setTimeout(async () => {
+      let found = [];
+      try { found = await searchUsers(q.replace(/^@/, "")); } catch { found = []; }
+      if (mySeq !== searchSeq) return;   // stale response, discard
+      if (!Array.isArray(found)) found = [];
+      results.innerHTML = found.map(u => `
+        <button class="btn btn-ghost btn-sm" data-pick="${escapeAttr(u.username)}" style="margin-right: 6px; margin-top: 4px;">@${escapeHtml(u.username)} · ${escapeHtml(u.displayName || u.username)}</button>
+      `).join("");
+      results.querySelectorAll("[data-pick]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          handleInput.value = "@" + btn.dataset.pick;
+          results.innerHTML = "";
+        });
       });
-    });
+    }, 220);
   });
 
   body.querySelectorAll(".friend-pick").forEach(btn => {
@@ -269,14 +278,24 @@ function renderHistory(body, state) {
           <tbody>
             ${list.map(t => {
               const when = new Date(t.ts);
+              // Prefer display_name → username → code → "—". Covers every
+              // transfer shape: direct (has counterpartyName), code-pending
+              // (has code only), realtime-synced (has counterpartyHandle).
+              const who = t.counterpartyName
+                ? escapeHtml(t.counterpartyName)
+                : (t.counterpartyHandle
+                    ? `@${escapeHtml(t.counterpartyHandle)}`
+                    : (t.code
+                        ? `<span class="transfer-code" style="font-size: 12px; padding: 4px 10px;">${escapeHtml(t.code)}</span>`
+                        : "—"));
               return `
                 <tr>
                   <td class="dim text-xs">${when.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} ${when.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</td>
                   <td><span class="pill ${t.direction === "in" ? "pill-green" : "pill-red"}">${t.direction === "in" ? "RECEIVED" : "SENT"}</span></td>
-                  <td>${t.counterpartyName ? escapeHtml(t.counterpartyName) : (t.code ? `<span class="transfer-code" style="font-size: 12px; padding: 4px 10px;">${t.code}</span>` : "—")}</td>
+                  <td>${who}</td>
                   <td class="muted">${escapeHtml(t.note || "")}</td>
                   <td class="num font-bold ${t.direction === "in" ? "up" : "down"}">${t.direction === "in" ? "+" : "−"}${formatRupees(t.amountPaise)}</td>
-                  <td><span class="pill ${t.status === "completed" ? "pill-green" : "pill-yellow"}">${t.status}</span></td>
+                  <td><span class="pill ${t.status === "completed" ? "pill-green" : "pill-yellow"}">${escapeHtml(t.status)}</span></td>
                 </tr>
               `;
             }).join("")}
@@ -295,8 +314,8 @@ function renderFriendsList(body, state) {
         <h3 style="margin-bottom: var(--sp-3);">Add a friend</h3>
         <div class="flex gap-2 items-end wrap" style="max-width: 520px;">
           <div class="grow">
-            <label class="label" for="fr-handle">Their @username or email</label>
-            <input class="input" id="fr-handle" placeholder="@ananya or ananya@example.com" />
+            <label class="label" for="fr-handle">Their @username</label>
+            <input class="input" id="fr-handle" placeholder="@ananya" autocomplete="off" />
           </div>
           <button class="btn btn-primary" id="fr-add">Add</button>
         </div>
@@ -308,17 +327,20 @@ function renderFriendsList(body, state) {
           <h3>Your friends (${state.friends.length})</h3>
         </div>
         ${state.friends.length
-          ? `<div class="flex-col gap-2">${state.friends.map(f => `
+          ? `<div class="flex-col gap-2">${state.friends.map(f => {
+              const name = f.displayName || f.username || "Friend";
+              const initials = name.replace(/[^A-Za-z0-9]+/g, "").slice(0, 2).toUpperCase() || "??";
+              return `
               <div class="friend-row">
-                <div class="friend-avatar ${f.avatarColor || "green"}">${(f.displayName || f.username).slice(0, 2).toUpperCase()}</div>
+                <div class="friend-avatar ${escapeAttr(f.avatarColor || "green")}">${escapeHtml(initials)}</div>
                 <div class="grow">
-                  <div class="friend-name">${escapeHtml(f.displayName || f.username)}</div>
-                  <div class="friend-handle">@${f.username}</div>
+                  <div class="friend-name">${escapeHtml(name)}</div>
+                  <div class="friend-handle">${f.username ? "@" + escapeHtml(f.username) : "<span class=\"dim\">profile unavailable</span>"}</div>
                 </div>
-                <button class="btn btn-ghost btn-sm" data-send="${f.username}">Send ₹</button>
-                <button class="btn btn-ghost btn-sm" data-remove="${f.id}">Remove</button>
+                ${f.username ? `<button class="btn btn-ghost btn-sm" data-send="${escapeAttr(f.username)}">Send ₹</button>` : ""}
+                <button class="btn btn-ghost btn-sm" data-remove="${escapeAttr(f.id)}">Remove</button>
               </div>
-            `).join("")}</div>`
+            `;}).join("")}</div>`
           : `<div class="empty-state" style="padding: var(--sp-8);">
               <span class="emoji">👥</span>
               <h3>No friends yet</h3>
@@ -329,34 +351,55 @@ function renderFriendsList(body, state) {
     </div>
   `;
 
-  body.querySelector("#fr-add").addEventListener("click", async () => {
+  const addBtn = body.querySelector("#fr-add");
+  const addHandle = body.querySelector("#fr-handle");
+  async function doAddFriend() {
     const msg = body.querySelector("#fr-msg");
-    const handle = body.querySelector("#fr-handle").value.trim().replace(/^@/, "");
+    const handle = addHandle.value.trim().replace(/^@/, "");
     if (!handle) return;
+    addBtn.disabled = true;
+    addBtn.textContent = "Adding…";
     try {
       const res = await addFriend(handle);
       const who = res?.friend?.displayName || res?.friend?.username || handle;
       toast({ kind: "success", message: `Added ${who}` });
-      body.querySelector("#fr-handle").value = "";
+      addHandle.value = "";
       msg.innerHTML = "";
     } catch (e) {
       msg.innerHTML = `<div class="error-msg">${escapeHtml(e.message || "Failed.")}</div>`;
+    } finally {
+      addBtn.disabled = false;
+      addBtn.textContent = "Add";
     }
+  }
+  addBtn.addEventListener("click", doAddFriend);
+  addHandle.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); doAddFriend(); }
   });
 
   body.querySelectorAll("[data-remove]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      if (confirm("Remove this friend?")) removeFriend(btn.dataset.remove);
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this friend?")) return;
+      btn.disabled = true;
+      try {
+        await removeFriend(btn.dataset.remove);
+      } catch (e) {
+        toast({ kind: "error", message: e.message || "Remove failed." });
+        btn.disabled = false;
+      }
     });
   });
   body.querySelectorAll("[data-send]").forEach(btn => {
     btn.addEventListener("click", () => {
-      tab = "send";
-      setTimeout(() => {
+      const handle = btn.dataset.send;
+      // Switch to Send tab by clicking the existing tab button — reuses the
+      // renderFriends closure's render() without tricky event plumbing.
+      const sendTabBtn = document.querySelector('[data-tab="send"]');
+      sendTabBtn?.click();
+      queueMicrotask(() => {
         const el = document.querySelector("#send-handle");
-        if (el) el.value = "@" + btn.dataset.send;
-      }, 0);
-      location.hash = "#/friends";
+        if (el) { el.value = "@" + handle; el.focus(); }
+      });
     });
   });
 }
@@ -364,3 +407,4 @@ function renderFriendsList(body, state) {
 // utils
 function showErr(el, msg) { el.innerHTML = `<div class="error-msg">${escapeHtml(msg)}</div>`; }
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
+function escapeAttr(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

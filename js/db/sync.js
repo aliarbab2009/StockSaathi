@@ -50,17 +50,21 @@ export async function loadAllFromDb() {
     const uid = userData?.user?.id;
     if (!uid) return;
 
-    const [pf, holdings, txns, wl, friends, transfers, msgs] = await Promise.all([
+    // Friends and transfers go through SECURITY DEFINER RPCs so the
+    // counterparty's username + display name come back even though the new
+    // profiles RLS blocks anon cross-user reads. The Postgrest join approach
+    // used previously silently returned empty profile objects under RLS.
+    const [pf, holdings, txns, wl, friendsRpc, transfersRpc, msgs] = await Promise.all([
       client.from("portfolios").select("*").eq("user_id", uid).maybeSingle(),
       client.from("holdings").select("*").eq("user_id", uid),
       client.from("transactions").select("*").eq("user_id", uid).order("created_at", { ascending: false }).limit(200),
       client.from("watchlist").select("symbol").eq("user_id", uid),
-      client.from("friends")
-        .select("friend_id, profiles:friend_id (username, display_name, avatar_color)")
-        .eq("user_id", uid),
-      client.from("transfers").select("*").or(`sender_id.eq.${uid},recipient_id.eq.${uid}`).order("created_at", { ascending: false }).limit(100),
+      client.rpc("list_my_friends"),
+      client.rpc("list_my_transfers", { p_limit: 100 }),
       client.from("coach_messages").select("*").eq("user_id", uid).order("created_at", { ascending: false }).limit(50),
     ]);
+    const friends = { data: friendsRpc.data || [], error: friendsRpc.error };
+    const transfers = { data: transfersRpc.data || [], error: transfersRpc.error };
 
     const state = getState();
     const nextPortfolio = pf.data
@@ -87,17 +91,20 @@ export async function loadAllFromDb() {
 
     const nextFriends = (friends.data || []).map(f => ({
       id: f.friend_id,
-      username: f.profiles?.username,
-      displayName: f.profiles?.display_name,
-      avatarColor: f.profiles?.avatar_color,
-      addedAt: Date.now(),
+      username: f.username,
+      displayName: f.display_name,
+      avatarColor: f.avatar_color,
+      school: f.school,
+      addedAt: f.added_at ? new Date(f.added_at).getTime() : Date.now(),
     }));
 
     const nextTransfers = (transfers.data || []).map(tr => ({
       id: tr.id,
-      direction: tr.sender_id === uid ? "out" : "in",
-      counterpartyId: tr.sender_id === uid ? tr.recipient_id : tr.sender_id,
-      counterpartyName: null,  // enrich via a separate lookup if needed
+      direction: tr.direction,
+      counterpartyId: tr.counterparty_id,
+      counterpartyHandle: tr.counterparty_username,
+      counterpartyName: tr.counterparty_display_name || tr.counterparty_username || null,
+      counterpartyAvatarColor: tr.counterparty_avatar_color,
       amountPaise: Number(tr.amount_paise),
       note: tr.note,
       status: tr.status,
@@ -164,18 +171,26 @@ export async function dbAddCoachMessage(msg) {
 export async function dbAddFriend(friendUsername) {
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
-  const { data: u } = await client.auth.getUser();
-  if (!u?.user) throw new Error("Not logged in.");
-  // Resolve friend id
-  const { data: f, error: fe } = await client.from("profiles")
-    .select("id, username, display_name, avatar_color")
-    .eq("username", friendUsername.trim())
-    .maybeSingle();
-  if (fe || !f) throw new Error(`No StockSaathi user "@${friendUsername}".`);
-  if (f.id === u.user.id) throw new Error("You can't add yourself.");
-  const { error } = await client.from("friends").upsert({ user_id: u.user.id, friend_id: f.id });
-  if (error) throw new Error(error.message);
-  return { id: f.id, username: f.username, displayName: f.display_name, avatarColor: f.avatar_color };
+  // Single atomic RPC: resolves username → inserts friends row → returns
+  // the friend's public profile. Replaces the broken 2-step client flow
+  // that relied on anon SELECT from profiles.
+  const { data, error } = await client.rpc("add_friend_by_username",
+    { p_username: friendUsername.trim() });
+  if (error) {
+    const msg = String(error.message || "");
+    if (/recipient not found/i.test(msg)) throw new Error(`No StockSaathi user "@${friendUsername}".`);
+    if (/cannot add yourself/i.test(msg)) throw new Error("You can't add yourself.");
+    if (/not logged in/i.test(msg)) throw new Error("Not logged in.");
+    throw new Error(prettifyErr(msg));
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error(`No StockSaathi user "@${friendUsername}".`);
+  return {
+    id: row.friend_id,
+    username: row.username,
+    displayName: row.display_name,
+    avatarColor: row.avatar_color,
+  };
 }
 
 export async function dbRemoveFriend(friendId) {

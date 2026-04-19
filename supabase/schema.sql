@@ -445,6 +445,129 @@ $$;
 grant execute on function public.reset_my_portfolio() to authenticated;
 
 -- =============================================================================
+-- Friend + transfer-history RPCs (bypass the tightened profiles RLS so the
+-- Friends page can render other users' display names without opening profiles
+-- for bulk anon reads).
+-- =============================================================================
+
+-- Returns the caller's friend list enriched with public profile fields.
+-- Ordered by most-recently added so the UI mirrors Supabase's realtime feed.
+create or replace function public.list_my_friends()
+returns table (
+  friend_id uuid,
+  username text,
+  display_name text,
+  avatar_color text,
+  school text,
+  added_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then return; end if;
+  return query
+    select p.id, p.username, p.display_name, p.avatar_color, p.school, f.created_at
+    from public.friends f
+    join public.profiles p on p.id = f.friend_id
+    where f.user_id = v_user_id
+    order by f.created_at desc;
+end;
+$$;
+grant execute on function public.list_my_friends() to authenticated;
+
+-- Atomic "resolve username → insert friends row → return profile". Replaces
+-- the old two-step client flow that needed anon SELECT on profiles.
+create or replace function public.add_friend_by_username(p_username text)
+returns table (
+  friend_id uuid,
+  username text,
+  display_name text,
+  avatar_color text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id   uuid := auth.uid();
+  v_friend_id uuid;
+  v_clean     text := lower(trim(coalesce(p_username, '')));
+begin
+  if v_user_id is null then raise exception 'not logged in'; end if;
+  if length(v_clean) < 2 then raise exception 'username too short'; end if;
+
+  select id into v_friend_id from public.profiles
+    where lower(username) = v_clean
+    limit 1;
+  if v_friend_id is null then raise exception 'recipient not found'; end if;
+  if v_friend_id = v_user_id then raise exception 'cannot add yourself'; end if;
+
+  insert into public.friends (user_id, friend_id)
+    values (v_user_id, v_friend_id)
+    on conflict do nothing;
+
+  return query
+    select p.id, p.username, p.display_name, p.avatar_color
+    from public.profiles p where p.id = v_friend_id;
+end;
+$$;
+grant execute on function public.add_friend_by_username(text) to authenticated;
+
+-- Returns the caller's transfers with the counterparty's username + display
+-- name resolved server-side. Without this, history shows "—" for every row
+-- because anon clients can't read other users' profile rows.
+create or replace function public.list_my_transfers(p_limit int default 100)
+returns table (
+  id uuid,
+  direction text,
+  counterparty_id uuid,
+  counterparty_username text,
+  counterparty_display_name text,
+  counterparty_avatar_color text,
+  amount_paise bigint,
+  note text,
+  status text,
+  code text,
+  created_at timestamptz,
+  completed_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then return; end if;
+  return query
+    select
+      t.id,
+      case when t.sender_id = v_user_id then 'out' else 'in' end,
+      case when t.sender_id = v_user_id then t.recipient_id else t.sender_id end,
+      cp.username,
+      cp.display_name,
+      cp.avatar_color,
+      t.amount_paise,
+      t.note,
+      t.status,
+      case when t.sender_id = v_user_id then t.code else null end,
+      t.created_at,
+      t.completed_at
+    from public.transfers t
+    left join public.profiles cp on cp.id = case
+      when t.sender_id = v_user_id then t.recipient_id
+      else t.sender_id
+    end
+    where t.sender_id = v_user_id or t.recipient_id = v_user_id
+    order by t.created_at desc
+    limit greatest(1, least(coalesce(p_limit, 100), 500));
+end;
+$$;
+grant execute on function public.list_my_transfers(int) to authenticated;
+
+-- =============================================================================
 -- ATOMIC RPC: place_limit_order
 -- Reserves cash for BUY orders. SELL orders reserve the qty (validated at fill).
 -- =============================================================================

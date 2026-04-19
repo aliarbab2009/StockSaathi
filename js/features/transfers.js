@@ -45,20 +45,28 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
 
   const client = await sb();
   if (client) {
-    // Only apply the optimistic UI update AFTER the RPC succeeds. The RPC is
-    // atomic + idempotent, so this is the safe order: no rollback needed on
-    // failure, and a retry on transient network errors can't double-spend
-    // (dbSendTransfer passes an idempotencyKey).
     const amt = Math.round(amountPaise);
+    const cleanHandle = recipientHandle.replace(/^@/, "");
     let res;
     try {
       res = await dbSendTransfer({
-        recipientHandle: recipientHandle.replace(/^@/, ""),
+        recipientHandle: cleanHandle,
         amountPaise: amt, note,
       });
     } catch (e) {
       throw new Error(prettifyTransferError(e));
     }
+    // Resolve the recipient's display name so the history row doesn't show
+    // a raw @handle forever. Cheap SECURITY DEFINER RPC; no RLS issues.
+    let displayName = cleanHandle;
+    let friendId = null;
+    try {
+      const { data: prof } = await client.rpc("profile_by_username",
+        { p_username: cleanHandle });
+      const row = Array.isArray(prof) ? prof[0] : prof;
+      if (row) { displayName = row.display_name || cleanHandle; friendId = row.id; }
+    } catch {}
+
     setState(s => ({
       ...s,
       portfolio: { ...s.portfolio, cashPaise: s.portfolio.cashPaise - amt },
@@ -66,8 +74,9 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
         {
           id: res.transfer_id || genId(),
           direction: "out",
-          counterpartyHandle: recipientHandle,
-          counterpartyName: recipientHandle,
+          counterpartyId: friendId,
+          counterpartyHandle: cleanHandle,
+          counterpartyName: displayName,
           amountPaise: amt,
           ts: Date.now(),
           note,
@@ -76,7 +85,7 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
         ...s.transfers,
       ],
     }));
-    return { ok: true, recipient: { username: recipientHandle }, amountPaise: amt };
+    return { ok: true, recipient: { username: cleanHandle, displayName }, amountPaise: amt };
   }
 
   // Local fallback
