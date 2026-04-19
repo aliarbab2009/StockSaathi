@@ -21,8 +21,8 @@ import { getState } from "./state.js";
 
 const ROUTES = [
   { name: "home",          match: /^$|^\/$/,                              render: renderLanding, public: true },
-  { name: "login",         match: /^\/login\/?$/,                          render: renderLogin, public: true, noAuth: true },
-  { name: "register",      match: /^\/register\/?$/,                       render: renderRegister, public: true, noAuth: true },
+  { name: "login",         match: /^\/login\/?$/,                          render: renderLogin, public: true },
+  { name: "register",      match: /^\/register\/?$/,                       render: renderRegister, public: true },
   { name: "onboarding",    match: /^\/onboarding\/?$/,                     render: renderOnboarding, needsAuth: true },
   { name: "portfolio",     match: /^\/portfolio\/?$/,                      render: renderPortfolio, needsAuth: true, needsOnboarded: true },
   { name: "stocks",        match: /^\/stocks\/?$/,                         render: renderStocks, needsAuth: true, needsOnboarded: true },
@@ -76,7 +76,6 @@ export function mountRouter() {
 
     // Auth guards
     if (r.needsAuth && !user) { navigate("/login"); return; }
-    if (r.noAuth && user) { navigate("/portfolio"); return; }
     if (r.needsOnboarded && user && !state.user.onboarded) { navigate("/onboarding"); return; }
 
     main.innerHTML = "";
