@@ -1,0 +1,35 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Logged emails — may contain personal data
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Node (if someone adds it later)
+node_modules/
+npm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Build outputs
+dist/
+build/
+*.log
