@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "version": 2,
-  "cleanUrls": true,
-  "trailingSlash": false,
   "headers": [
     {
       "source": "/api/(.*)",
@@ -12,9 +9,5 @@
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type,X-StockSaathi-Relay" }
       ]
     }
-  ],
-  "rewrites": [
-    { "source": "/api/yahoo/chart/:symbol", "destination": "/api/yahoo/[...path].py" },
-    { "source": "/api/yahoo/:path*", "destination": "/api/yahoo/[...path].py" }
   ]
 }
