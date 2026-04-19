@@ -45,6 +45,17 @@ export async function coach(event) {
     holding: ctx.holding,
   });
 
+  // Pull through any custom event fields (crash replay uses delta/indexDrop/
+  // recoveryDays/crashTitle/heldBeat/days; intervention uses dropText; etc.).
+  // Only fields not already set by makeTick.
+  for (const k of Object.keys(event || {})) {
+    if (k === "type") continue;
+    if (tick[k] == null && event[k] != null) tick[k] = event[k];
+  }
+  if (typeof tick.heldBeat === "undefined" && typeof event.delta === "number") {
+    tick.heldBeat = event.delta > 0;
+  }
+
   // 1. Template pass (primary)
   let payload = resolveTemplate(templateKey, { tick, event }) ||
                 resolveTemplate(event.type, { tick, event }) ||

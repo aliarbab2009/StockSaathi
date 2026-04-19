@@ -246,12 +246,27 @@ export async function applyTrade({ symbol, side, qty, pricePaise, biasFlags = []
 
   const client = await sb();
   if (client) {
-    // DB path — atomic RPC call
-    await dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyKey, biasFlags });
-    // Optimistic local update (sync.js will reconcile on next load)
-    const txn = makeLocalTxn({ symbol, side, qty, pricePaise, valuePaise, biasFlags, idempotencyKey });
-    applyLocalTradeEffect(txn);
-    return txn;
+    // Only attempt DB path if there's a real Supabase session — otherwise the
+    // RPC raises 'not logged in' because auth.uid() is null.
+    let hasSession = false;
+    try {
+      const { data } = await client.auth.getSession();
+      hasSession = !!data?.session?.access_token;
+    } catch { hasSession = false; }
+
+    if (hasSession) {
+      try {
+        await dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyKey, biasFlags });
+        const txn = makeLocalTxn({ symbol, side, qty, pricePaise, valuePaise, biasFlags, idempotencyKey });
+        applyLocalTradeEffect(txn);
+        return txn;
+      } catch (e) {
+        // If the RPC itself complained about auth, fall through to local.
+        // Other errors (insufficient cash, etc.) should bubble up.
+        if (!/not logged in|jwt|auth|permission/i.test(String(e?.message || ""))) throw e;
+        console.warn("DB trade failed auth, using local path:", e?.message);
+      }
+    }
   }
 
   // Local fallback (same as before)
