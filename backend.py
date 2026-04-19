@@ -69,13 +69,10 @@ PORT = int(os.environ.get("PORT") or os.environ.get("STOCKSAATHI_PORT") or "7348
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_ORIGIN = os.environ.get("PUBLIC_ORIGIN", "").rstrip("/")
 
-# If a cloner has NO local email provider configured, we relay the email
-# through the hosted StockSaathi instance (stocksaathi.co.in) so the app
-# "just works" on `git clone` + `run.bat`. Set UPSTREAM_EMAIL_URL="" to disable.
-UPSTREAM_EMAIL_URL = os.environ.get(
-    "UPSTREAM_EMAIL_URL",
-    "https://stocksaathi.co.in/api/send-consent"
-).strip()
+# Outbound email relay is disabled by default. Only set UPSTREAM_EMAIL_URL
+# explicitly if you want a secondary instance to forward emails through the
+# hosted production server.
+UPSTREAM_EMAIL_URL = os.environ.get("UPSTREAM_EMAIL_URL", "").strip()
 
 # This backend considers itself "the hosted one" when IS_UPSTREAM=1 is set.
 # That stops it from relaying to itself (infinite loop) and enables rate limiting.
