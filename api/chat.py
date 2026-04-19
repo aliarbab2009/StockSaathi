@@ -1,8 +1,5 @@
-"""POST /api/chat  —  Vercel serverless Anthropic proxy.
-
-Forwards the body to Anthropic's /v1/messages using the server's
-ANTHROPIC_API_KEY env var. Lets users without their own key use the
-real LLM. Soft rate-limit per IP (60/hour).
+"""POST /api/chat  —  Vercel serverless LLM proxy.
+Groq-first (free + fast), with per-IP rate limiting.
 """
 
 import os
@@ -15,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 from collections import defaultdict, deque
 
 
-CHAT_RATE_PER_HOUR = int(os.environ.get("CHAT_RATE_PER_HOUR", "60"))
+CHAT_RATE_PER_HOUR = int(os.environ.get("CHAT_RATE_PER_HOUR", "120"))
 _rate_lock = threading.Lock()
 _chat_bucket = defaultdict(deque)
 
@@ -38,11 +35,11 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not key:
+        groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+        if not groq_key:
             self._json(501, {
                 "error": "no_server_key",
-                "detail": "Server has no ANTHROPIC_API_KEY configured. Add your own key in Settings."
+                "detail": "Set GROQ_API_KEY env var on Vercel (free at console.groq.com).",
             })
             return
 
@@ -53,10 +50,8 @@ class handler(BaseHTTPRequestHandler):
             while bucket and now - bucket[0] > 3600:
                 bucket.popleft()
             if len(bucket) >= CHAT_RATE_PER_HOUR:
-                self._json(429, {
-                    "error": "rate_limited",
-                    "detail": f"Max {CHAT_RATE_PER_HOUR} chat calls/hour per IP.",
-                })
+                self._json(429, {"error": "rate_limited",
+                                 "detail": f"Max {CHAT_RATE_PER_HOUR} chat calls/hour per IP."})
                 return
             bucket.append(now)
 
@@ -68,12 +63,11 @@ class handler(BaseHTTPRequestHandler):
             return
 
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.groq.com/openai/v1/chat/completions",
             data=raw,
             headers={
                 "Content-Type": "application/json",
-                "x-api-key": key,
-                "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {groq_key}",
                 "User-Agent": "StockSaathi-Vercel/1.0",
             },
             method="POST",
@@ -88,10 +82,8 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         except urllib.error.HTTPError as e:
-            try:
-                err_body = e.read()
-            except Exception:
-                err_body = b'{"error":{"message":"upstream error"}}'
+            try: err_body = e.read()
+            except Exception: err_body = b'{"error":{"message":"upstream error"}}'
             self.send_response(e.code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(err_body)))
@@ -99,4 +91,4 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(err_body)
         except Exception as e:
-            self._json(502, {"error": "anthropic_unreachable", "detail": str(e)})
+            self._json(502, {"error": "groq_unreachable", "detail": str(e)})

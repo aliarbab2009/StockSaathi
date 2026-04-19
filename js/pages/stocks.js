@@ -4,7 +4,7 @@
 
 import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS } from "../data/universe.js";
 import { getTodayChange, getCloses } from "../data/prices.js";
-import { getQuoteBatch, getDataSource } from "../data/marketData.js";
+import { getQuoteBatch, getDataSource, subscribeToQuotes } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
@@ -14,23 +14,19 @@ let quoteCache = {};
 
 export function renderStocks(main) {
   let cancelled = false;
+  let pollUnsub = null;
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
-  const onLeave = () => { cancelled = true; unsub?.(); };
+  const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Prefetch live quotes for top 30 in background
-  setTimeout(prefetchQuotes, 100);
-
-  async function prefetchQuotes() {
-    try {
-      const syms = STOCKS.slice(0, 30).map(s => s.symbol);
-      const quotes = await getQuoteBatch(syms);
-      if (cancelled) return;       // user navigated away — do NOT render
-      quoteCache = quotes;
-      render();
-    } catch {}
-  }
+  // Kick off live polling for top 40 symbols — updates every 20s
+  const topSyms = STOCKS.slice(0, 40).map(s => s.symbol);
+  pollUnsub = subscribeToQuotes(topSyms, (quotes) => {
+    if (cancelled) return;
+    quoteCache = { ...quoteCache, ...quotes };
+    render();
+  }, 20_000);
 
   function render() {
     const state = getState();

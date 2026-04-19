@@ -72,7 +72,9 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   // Never cache external APIs — always network
   const externalHosts = ["anthropic.com", "api.anthropic.com", "finnhub.io",
+    "api.groq.com", "api.coingecko.com",
     "api.mfapi.in", "query1.finance.yahoo.com", "query2.finance.yahoo.com",
+    "api.rss2json.com", "corsproxy.io", "allorigins.win", "codetabs.com",
     "cdn.emailjs.com", "api.emailjs.com",
     "fonts.googleapis.com", "fonts.gstatic.com"];
   if (externalHosts.some(h => url.hostname.includes(h))) return;

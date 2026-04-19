@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { getInstrument } from "../data/universe.js";
-import { getQuote, getHistory } from "../data/marketData.js";
+import { getQuote, getHistory, subscribeToQuotes } from "../data/marketData.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange } from "../data/prices.js";
 import { candleChart, lineChart } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
@@ -47,17 +47,12 @@ export function renderStockDetail(main, params) {
 
   render(inst, symbol);
   const unsub = subscribe(() => { if (!myToken.cancelled) render(inst, symbol); });
-  const onLeave = () => { myToken.cancelled = true; unsub?.(); };
+  const pollUnsub = subscribeToQuotes([symbol], (quotes) => {
+    if (myToken.cancelled) return;
+    if (quotes[symbol]) { liveQuote = quotes[symbol]; render(inst, symbol); }
+  }, 12_000);  // 12s refresh on the currently-open stock
+  const onLeave = () => { myToken.cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
-
-  // Fetch live quote
-  (async () => {
-    try {
-      const q = await getQuote(symbol);
-      if (myToken.cancelled) return;
-      if (q) { liveQuote = q; render(inst, symbol); }
-    } catch (e) { console.warn("quote:", e); }
-  })();
   // Fetch history
   (async () => {
     try {

@@ -58,12 +58,13 @@ export function renderSettings(main) {
         <div class="card" style="margin-top: var(--sp-4);">
           <h3 style="margin-bottom: var(--sp-3);">Coach LLM (optional)</h3>
           <p class="muted text-sm" style="margin-bottom: var(--sp-3);">
-            By default the coach uses deterministic templates — which works offline and never hallucinates. If you paste an Anthropic API key, coach responses are augmented by Claude Sonnet. Keys are stored locally and never leave your browser except to call Anthropic directly.
+            The Saathi coach is powered by <strong>Groq's Llama 3.3 70B</strong> by default (via this site's backend — free, fast, no setup). If you want to use your own key for unlimited calls, sign up <a href="https://console.groq.com/keys" target="_blank" rel="noopener">here</a> (30 seconds, no card). Keys stay in your browser and only call Groq directly.
           </p>
           <div class="field">
-            <label class="label" for="anthro-key">Anthropic API key</label>
-            <input class="input" id="anthro-key" type="password" placeholder="sk-ant-..." value="${escapeAttr(state.settings.anthropicKey || "")}" />
+            <label class="label" for="anthro-key">Your Groq API key (optional)</label>
+            <input class="input" id="anthro-key" type="password" placeholder="gsk_..." value="${escapeAttr(state.settings.anthropicKey || "")}" />
           </div>
+          <div class="muted text-xs" style="margin-top: var(--sp-2);">Legacy: an Anthropic key (<code>sk-ant-...</code>) also works in the same field if you have one.</div>
         </div>
 
         <div class="card" style="margin-top: var(--sp-4);">

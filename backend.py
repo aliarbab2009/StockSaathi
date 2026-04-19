@@ -317,6 +317,7 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
                     "smtp": bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS")),
                     "resend": bool(os.environ.get("RESEND_API_KEY")),
                     "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                    "groq": bool(os.environ.get("GROQ_API_KEY")),
                 },
             })
             return
@@ -327,15 +328,16 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
-    def _proxy_anthropic(self):
-        """Proxy POST /api/chat → Anthropic's /v1/messages so users without
-        their own API key can still use the real LLM. Uses ANTHROPIC_API_KEY
-        env var. Soft rate limit per IP."""
-        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not key:
+    def _proxy_llm(self):
+        """Proxy POST /api/chat → Groq (OpenAI-compatible). Free + fast.
+        Anthropic path available as fallback if GROQ_API_KEY not set."""
+        groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+        anth_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not groq_key and not anth_key:
             self._json(501, {"error": "no_server_key",
-                             "detail": "Server has no ANTHROPIC_API_KEY configured. Add your own key in Settings."})
+                             "detail": "Set GROQ_API_KEY (free at console.groq.com) or ANTHROPIC_API_KEY on the server."})
             return
+
         # Rate limit
         ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
         now = time.time()
@@ -352,22 +354,28 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length) if length else b"{}"
-            # Just forward the body as-is
         except Exception as e:
             self._json(400, {"error": "bad_body", "detail": str(e)})
             return
 
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=raw,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": key,
-                "anthropic-version": "2023-06-01",
-                "User-Agent": "StockSaathi-Backend/1.0",
-            },
-            method="POST",
-        )
+        # Prefer Groq (much faster, free tier)
+        if groq_key:
+            req = urllib.request.Request(
+                "https://api.groq.com/openai/v1/chat/completions",
+                data=raw,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {groq_key}",
+                    "User-Agent": "StockSaathi-Backend/1.0",
+                },
+                method="POST",
+            )
+        else:
+            # Anthropic fallback (would need schema translation — keep simple: just 501 if no Groq)
+            self._json(501, {"error": "anthropic_path_unavailable",
+                             "detail": "Backend requires GROQ_API_KEY for LLM proxy. Anthropic fallback not wired."})
+            return
+
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 body = r.read()
@@ -387,7 +395,7 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(err_body)
         except Exception as e:
-            self._json(502, {"error": "anthropic_unreachable", "detail": str(e)})
+            self._json(502, {"error": "llm_unreachable", "detail": str(e)})
 
     def _proxy_yahoo_chart(self):
         # Extract symbol + query string from /api/yahoo/chart/<symbol>?...
@@ -417,7 +425,7 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/chat":
-            self._proxy_anthropic()
+            self._proxy_llm()
             return
         if self.path not in ("/api/send-consent", "/api/send-email"):
             self._json(404, {"ok": False, "error": "not_found"})

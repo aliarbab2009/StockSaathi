@@ -75,6 +75,104 @@ export const STOCKS = [
   { symbol: "ADANIENT",   name: "Adani Enterprises",         sector: "Conglomerate",  marketCap: "2.9L Cr",  price: 252000, pe: 92.3, pb: 9.1, divYield: 0.05, beta: 1.92, risk: "high", logo: "ADE" },
   { symbol: "ADANIPORTS", name: "Adani Ports & SEZ",         sector: "Infrastructure",marketCap: "2.5L Cr",  price: 116000, pe: 31.2, pb: 4.9, divYield: 0.45, beta: 1.52, risk: "high", logo: "ADP" },
   { symbol: "IRCTC",      name: "IRCTC",                     sector: "Services",      marketCap: "0.6L Cr",  price:  72500, pe: 51.7, pb: 14.3, divYield: 0.95, beta: 0.89, risk: "med",  logo: "IRC" },
+
+  // Additional NIFTY 200 names
+  { symbol: "HDFCAMC",    name: "HDFC Asset Management",     sector: "NBFC",          marketCap: "0.8L Cr",  price: 380000, pe: 32.8, pb: 8.5, divYield: 2.20, beta: 0.88, risk: "low",  logo: "HAM" },
+  { symbol: "SBICARD",    name: "SBI Cards & Payment",       sector: "NBFC",          marketCap: "0.7L Cr",  price:  68500, pe: 25.1, pb: 4.3, divYield: 0.35, beta: 1.23, risk: "med",  logo: "SBC" },
+  { symbol: "CHOLAFIN",   name: "Cholamandalam Finance",     sector: "NBFC",          marketCap: "1.0L Cr",  price: 130000, pe: 28.5, pb: 4.4, divYield: 0.15, beta: 1.32, risk: "med",  logo: "CHO" },
+  { symbol: "BAJAJFINSV", name: "Bajaj Finserv",             sector: "NBFC",          marketCap: "2.5L Cr",  price: 156000, pe: 35.2, pb: 3.8, divYield: 0.05, beta: 1.28, risk: "med",  logo: "BJV" },
+  { symbol: "INDUSINDBK", name: "IndusInd Bank",             sector: "Banking",       marketCap: "1.0L Cr",  price: 130000, pe: 11.5, pb: 1.4, divYield: 1.20, beta: 1.42, risk: "high", logo: "IIB" },
+  { symbol: "IDFCFIRSTB", name: "IDFC First Bank",           sector: "Banking",       marketCap: "0.5L Cr",  price:   6800, pe: 18.5, pb: 1.5, divYield: 0.00, beta: 1.38, risk: "high", logo: "IDF" },
+  { symbol: "BANDHANBNK", name: "Bandhan Bank",              sector: "Banking",       marketCap: "0.3L Cr",  price:  18500, pe: 8.5, pb: 1.1, divYield: 0.85, beta: 1.42, risk: "high", logo: "BDN" },
+  { symbol: "FEDERALBNK", name: "Federal Bank",              sector: "Banking",       marketCap: "0.5L Cr",  price:  20500, pe: 8.8, pb: 1.1, divYield: 1.40, beta: 1.18, risk: "med",  logo: "FED" },
+  { symbol: "PNB",        name: "Punjab National Bank",      sector: "Banking",       marketCap: "1.2L Cr",  price:  10200, pe: 8.2, pb: 0.8, divYield: 1.50, beta: 1.35, risk: "high", logo: "PNB" },
+  { symbol: "BANKBARODA", name: "Bank of Baroda",            sector: "Banking",       marketCap: "1.4L Cr",  price:  27500, pe: 7.4, pb: 0.9, divYield: 2.75, beta: 1.28, risk: "med",  logo: "BOB" },
+  { symbol: "CANBK",      name: "Canara Bank",               sector: "Banking",       marketCap: "1.0L Cr",  price:  11200, pe: 6.2, pb: 0.9, divYield: 3.10, beta: 1.30, risk: "med",  logo: "CAN" },
+
+  { symbol: "GODREJCP",   name: "Godrej Consumer Products",  sector: "FMCG",          marketCap: "1.3L Cr",  price: 125000, pe: 62.1, pb: 8.8, divYield: 0.80, beta: 0.62, risk: "low",  logo: "GCP" },
+  { symbol: "MARICO",     name: "Marico",                    sector: "FMCG",          marketCap: "0.9L Cr",  price:  69500, pe: 50.8, pb: 18.5, divYield: 1.35, beta: 0.55, risk: "low",  logo: "MRC" },
+  { symbol: "COLPAL",     name: "Colgate-Palmolive India",   sector: "FMCG",          marketCap: "0.9L Cr",  price: 330000, pe: 50.2, pb: 45.3, divYield: 2.60, beta: 0.58, risk: "low",  logo: "CPL" },
+  { symbol: "PGHH",       name: "Procter & Gamble Hygiene",  sector: "FMCG",          marketCap: "0.6L Cr",  price:1850000, pe: 80.2, pb: 72.0, divYield: 2.20, beta: 0.50, risk: "low",  logo: "PGH" },
+  { symbol: "UBL",        name: "United Breweries",          sector: "FMCG",          marketCap: "0.5L Cr",  price: 200000, pe: 108, pb: 11.8, divYield: 0.30, beta: 0.72, risk: "med",  logo: "UBL" },
+
+  { symbol: "TVSMOTOR",   name: "TVS Motor",                 sector: "Auto",          marketCap: "1.3L Cr",  price: 280000, pe: 48.5, pb: 12.2, divYield: 0.35, beta: 1.12, risk: "med",  logo: "TVS" },
+  { symbol: "HEROMOTOCO", name: "Hero MotoCorp",             sector: "Auto",          marketCap: "1.1L Cr",  price: 556000, pe: 20.5, pb: 4.6, divYield: 2.15, beta: 0.88, risk: "med",  logo: "HRO" },
+  { symbol: "ASHOKLEY",   name: "Ashok Leyland",             sector: "Auto",          marketCap: "0.6L Cr",  price:  21000, pe: 24.1, pb: 4.5, divYield: 1.25, beta: 1.30, risk: "med",  logo: "ASH" },
+  { symbol: "BOSCHLTD",   name: "Bosch",                     sector: "Auto",          marketCap: "1.0L Cr",  price:3150000, pe: 42.5, pb: 6.8, divYield: 0.75, beta: 0.85, risk: "med",  logo: "BSH" },
+
+  { symbol: "AUROPHARMA", name: "Aurobindo Pharma",          sector: "Pharma",        marketCap: "0.8L Cr",  price: 135000, pe: 18.5, pb: 2.5, divYield: 0.35, beta: 0.82, risk: "med",  logo: "AUR" },
+  { symbol: "LUPIN",      name: "Lupin",                     sector: "Pharma",        marketCap: "0.9L Cr",  price: 200000, pe: 38.2, pb: 4.1, divYield: 0.45, beta: 0.74, risk: "med",  logo: "LPN" },
+  { symbol: "BIOCON",     name: "Biocon",                    sector: "Pharma",        marketCap: "0.4L Cr",  price:  35500, pe: 65.5, pb: 2.1, divYield: 0.60, beta: 0.88, risk: "med",  logo: "BIO" },
+  { symbol: "TORNTPHARM", name: "Torrent Pharma",            sector: "Pharma",        marketCap: "1.0L Cr",  price: 295000, pe: 65.1, pb: 14.5, divYield: 0.95, beta: 0.65, risk: "low",  logo: "TRP" },
+  { symbol: "ALKEM",      name: "Alkem Laboratories",        sector: "Pharma",        marketCap: "0.6L Cr",  price: 510000, pe: 35.1, pb: 5.2, divYield: 0.85, beta: 0.60, risk: "low",  logo: "ALK" },
+
+  { symbol: "SHREECEM",   name: "Shree Cement",              sector: "Cement",        marketCap: "1.0L Cr",  price:2750000, pe: 50.2, pb: 4.2, divYield: 0.35, beta: 0.92, risk: "med",  logo: "SHC" },
+  { symbol: "AMBUJACEM",  name: "Ambuja Cements",            sector: "Cement",        marketCap: "1.4L Cr",  price:  55500, pe: 52.8, pb: 4.1, divYield: 0.45, beta: 1.05, risk: "med",  logo: "AMB" },
+  { symbol: "ACC",        name: "ACC",                       sector: "Cement",        marketCap: "0.4L Cr",  price: 215000, pe: 32.1, pb: 3.2, divYield: 0.95, beta: 1.08, risk: "med",  logo: "ACC" },
+
+  { symbol: "DLF",        name: "DLF",                       sector: "Real Estate",   marketCap: "2.0L Cr",  price:  80000, pe: 65.2, pb: 4.1, divYield: 0.65, beta: 1.28, risk: "med",  logo: "DLF" },
+  { symbol: "GODREJPROP", name: "Godrej Properties",         sector: "Real Estate",   marketCap: "0.7L Cr",  price: 245000, pe: 99.5, pb: 5.2, divYield: 0.00, beta: 1.22, risk: "high", logo: "GRP" },
+  { symbol: "LODHA",      name: "Macrotech / Lodha",         sector: "Real Estate",   marketCap: "1.3L Cr",  price: 130000, pe: 52.1, pb: 5.5, divYield: 0.15, beta: 1.30, risk: "high", logo: "LDA" },
+  { symbol: "OBEROIRLTY", name: "Oberoi Realty",             sector: "Real Estate",   marketCap: "0.7L Cr",  price: 180000, pe: 35.2, pb: 4.1, divYield: 0.15, beta: 1.15, risk: "med",  logo: "OBR" },
+
+  { symbol: "GAIL",       name: "GAIL (India)",              sector: "Energy",        marketCap: "1.3L Cr",  price:  20500, pe: 12.8, pb: 1.5, divYield: 3.50, beta: 0.95, risk: "med",  logo: "GAL" },
+  { symbol: "IOC",        name: "Indian Oil Corporation",    sector: "Energy",        marketCap: "1.9L Cr",  price:  13500, pe: 10.2, pb: 1.0, divYield: 6.20, beta: 1.10, risk: "med",  logo: "IOC" },
+  { symbol: "BPCL",       name: "Bharat Petroleum",          sector: "Energy",        marketCap: "1.5L Cr",  price:  34500, pe: 8.5, pb: 1.8, divYield: 3.85, beta: 1.12, risk: "med",  logo: "BPC" },
+  { symbol: "HINDPETRO",  name: "Hindustan Petroleum",       sector: "Energy",        marketCap: "0.8L Cr",  price:  38500, pe: 6.2, pb: 1.6, divYield: 5.10, beta: 1.20, risk: "med",  logo: "HPC" },
+  { symbol: "TATAPOWER",  name: "Tata Power",                sector: "Power",         marketCap: "1.4L Cr",  price:  42500, pe: 45.2, pb: 3.8, divYield: 0.45, beta: 1.18, risk: "med",  logo: "TTP" },
+  { symbol: "ADANIGREEN", name: "Adani Green Energy",        sector: "Power",         marketCap: "2.3L Cr",  price: 150000, pe: 225,  pb: 25.0, divYield: 0.00, beta: 1.85, risk: "high", logo: "AGE" },
+  { symbol: "ADANIPOWER", name: "Adani Power",               sector: "Power",         marketCap: "2.2L Cr",  price:  57500, pe: 18.5, pb: 4.2, divYield: 0.00, beta: 1.65, risk: "high", logo: "APW" },
+
+  { symbol: "APOLLOHOSP", name: "Apollo Hospitals",          sector: "Healthcare",    marketCap: "1.0L Cr",  price: 720000, pe: 95.2, pb: 12.8, divYield: 0.20, beta: 0.72, risk: "med",  logo: "APH" },
+  { symbol: "MAXHEALTH",  name: "Max Healthcare",            sector: "Healthcare",    marketCap: "1.1L Cr",  price: 115000, pe: 100, pb: 9.5, divYield: 0.00, beta: 0.78, risk: "med",  logo: "MXH" },
+  { symbol: "FORTIS",     name: "Fortis Healthcare",         sector: "Healthcare",    marketCap: "0.5L Cr",  price:  68500, pe: 70.1, pb: 6.2, divYield: 0.25, beta: 0.82, risk: "med",  logo: "FRT" },
+
+  { symbol: "ICICIPRULI", name: "ICICI Prudential Life",     sector: "Insurance",     marketCap: "1.0L Cr",  price:  72000, pe: 82.8, pb: 7.2, divYield: 0.25, beta: 0.95, risk: "med",  logo: "IPL" },
+  { symbol: "LICI",       name: "LIC of India",              sector: "Insurance",     marketCap: "7.0L Cr",  price: 112000, pe: 15.5, pb: 6.5, divYield: 0.90, beta: 1.10, risk: "med",  logo: "LIC" },
+
+  { symbol: "JINDALSTEL", name: "Jindal Steel & Power",      sector: "Metals",        marketCap: "0.9L Cr",  price:  88500, pe: 20.2, pb: 1.9, divYield: 0.25, beta: 1.45, risk: "high", logo: "JSP" },
+  { symbol: "SAIL",       name: "Steel Authority of India",  sector: "Metals",        marketCap: "0.5L Cr",  price:  11500, pe: 18.5, pb: 0.9, divYield: 1.80, beta: 1.40, risk: "high", logo: "SAL" },
+  { symbol: "VEDL",       name: "Vedanta",                   sector: "Metals",        marketCap: "1.8L Cr",  price:  48500, pe: 28.2, pb: 3.2, divYield: 9.50, beta: 1.52, risk: "high", logo: "VED" },
+  { symbol: "NMDC",       name: "NMDC",                      sector: "Metals",        marketCap: "0.7L Cr",  price:  24500, pe: 10.2, pb: 2.5, divYield: 3.20, beta: 1.22, risk: "med",  logo: "NMD" },
+
+  { symbol: "HAVELLS",    name: "Havells India",             sector: "Consumer Elec", marketCap: "1.1L Cr",  price: 180000, pe: 75.2, pb: 13.5, divYield: 0.55, beta: 0.88, risk: "med",  logo: "HVL" },
+  { symbol: "VOLTAS",     name: "Voltas",                    sector: "Consumer Elec", marketCap: "0.6L Cr",  price: 180000, pe: 92.5, pb: 7.5, divYield: 0.25, beta: 1.05, risk: "med",  logo: "VLT" },
+  { symbol: "WHIRLPOOL",  name: "Whirlpool of India",        sector: "Consumer Elec", marketCap: "0.2L Cr",  price: 170000, pe: 80.5, pb: 5.8, divYield: 0.30, beta: 0.92, risk: "med",  logo: "WPL" },
+
+  { symbol: "PIDILITIND", name: "Pidilite Industries",       sector: "Chemicals",     marketCap: "1.6L Cr",  price: 310000, pe: 82.5, pb: 19.2, divYield: 0.70, beta: 0.55, risk: "low",  logo: "PID" },
+  { symbol: "SRF",        name: "SRF",                       sector: "Chemicals",     marketCap: "0.7L Cr",  price: 245000, pe: 62.5, pb: 5.5, divYield: 0.30, beta: 0.85, risk: "med",  logo: "SRF" },
+  { symbol: "UPL",        name: "UPL",                       sector: "Chemicals",     marketCap: "0.4L Cr",  price:  55000, pe: 92.5, pb: 2.2, divYield: 1.82, beta: 1.28, risk: "high", logo: "UPL" },
+
+  { symbol: "TATACONSUM", name: "Tata Consumer Products",    sector: "FMCG",          marketCap: "1.0L Cr",  price: 108000, pe: 85.8, pb: 5.1, divYield: 0.80, beta: 0.75, risk: "low",  logo: "TCP" },
+  { symbol: "MCDOWELL-N", name: "United Spirits",            sector: "FMCG",          marketCap: "1.0L Cr",  price: 135000, pe: 65.2, pb: 10.2, divYield: 0.25, beta: 0.92, risk: "med",  logo: "USP" },
+  { symbol: "VBL",        name: "Varun Beverages",           sector: "FMCG",          marketCap: "2.0L Cr",  price:  62000, pe: 62.5, pb: 14.5, divYield: 0.10, beta: 1.10, risk: "med",  logo: "VBL" },
+
+  { symbol: "PERSISTENT", name: "Persistent Systems",        sector: "IT Services",   marketCap: "0.9L Cr",  price: 580000, pe: 55.2, pb: 14.2, divYield: 0.65, beta: 0.92, risk: "med",  logo: "PER" },
+  { symbol: "MPHASIS",    name: "Mphasis",                   sector: "IT Services",   marketCap: "0.6L Cr",  price: 320000, pe: 30.2, pb: 5.4, divYield: 1.85, beta: 0.90, risk: "low",  logo: "MPH" },
+  { symbol: "COFORGE",    name: "Coforge",                   sector: "IT Services",   marketCap: "0.6L Cr",  price: 825000, pe: 50.2, pb: 11.8, divYield: 0.95, beta: 0.95, risk: "med",  logo: "COF" },
+
+  { symbol: "IDEA",       name: "Vodafone Idea",             sector: "Telecom",       marketCap: "0.7L Cr",  price:    900, pe: null, pb: -1.2, divYield: 0.00, beta: 1.72, risk: "high", logo: "VOD" },
+  { symbol: "INDIGO",     name: "InterGlobe Aviation",       sector: "Aviation",      marketCap: "1.7L Cr",  price: 430000, pe: 22.5, pb: 18.5, divYield: 0.00, beta: 1.25, risk: "high", logo: "IND" },
+
+  { symbol: "IRFC",       name: "Indian Railway Finance",    sector: "NBFC",          marketCap: "1.8L Cr",  price:  13800, pe: 25.5, pb: 3.2, divYield: 1.10, beta: 1.35, risk: "med",  logo: "IRF" },
+  { symbol: "RECLTD",     name: "REC Limited",               sector: "NBFC",          marketCap: "1.3L Cr",  price:  48500, pe: 8.5, pb: 1.8, divYield: 3.15, beta: 1.30, risk: "med",  logo: "REC" },
+  { symbol: "PFC",        name: "Power Finance Corp",        sector: "NBFC",          marketCap: "1.5L Cr",  price:  44500, pe: 7.2, pb: 1.5, divYield: 3.20, beta: 1.28, risk: "med",  logo: "PFC" },
+
+  { symbol: "MOTHERSON",  name: "Samvardhana Motherson",     sector: "Auto",          marketCap: "1.4L Cr",  price:  20000, pe: 35.2, pb: 3.8, divYield: 0.65, beta: 1.32, risk: "med",  logo: "MTH" },
+  { symbol: "BHARATFORG", name: "Bharat Forge",              sector: "Auto",          marketCap: "0.6L Cr",  price: 125000, pe: 65.2, pb: 5.5, divYield: 0.65, beta: 1.28, risk: "high", logo: "BHF" },
+
+  { symbol: "BERGEPAINT", name: "Berger Paints",             sector: "Consumer",      marketCap: "0.7L Cr",  price:  58000, pe: 62.5, pb: 14.2, divYield: 0.65, beta: 0.85, risk: "low",  logo: "BRG" },
+  { symbol: "PAGEIND",    name: "Page Industries",           sector: "Consumer",      marketCap: "0.4L Cr",  price:4350000, pe: 75.2, pb: 28.5, divYield: 0.55, beta: 0.85, risk: "med",  logo: "PAG" },
+  { symbol: "TRENT",      name: "Trent",                     sector: "Retail",        marketCap: "2.5L Cr",  price: 700000, pe: 155, pb: 40.2, divYield: 0.05, beta: 1.00, risk: "high", logo: "TRN" },
+
+  { symbol: "JUBLFOOD",   name: "Jubilant FoodWorks",        sector: "Food",          marketCap: "0.4L Cr",  price:  62000, pe: 105, pb: 14.5, divYield: 0.40, beta: 1.02, risk: "high", logo: "JUB" },
+  { symbol: "IEX",        name: "Indian Energy Exchange",    sector: "Exchange",      marketCap: "0.2L Cr",  price:  18500, pe: 48.2, pb: 13.5, divYield: 0.85, beta: 1.08, risk: "med",  logo: "IEX" },
+
+  { symbol: "DIXON",      name: "Dixon Technologies",        sector: "Consumer Elec", marketCap: "0.8L Cr",  price:1350000, pe: 152, pb: 28.5, divYield: 0.05, beta: 1.25, risk: "high", logo: "DXN" },
+  { symbol: "POLYCAB",    name: "Polycab India",             sector: "Consumer Elec", marketCap: "0.9L Cr",  price: 615000, pe: 55.2, pb: 10.8, divYield: 0.55, beta: 0.98, risk: "med",  logo: "PLY" },
+
+  { symbol: "TATACOMM",   name: "Tata Communications",       sector: "Telecom",       marketCap: "0.5L Cr",  price: 180000, pe: 92.5, pb: 42.5, divYield: 1.15, beta: 0.92, risk: "med",  logo: "TCO" },
+  { symbol: "GMRAIRPORT", name: "GMR Airports",              sector: "Infrastructure",marketCap: "0.9L Cr",  price:   8500, pe: null, pb: -6.5, divYield: 0.00, beta: 1.35, risk: "high", logo: "GMR" },
 ];
 
 export const MUTUAL_FUNDS = [
