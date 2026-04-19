@@ -77,23 +77,33 @@ export async function registerAccount({ username, email, password, displayName }
   const client = await sb();
   if (client) {
     // --- Pre-checks: fail fast before creating an auth.users row -----------
-    // 1. Username uniqueness in profiles (email uniqueness is enforced by
-    //    auth.users automatically).
+    // Use the SECURITY DEFINER RPC — under the new locked-down RLS, anon
+    // clients can't SELECT from profiles directly, so the old .ilike() call
+    // always returned null and never caught duplicate usernames.
     try {
-      const { data: dup } = await client.from("profiles")
-        .select("id").ilike("username", usernameN).limit(1).maybeSingle();
-      if (dup) throw new Error("This username is already taken. Try another.");
+      const { data: match } = await client.rpc("profile_by_username",
+        { p_username: usernameN });
+      if (Array.isArray(match) && match.length > 0) {
+        throw new Error("This username is already taken. Try another.");
+      }
     } catch (e) {
-      // Only surface the username error — not the table-permission error if
-      // RLS blocks anonymous reads.
       if (/already taken/i.test(e.message)) throw e;
+      // Any other error (RPC not yet deployed, network glitch) falls through
+      // to Supabase signUp; the server-side handle_new_user trigger auto-
+      // appends a number to clashing usernames so the account still creates.
     }
 
     const avatar_color = pickAvatarColor(usernameN);
+    // emailRedirectTo: when the user clicks the link in the confirmation
+    // email, Supabase redirects here. The hash includes the access token;
+    // Supabase-js's detectSessionInUrl picks it up and signs the user in.
+    const redirectBase = (typeof location !== "undefined" && location.origin)
+      ? location.origin : "https://stocksaathi.co.in";
     const { data, error } = await client.auth.signUp({
       email: emailN,
       password,
       options: {
+        emailRedirectTo: `${redirectBase}/#/register?confirmed=1`,
         data: { username: usernameN, display_name: displayN, avatar_color },
       },
     });
@@ -133,17 +143,23 @@ export async function verifySignupOtp({ email, code }) {
   if (!client) throw new Error("Backend not configured.");
   const emailN = String(email || "").trim().toLowerCase();
   const cleanCode = String(code).trim().replace(/\s+/g, "");
-  if (!/^\d{4,10}$/.test(cleanCode)) throw new Error("Code must be 4-10 digits.");
-  // Supabase accepts both 'signup' and 'email' OTP types; email is the newer one
-  let { data, error } = await client.auth.verifyOtp({
-    email: emailN, token: cleanCode, type: "signup",
-  });
-  if (error) {
-    const retry = await client.auth.verifyOtp({ email: emailN, token: cleanCode, type: "email" });
-    if (retry.error) throw new Error(prettifySbError(error.message || retry.error.message));
-    data = retry.data;
+  // Supabase tokens are 6 digits by default. Accept 4-10 for any custom
+  // configuration. The old UI demanded exactly 8 which rejected every real
+  // code Supabase ever sent.
+  if (!/^\d{4,10}$/.test(cleanCode)) {
+    throw new Error("Code should be 6 digits (check the latest email from us).");
   }
-  return { ok: true, user: data.user, session: data.session };
+  // Try all three Supabase OTP types in order: 'email' (newest, works for
+  // magic-link-style), 'signup' (classic), 'email_change'. Whichever matches
+  // Supabase's template wins.
+  const tries = ["email", "signup"];
+  let lastErr = null;
+  for (const type of tries) {
+    const r = await client.auth.verifyOtp({ email: emailN, token: cleanCode, type });
+    if (!r.error) return { ok: true, user: r.data?.user, session: r.data?.session };
+    lastErr = r.error;
+  }
+  throw new Error(prettifySbError(lastErr?.message || "Invalid or expired code."));
 }
 
 /**

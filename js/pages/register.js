@@ -16,6 +16,27 @@ export function renderRegister(main) {
   let resendCountdown = 0;
   let resendTimer = null;
 
+  // If the user already has a session (e.g. they clicked the confirmation
+  // link in a new tab + Supabase SDK picked up the URL hash + wrote the
+  // session to localStorage), skip the register flow entirely.
+  (async () => {
+    try {
+      const { sb } = await import("../db/supabase.js");
+      const client = await sb();
+      if (!client) return;
+      const { data } = await client.auth.getSession();
+      if (data?.session?.user) {
+        const { refreshCurrentUser } = await import("../auth/accounts.js");
+        await refreshCurrentUser();
+        const { bootSync, loadAllFromDb } = await import("../db/sync.js");
+        await bootSync();
+        await loadAllFromDb();
+        switchUser();
+        navigate("/onboarding");
+      }
+    } catch {}
+  })();
+
   render();
 
   function render() {
@@ -123,34 +144,45 @@ export function renderRegister(main) {
   }
 
   function renderOtp() {
+    // Supabase's default "Confirm signup" email template contains ONLY a
+    // clickable link (via {{ .ConfirmationURL }}) — no OTP code. So we show
+    // the LINK flow as primary ("click the button in your email") and keep
+    // the OTP input as a secondary fallback for projects that customized
+    // the template to include {{ .Token }}.
     main.innerHTML = `
       <div class="auth-wrap">
         <div class="auth-card">
           <div style="text-align: center; margin-bottom: var(--sp-4);">
             <div style="font-size: 48px; margin-bottom: var(--sp-2);">📬</div>
             <h1>Check your email</h1>
-            <p class="sub">We sent a <strong>6-digit code</strong> to <strong>${escapeHtml(pendingEmail)}</strong>. Enter it below to activate your account.</p>
+            <p class="sub">We sent a confirmation email to <strong>${escapeHtml(pendingEmail)}</strong>. <strong>Click the link inside</strong> to activate your account.</p>
           </div>
 
-          <form class="auth-form" id="otp-form" autocomplete="off">
-            <div class="field">
-              <label class="label" for="otp-input">Verification code</label>
-              <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required
-                placeholder="8-digit code"
-                style="font-family: var(--font-mono); letter-spacing: 0.25em; text-align: center; font-size: var(--text-xl); font-weight: 700;" />
-              <div class="dim text-xs" style="margin-top: 6px; text-align: center;">Enter the 8-digit code from your email.</div>
-            </div>
+          <div id="otp-waiting" class="info-msg" style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-3);">
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Waiting for you to click the link…</span>
+          </div>
 
-            <div id="otp-error" role="alert"></div>
+          <details class="dim text-sm" style="margin-bottom: var(--sp-3);">
+            <summary style="cursor:pointer;">Got a numeric code instead?</summary>
+            <form class="auth-form" id="otp-form" autocomplete="off" style="margin-top: var(--sp-3);">
+              <div class="field">
+                <label class="label" for="otp-input">Verification code</label>
+                <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]{4,10}" maxlength="10"
+                  placeholder="6-digit code"
+                  style="font-family: var(--font-mono); letter-spacing: 0.25em; text-align: center; font-size: var(--text-xl); font-weight: 700;" />
+                <div class="dim text-xs" style="margin-top: 6px; text-align: center;">Only for projects that customised the email template to include a token.</div>
+              </div>
+              <div id="otp-error" role="alert"></div>
+              <button type="submit" class="btn btn-outline btn-block" id="otp-btn">Verify code</button>
+            </form>
+          </details>
 
-            <button type="submit" class="btn btn-primary btn-block btn-lg" id="otp-btn">Verify and continue</button>
-
-            <div style="text-align: center; margin-top: var(--sp-3); font-size: var(--text-sm); color: var(--text-muted);">
-              Didn't get it? <button type="button" class="btn-link" id="resend-btn"
-                style="font-size: var(--text-sm); padding: 0;" disabled>Resend code</button>
-              <span id="resend-countdown" class="dim"></span>
-            </div>
-          </form>
+          <div style="text-align: center; margin-top: var(--sp-3); font-size: var(--text-sm); color: var(--text-muted);">
+            Didn't get it? <button type="button" class="btn-link" id="resend-btn"
+              style="font-size: var(--text-sm); padding: 0;" disabled>Resend email</button>
+            <span id="resend-countdown" class="dim"></span>
+          </div>
 
           <div class="auth-switch">
             Wrong email? <a href="#" id="back-to-form">Start over</a>
@@ -163,22 +195,30 @@ export function renderRegister(main) {
     const errBox = main.querySelector("#otp-error");
     const btn = main.querySelector("#otp-btn");
     const resendBtn = main.querySelector("#resend-btn");
-    const countdownEl = main.querySelector("#resend-countdown");
 
-    main.querySelector("#otp-input").focus();
+    // ----- Primary path: auto-advance when Supabase establishes a session.
+    // Fires when the user clicks the confirmation link (either in this tab
+    // via emailRedirectTo or in another tab — the session is written to
+    // localStorage key ss.sb.session.v1 and the storage event propagates).
+    let authUnsub = null;
+    (async () => {
+      const { sb } = await import("../db/supabase.js");
+      const client = await sb();
+      if (!client) return;
+      const { data } = client.auth.onAuthStateChange(async (event, session) => {
+        if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session?.user) {
+          onSignedIn();
+        }
+      });
+      authUnsub = () => data?.subscription?.unsubscribe?.();
+      // Also check NOW — user may have arrived with a session already.
+      const cur = await client.auth.getSession();
+      if (cur.data?.session) onSignedIn();
+    })();
 
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      errBox.innerHTML = "";
-      const code = main.querySelector("#otp-input").value.trim().replace(/\s+/g, "");
-      if (!/^\d{8}$/.test(code)) {
-        errBox.innerHTML = `<div class="error-msg">Enter the 8-digit code from your email.</div>`;
-        return;
-      }
-      btn.disabled = true;
-      btn.textContent = "Verifying…";
+    async function onSignedIn() {
+      if (stage !== "otp") return;
       try {
-        await verifySignupOtp({ email: pendingEmail, code });
         const { refreshCurrentUser } = await import("../auth/accounts.js");
         await refreshCurrentUser();
         const { bootSync, loadAllFromDb } = await import("../db/sync.js");
@@ -186,21 +226,44 @@ export function renderRegister(main) {
         await loadAllFromDb();
         switchUser();
         if (resendTimer) clearInterval(resendTimer);
+        authUnsub?.();
         navigate("/onboarding");
+      } catch (e) {
+        console.warn("post-confirm flow failed:", e);
+      }
+    }
+
+    // ----- Secondary path: user enters the numeric code manually.
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errBox.innerHTML = "";
+      const code = main.querySelector("#otp-input").value.trim().replace(/\s+/g, "");
+      if (!/^\d{4,10}$/.test(code)) {
+        errBox.innerHTML = `<div class="error-msg">Enter the 6-digit code from your email.</div>`;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = "Verifying…";
+      try {
+        await verifySignupOtp({ email: pendingEmail, code });
+        await onSignedIn();
       } catch (err) {
         errBox.innerHTML = `<div class="error-msg">${escapeHtml(err.message)}</div>`;
         btn.disabled = false;
-        btn.textContent = "Verify and continue";
+        btn.textContent = "Verify code";
       }
     });
 
     resendBtn.addEventListener("click", async () => {
+      resendBtn.disabled = true;
       try {
         await resendSignupOtp(pendingEmail);
         startResendTimer();
-        errBox.innerHTML = `<div class="success-msg">New code sent.</div>`;
+        const waiting = main.querySelector("#otp-waiting");
+        if (waiting) waiting.innerHTML = `<span>✅ New email sent — check your inbox.</span>`;
       } catch (err) {
         errBox.innerHTML = `<div class="error-msg">${escapeHtml(err.message)}</div>`;
+        resendBtn.disabled = false;
       }
     });
 
@@ -208,10 +271,10 @@ export function renderRegister(main) {
       e.preventDefault();
       stage = "form";
       if (resendTimer) clearInterval(resendTimer);
+      authUnsub?.();
       render();
     });
 
-    // Initial countdown render
     updateResendUi();
   }
 
