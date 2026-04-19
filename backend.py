@@ -29,6 +29,7 @@ Configure once via a `.env` file in this folder, or environment variables.
 import os
 import sys
 import json
+import time
 import smtplib
 import ssl
 import http.server
@@ -67,6 +68,25 @@ PORT = int(os.environ.get("PORT") or os.environ.get("STOCKSAATHI_PORT") or "7348
 # Bind to 0.0.0.0 in hosted environments; 127.0.0.1 locally.
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_ORIGIN = os.environ.get("PUBLIC_ORIGIN", "").rstrip("/")
+
+# If a cloner has NO local email provider configured, we relay the email
+# through the hosted StockSaathi instance (stocksaathi.co.in) so the app
+# "just works" on `git clone` + `run.bat`. Set UPSTREAM_EMAIL_URL="" to disable.
+UPSTREAM_EMAIL_URL = os.environ.get(
+    "UPSTREAM_EMAIL_URL",
+    "https://stocksaathi.co.in/api/send-consent"
+).strip()
+
+# This backend considers itself "the hosted one" when IS_UPSTREAM=1 is set.
+# That stops it from relaying to itself (infinite loop) and enables rate limiting.
+IS_UPSTREAM = os.environ.get("IS_UPSTREAM", "").strip() in ("1", "true", "yes")
+
+# Simple per-IP rate limit (only enforced on the upstream/hosted instance).
+from collections import defaultdict, deque
+import threading as _threading
+_rate_lock = _threading.Lock()
+_rate_bucket = defaultdict(deque)   # ip -> deque of timestamps
+RATE_LIMIT_PER_HOUR = int(os.environ.get("RATE_LIMIT_PER_HOUR", "20"))
 
 
 # --------------------------------------------------------------------------
@@ -157,33 +177,74 @@ def log_email(to_email, subject, body):
     return str(path)
 
 
-def send_email(to_email, subject, body, token=None):
-    # SMTP first — sends to ANY recipient. Resend sandbox only delivers to the
-    # account owner's email, so it's a fallback for when SMTP isn't configured.
+def send_via_upstream(to_email, teen, token, consent_url, relay_header=False):
+    """Forward the email request to the hosted StockSaathi backend.
+    Lets cloned/local instances send real email through the production
+    server without needing their own SMTP creds."""
+    if not UPSTREAM_EMAIL_URL:
+        return {"ok": False, "reason": "no_upstream"}
+    if IS_UPSTREAM:
+        # We ARE the upstream — don't relay to ourselves.
+        return {"ok": False, "reason": "self_is_upstream"}
+    if relay_header:
+        # Someone already relayed to us — break the chain.
+        return {"ok": False, "reason": "already_relayed"}
+    payload = json.dumps({
+        "to": to_email, "teenName": teen, "token": token,
+        "consentUrl": consent_url,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        UPSTREAM_EMAIL_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "StockSaathi-Relay/1.0",
+            "X-StockSaathi-Relay": "1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            if data.get("ok"):
+                return {"ok": True, "provider": "upstream", "via": UPSTREAM_EMAIL_URL, "upstream_provider": data.get("provider")}
+            return {"ok": False, "reason": "upstream_rejected", "upstream": data}
+    except urllib.error.HTTPError as e:
+        try: err = json.loads(e.read().decode("utf-8"))
+        except Exception: err = {"message": str(e)}
+        return {"ok": False, "reason": "upstream_http_error", "status": e.code, "error": err}
+    except Exception as e:
+        return {"ok": False, "reason": "upstream_exception", "error": str(e)}
+
+
+def send_email(to_email, subject, body, token=None, teen=None, consent_url=None, relay_header=False):
+    # 1. Local SMTP (sends to any recipient).
+    # 2. Local Resend (sandbox: only owner's email).
+    # 3. Upstream relay (forwards to stocksaathi.co.in — cloners get zero-config delivery).
+    # 4. Dev log (last resort: echoes token to UI so onboarding still completes).
     attempts = []
     if os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"):
         r = send_via_smtp(to_email, subject, body)
-        if r.get("ok"):
-            return r
+        if r.get("ok"): return r
         attempts.append({"provider": "smtp", **r})
     if os.environ.get("RESEND_API_KEY"):
         r = send_via_resend(to_email, subject, body)
-        if r.get("ok"):
-            return r
+        if r.get("ok"): return r
         attempts.append({"provider": "resend", **r})
+    if UPSTREAM_EMAIL_URL and not IS_UPSTREAM and not relay_header:
+        r = send_via_upstream(to_email, teen or "your child", token or "", consent_url or "", relay_header=relay_header)
+        if r.get("ok"): return r
+        attempts.append({"provider": "upstream", **r})
     path = log_email(to_email, subject, body)
-    # IMPORTANT: in dev-log mode we echo the token back so the onboarding flow
-    # still completes end-to-end (for cloners who haven't configured email yet).
     return {
         "ok": True,
         "provider": "devlog",
         "logged_to": path,
         "attempts": attempts,
-        "dev_token": token,   # so the UI can display it directly in dev mode
-        "warning": ("Email providers tried and failed (see 'attempts'). "
-                    "Logged to disk. Dev token included so you can test the flow.") if attempts else
-                   ("No email provider configured — running in dev mode. "
-                    "For real delivery, set RESEND_API_KEY or SMTP_* in .env (see .env.example)."),
+        "dev_token": token,
+        "warning": ("All delivery attempts failed — falling back to dev mode. "
+                    "Your consent code is shown inline so you can still use the app."),
     }
 
 
@@ -277,9 +338,24 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
         if not to or "@" not in to:
             self._json(400, {"ok": False, "error": "bad_recipient"})
             return
+        # Rate limit only on hosted/upstream instance
+        if IS_UPSTREAM:
+            ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
+            now = time.time()
+            with _rate_lock:
+                bucket = _rate_bucket[ip]
+                while bucket and now - bucket[0] > 3600:
+                    bucket.popleft()
+                if len(bucket) >= RATE_LIMIT_PER_HOUR:
+                    self._json(429, {"ok": False, "error": "rate_limited",
+                                     "detail": f"Max {RATE_LIMIT_PER_HOUR} emails/hour per IP."})
+                    return
+                bucket.append(now)
+        relayed_from_downstream = self.headers.get("X-StockSaathi-Relay", "") == "1"
         subject = f"StockSaathi - Consent requested for {teen}"
         body = consent_body(teen, to, token, consent_url)
-        result = send_email(to, subject, body, token=token)
+        result = send_email(to, subject, body, token=token, teen=teen,
+                            consent_url=consent_url, relay_header=relayed_from_downstream)
         code = 200 if result.get("ok") else 500
         self._json(code, result)
 
