@@ -1,8 +1,8 @@
 // =============================================================================
 // ANTHROPIC BRIDGE — OPTIONAL. Only runs when user pastes an API key in Settings.
 // Uses the browser-side Anthropic API with the `anthropic-dangerous-direct-browser-access`
-// header. This is FINE for a buildathon demo (teen adds their own key); a real
-// deployment would proxy via a server.
+// header. This is fine for a BYO-key path (teen pastes their own key locally); the
+// production coach path goes through /api/chat (Groq) on the server instead.
 //
 // If no key is set OR the call fails, we fall back to templates silently.
 // =============================================================================
