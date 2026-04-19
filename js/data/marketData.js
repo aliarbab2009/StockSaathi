@@ -57,6 +57,18 @@ function persistSoon() {
   }, 800);
 }
 
+// Synchronous read of whatever is already in memory (incl. localStorage-loaded
+// stale entries). Used by pages to prefill their first render instantly.
+export function getCachedQuotes(symbols) {
+  const out = {};
+  if (!symbols) return out;
+  for (const s of symbols) {
+    const c = _quoteCache.get(s);
+    if (c?.data) out[s] = c.data;
+  }
+  return out;
+}
+
 export function getDataSource() {
   const s = getState().settings;
   if (s.finnhubKey) return { name: "Finnhub + Yahoo", tier: "premium" };

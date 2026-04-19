@@ -4,7 +4,7 @@
 
 import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS } from "../data/universe.js";
 import { getTodayChange, getCloses } from "../data/prices.js";
-import { getQuoteBatch, getDataSource, subscribeToQuotes } from "../data/marketData.js";
+import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
@@ -15,23 +15,21 @@ let quoteCache = {};
 export function renderStocks(main) {
   let cancelled = false;
   let pollUnsub = null;
+
+  // Live polling for top 50 symbols — every 10s for snappy feel
+  const topSyms = STOCKS.slice(0, 50).map(s => s.symbol);
+
+  // Prefill from in-memory + localStorage cache SYNCHRONOUSLY so the very first
+  // paint already shows last-known real prices (not universe placeholders).
+  const allSyms = INSTRUMENTS.map(i => i.symbol);
+  quoteCache = { ...quoteCache, ...getCachedQuotes(allSyms) };
+
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
   const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Live polling for top 50 symbols — every 10s for snappy feel
-  const topSyms = STOCKS.slice(0, 50).map(s => s.symbol);
-  // Kick off an immediate fetch so the first paint already has live data
-  (async () => {
-    try {
-      const { getQuoteBatch } = await import("../data/marketData.js");
-      const initial = await getQuoteBatch(topSyms);
-      if (cancelled) return;
-      quoteCache = { ...quoteCache, ...initial };
-      render();
-    } catch (e) { console.warn("initial quotes:", e); }
-  })();
+  // Background refresh — 10s polling keeps prices fresh after the instant paint
   pollUnsub = subscribeToQuotes(topSyms, (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };

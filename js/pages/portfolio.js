@@ -9,7 +9,7 @@ import {
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import { getInstrument } from "../data/universe.js";
 import { getPriceAt, getTodayChange } from "../data/prices.js";
-import { getQuoteBatch, getDataSource, subscribeToQuotes } from "../data/marketData.js";
+import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes } from "../data/marketData.js";
 import { listPendingOrders, cancelOrder } from "../features/limitOrders.js";
 import { getNews, fmtRelativeTime, labelSentiment } from "../data/news.js";
 import { areaChart } from "../components/charts.js";
@@ -21,6 +21,10 @@ let pendingOrders = [];
 export function renderPortfolio(main) {
   let cancelled = false;
   let pollUnsub = null;
+
+  // Instant first paint: prefill cache from localStorage-backed in-memory cache
+  const state0Syms = Object.keys(getState().holdings || {});
+  if (state0Syms.length) quoteCache = { ...quoteCache, ...getCachedQuotes(state0Syms) };
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
@@ -92,8 +96,8 @@ export function renderPortfolio(main) {
       .filter(Boolean)
       .sort((a, b) => b.value - a.value);
 
-    const historySeries = buildPortfolioHistory(state, 60);
     const src = getDataSource();
+    const hasRealHistory = state.portfolioHistory && state.portfolioHistory.length > 1;
 
     main.innerHTML = `
       <div class="portfolio-hero">
@@ -127,10 +131,14 @@ export function renderPortfolio(main) {
               <h3>Value over time</h3>
               <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
             </div>
-            <div style="height: 260px;">
-              ${historySeries.length > 1
-                ? areaChart(historySeries, { height: 260, color: "var(--brand)", paddingLeft: 60 })
-                : `<div class="empty-state" style="padding: var(--sp-6);">Your portfolio history will show here after your first trade.</div>`}
+            <div style="height: 260px; position: relative;">
+              ${hasRealHistory
+                ? areaChart(state.portfolioHistory, { height: 260, color: "var(--brand)", paddingLeft: 60 })
+                : `<div style="height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 1px dashed var(--border); border-radius: var(--r); background: var(--surface);">
+                    <div style="font-size: 40px; opacity: 0.45;">📈</div>
+                    <div class="font-semi" style="color: var(--text-strong);">Chart will start drawing soon</div>
+                    <div class="muted text-sm" style="text-align: center; max-width: 340px;">Use StockSaathi for a few days — we'll plot your real portfolio value once there's enough history to draw an accurate line.</div>
+                  </div>`}
             </div>
           </div>
 
@@ -306,20 +314,6 @@ function renderActivity(state) {
       }).join("")}
     </div>
   `;
-}
-
-function buildPortfolioHistory(state, days) {
-  if (!Object.keys(state.holdings).length) return [];
-  const series = [];
-  for (let d = days - 1; d >= 0; d--) {
-    let total = state.portfolio.cashPaise;
-    for (const [sym, h] of Object.entries(state.holdings)) {
-      const px = getPriceAt(sym, d);
-      if (px) total += Math.round(h.qty * px);
-    }
-    series.push(total);
-  }
-  return series;
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
