@@ -182,6 +182,15 @@ export function renderRegister(main) {
             <span id="resend-countdown" class="dim"></span>
           </div>
 
+          <details id="otp-trouble" class="dim text-xs" style="margin-top: var(--sp-3); text-align: left;">
+            <summary style="cursor:pointer; text-align:center;">No email or no code inside?</summary>
+            <div style="padding: var(--sp-3); line-height: 1.6;">
+              <p style="margin: 0 0 8px 0;"><strong>1. Check spam / promotions folder.</strong> Supabase's default email host is easy to filter out.</p>
+              <p style="margin: 0 0 8px 0;"><strong>2. Email has only a link, no code?</strong> The Supabase project's "Confirm signup" template needs <code>{{ .Token }}</code>. Click the link instead — we'll sign you in automatically.</p>
+              <p style="margin: 0;"><strong>3. Still nothing after 2 minutes?</strong> Try a different email provider — some strict corporate inboxes drop auth emails silently.</p>
+            </div>
+          </details>
+
           <div class="auth-switch">
             Wrong email? <a href="#" id="back-to-form">Start over</a>
           </div>
