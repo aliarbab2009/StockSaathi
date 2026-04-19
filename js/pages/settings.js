@@ -103,7 +103,7 @@ export function renderSettings(main) {
 
         <div class="card" style="margin-top: var(--sp-4); background: var(--bg-soft);">
           <h3 style="margin-bottom: var(--sp-3);">About</h3>
-          <p class="text-sm" style="line-height: 1.7;"><strong>StockSaathi</strong> is a proof-of-concept for the Masters' Union AI Buildathon 2026, problem statement F6.</p>
+          <p class="text-sm" style="line-height: 1.7;"><strong>StockSaathi</strong> — an AI-coached investment simulator for Indian teens. Real stocks, virtual money, behavioral coach.</p>
           <p class="muted text-sm" style="line-height: 1.7; margin-top: var(--sp-2);">Stack: vanilla ES modules, custom SVG charts, client-side state with localStorage persistence, Web Crypto password hashing (PBKDF2), optional Claude LLM + EmailJS + Finnhub. Zero build step. Works fully offline after first load.</p>
           <p class="dim text-xs" style="line-height: 1.7; margin-top: var(--sp-2);">Not affiliated with SEBI, NSE, BSE, or any broker. All prices are delayed; they come from Yahoo Finance or a synthetic fallback. No advice is ever provided; this product is behavioral reflection, not investment advice.</p>
         </div>

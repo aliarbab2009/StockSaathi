@@ -19,9 +19,43 @@ import { getState } from "../state.js";
 const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
+const QUOTE_PERSIST_KEY = "ss.quotes.v1";
+const PERSIST_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // 6h max for stale-on-load
 
 const _quoteCache = new Map();
 const _historyCache = new Map();
+const _fundamentalsCache = new Map();
+
+// ---------- localStorage cache so the page paints with REAL prices instantly
+function loadPersistedQuotes() {
+  try {
+    const raw = localStorage.getItem(QUOTE_PERSIST_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    const now = Date.now();
+    for (const [sym, data] of Object.entries(obj)) {
+      if (!data?.ts || now - data.ts > PERSIST_MAX_AGE_MS) continue;
+      // Mark as stale on load so UI can show "Updated Xs ago"
+      _quoteCache.set(sym, { data: { ...data, stale: true }, ts: data.ts });
+    }
+  } catch {}
+}
+loadPersistedQuotes();
+
+let _persistTimer = null;
+function persistSoon() {
+  if (_persistTimer) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    try {
+      const obj = {};
+      for (const [sym, entry] of _quoteCache.entries()) {
+        if (entry.data) obj[sym] = entry.data;
+      }
+      localStorage.setItem(QUOTE_PERSIST_KEY, JSON.stringify(obj));
+    } catch {}
+  }, 800);
+}
 
 export function getDataSource() {
   const s = getState().settings;
@@ -67,6 +101,7 @@ export async function getQuote(symbol) {
   const apiQuote = normalizeFromApi(apiRes, symbol);
   if (apiQuote) {
     _quoteCache.set(symbol, { data: apiQuote, ts: Date.now() });
+    persistSoon();
     return apiQuote;
   }
 
@@ -74,6 +109,7 @@ export async function getQuote(symbol) {
   const fallback = await fetchYahooQuote(symbol).catch(() => null);
   if (fallback) {
     _quoteCache.set(symbol, { data: fallback, ts: Date.now() });
+    persistSoon();
     return fallback;
   }
 
@@ -101,6 +137,7 @@ export async function getQuoteBatch(symbols) {
   const batchUrl = `/api/quotes?symbols=${encodeURIComponent(need.join(","))}`;
   const batch = await fetchJsonWithTimeout(batchUrl);
   if (batch?.ok && batch.quotes) {
+    let any = false;
     for (const s of need) {
       const q = batch.quotes[s];
       if (q) {
@@ -108,9 +145,11 @@ export async function getQuoteBatch(symbols) {
         if (norm) {
           out[s] = norm;
           _quoteCache.set(s, { data: norm, ts: Date.now() });
+          any = true;
         }
       }
     }
+    if (any) persistSoon();
   }
 
   // Fill any remaining misses one by one (usually empty)
@@ -159,6 +198,23 @@ export function subscribeToQuotes(symbols, onUpdate, intervalMs = 10_000) {
 export function quoteAge(quote) {
   if (!quote?.ts) return null;
   return Date.now() - quote.ts;
+}
+
+// =============================================================================
+// FUNDAMENTALS — real values via /api/fundamentals (Yahoo v7/quote backed)
+// Cached 5 min in memory. Fundamentals barely change intraday.
+// =============================================================================
+const FUND_TTL_MS = 5 * 60_000;
+
+export async function getFundamentals(symbol) {
+  const cached = _fundamentalsCache.get(symbol);
+  if (cached && Date.now() - cached.ts < FUND_TTL_MS) return cached.data;
+  const res = await fetchJsonWithTimeout(`/api/fundamentals?symbol=${encodeURIComponent(symbol)}`);
+  if (res?.ok) {
+    _fundamentalsCache.set(symbol, { data: res, ts: Date.now() });
+    return res;
+  }
+  return null;
 }
 
 // ---------- Legacy Yahoo proxy chain (kept as fallback) --------------------

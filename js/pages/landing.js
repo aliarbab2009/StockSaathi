@@ -12,7 +12,7 @@ export function renderLanding(main) {
   main.innerHTML = `
     <section class="hero">
       <div style="margin-bottom: var(--sp-5);">
-        <span class="pill pill-brand">StockSaathi · Masters' Union AI Buildathon 2026</span>
+        <span class="pill pill-brand">StockSaathi · Invest virtually · Learn for real</span>
       </div>
       <h1 class="tight">Invest virtually.<br /><span class="grad-accent">Learn for real.</span></h1>
       <p class="tagline">

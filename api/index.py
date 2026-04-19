@@ -14,9 +14,9 @@ class handler(BaseHTTPRequestHandler):
                 "/api/config",
                 "/api/quote?symbol=X",
                 "/api/quotes?symbols=A,B,C",
+                "/api/fundamentals?symbol=X",
                 "/api/yahoo/chart/X",
                 "/api/chat (POST)",
-                "/api/send-consent (POST)",
             ],
         }).encode("utf-8")
         self.send_response(200)

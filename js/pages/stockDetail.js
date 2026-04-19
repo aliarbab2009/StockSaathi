@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { getInstrument } from "../data/universe.js";
-import { getQuote, getHistory, subscribeToQuotes, quoteAge } from "../data/marketData.js";
+import { getQuote, getHistory, subscribeToQuotes, quoteAge, getFundamentals } from "../data/marketData.js";
 import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange } from "../data/prices.js";
@@ -25,6 +25,7 @@ const TF_MAP = { "1W": { range: "5d", interval: "1d", days: 5 }, "1M": { range: 
 let ui = { side: "BUY", qty: 1, timeframe: "1M", orderType: "MARKET", limitPrice: 0 };
 let liveQuote = null;
 let liveHistory = null;
+let liveFundamentals = null;
 let qtySelectorHandle = null;
 let _cancelToken = { cancelled: false };    // shared per-mount token
 
@@ -44,6 +45,7 @@ export function renderStockDetail(main, params) {
   ui = { side: "BUY", qty: inst.kind === "MF" ? 0.5 : 1, timeframe: "1M", orderType: "MARKET", limitPrice: 0 };
   liveQuote = null;
   liveHistory = null;
+  liveFundamentals = null;
   qtySelectorHandle?.destroy?.();
   qtySelectorHandle = null;
 
@@ -151,18 +153,12 @@ function render(inst, symbol) {
         ${inst.kind !== "MF" ? renderOrderBook(symbol, curPrice) : ""}
 
         <div class="card" style="margin-top: var(--sp-4);">
-          <h3 style="margin-bottom: var(--sp-4);">Fundamentals</h3>
+          <div class="card-head">
+            <h3>Fundamentals</h3>
+            ${liveFundamentals ? `<span class="data-badge"><span class="dot"></span> Live · Yahoo Finance</span>` : `<span class="data-badge"><span class="dot offline"></span> Loading…</span>`}
+          </div>
           <div class="fundamentals">
-            ${fundRow("Market Cap", inst.marketCap || "—")}
-            ${fundRow("P/E Ratio", inst.pe ? inst.pe.toString() : "—")}
-            ${fundRow("P/B Ratio", inst.pb ? inst.pb.toString() : "—")}
-            ${fundRow("Div Yield", inst.divYield != null ? `${inst.divYield}%` : "—")}
-            ${fundRow("Beta", inst.beta ? inst.beta.toString() : "—")}
-            ${fundRow("52W High", formatRupees(hi))}
-            ${fundRow("52W Low", formatRupees(lo))}
-            ${fundRow("Risk tier", `<span class="risk-pill ${inst.risk}">${inst.risk.toUpperCase()}</span>`, true)}
-            ${inst.kind === "MF" ? fundRow("Expense Ratio", `${inst.expenseRatio}%`) : ""}
-            ${inst.kind === "MF" ? fundRow("AUM", inst.aum) : ""}
+            ${renderFundamentals(inst, liveFundamentals, hi, lo)}
           </div>
         </div>
       </div>
@@ -471,6 +467,51 @@ async function executeTrade(inst, side, qty, pricePaise, biasResult) {
 
 function fundRow(l, v, html = false) {
   return `<div class="item"><div class="l">${l}</div><div class="v">${html ? v : escapeHtml(v)}</div></div>`;
+}
+
+function fmtMarketCap(v) {
+  if (v == null) return "—";
+  // v is in absolute INR
+  if (v >= 1e12) return `${(v / 1e12).toFixed(2)} L Cr`;
+  if (v >= 1e7)  return `${(v / 1e7).toFixed(2)} Cr`;
+  if (v >= 1e5)  return `${(v / 1e5).toFixed(2)} L`;
+  return v.toLocaleString("en-IN");
+}
+
+function renderFundamentals(inst, live, hi52, lo52) {
+  // Prefer live values when available, else fall back to seeded universe data
+  const mcap = live?.market_cap ? fmtMarketCap(live.market_cap) : (inst.marketCap || "—");
+  const pe = live?.pe_ratio != null ? live.pe_ratio.toFixed(2) : (inst.pe != null ? inst.pe.toString() : "—");
+  const pb = live?.pb_ratio != null ? live.pb_ratio.toFixed(2) : (inst.pb != null ? inst.pb.toString() : "—");
+  const beta = live?.beta != null ? live.beta.toFixed(2) : (inst.beta != null ? inst.beta.toString() : "—");
+  const dy = live?.dividend_yield != null
+    ? `${(live.dividend_yield * 100).toFixed(2)}%`
+    : (inst.divYield != null ? `${inst.divYield}%` : "—");
+  const hi = live?.fifty_two_week_high != null
+    ? `₹${live.fifty_two_week_high.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+    : formatRupees(hi52);
+  const lo = live?.fifty_two_week_low != null
+    ? `₹${live.fifty_two_week_low.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+    : formatRupees(lo52);
+  const eps = live?.eps != null ? `₹${live.eps.toFixed(2)}` : null;
+  const fma = live?.fifty_day_average != null ? `₹${live.fifty_day_average.toFixed(2)}` : null;
+  const tma = live?.two_hundred_day_average != null ? `₹${live.two_hundred_day_average.toFixed(2)}` : null;
+
+  return [
+    fundRow("Market Cap", mcap),
+    fundRow("P/E Ratio", pe),
+    fundRow("P/B Ratio", pb),
+    fundRow("Div Yield", dy),
+    fundRow("Beta", beta),
+    fundRow("52W High", hi),
+    fundRow("52W Low", lo),
+    eps ? fundRow("EPS (TTM)", eps) : "",
+    fma ? fundRow("50-day avg", fma) : "",
+    tma ? fundRow("200-day avg", tma) : "",
+    fundRow("Risk tier", `<span class="risk-pill ${inst.risk}">${inst.risk.toUpperCase()}</span>`, true),
+    inst.kind === "MF" ? fundRow("Expense Ratio", `${inst.expenseRatio}%`) : "",
+    inst.kind === "MF" ? fundRow("AUM", inst.aum) : "",
+  ].filter(Boolean).join("");
 }
 
 function renderOrderBook(symbol, curPrice) {
