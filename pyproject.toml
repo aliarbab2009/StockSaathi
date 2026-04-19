@@ -1,9 +1,0 @@
-[project]
-name = "stocksaathi"
-version = "1.0.0"
-description = "AI-coached Indian stock simulator for teens. Built for Masters' Union AI Buildathon 2026."
-requires-python = ">=3.11"
-dependencies = []
-
-[tool.uv]
-package = false
