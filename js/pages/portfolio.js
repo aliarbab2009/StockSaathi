@@ -17,27 +17,38 @@ let newsItems = [];
 let quoteCache = {};
 
 export function renderPortfolio(main) {
-  // Load fresh data on first paint
-  refreshData();
+  let cancelled = false;
 
   render();
-  const unsub = subscribe(render);
-  window.addEventListener("hashchange", () => unsub?.(), { once: true });
+  const unsub = subscribe(() => { if (!cancelled) render(); });
+  const onLeave = () => { cancelled = true; unsub?.(); };
+  window.addEventListener("hashchange", onLeave, { once: true });
+
+  refreshData();
 
   async function refreshData() {
     const state = getState();
     const syms = Object.keys(state.holdings);
     if (syms.length) {
       try {
-        quoteCache = await getQuoteBatch(syms);
+        const q = await getQuoteBatch(syms);
+        if (cancelled) return;
+        quoteCache = q;
         render();
       } catch (e) { console.warn("quote refresh:", e); }
     }
     try {
-      newsItems = await getNews({ limit: 5, filterSymbols: syms.length ? syms : null });
+      const items = await getNews({ limit: 5, filterSymbols: syms.length ? syms : null });
+      if (cancelled) return;
+      newsItems = items;
     } catch {
-      newsItems = await getNews({ limit: 5 });
+      try {
+        const items = await getNews({ limit: 5 });
+        if (cancelled) return;
+        newsItems = items;
+      } catch {}
     }
+    if (cancelled) return;
     render();
   }
 

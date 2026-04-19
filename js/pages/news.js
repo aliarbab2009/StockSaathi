@@ -8,22 +8,32 @@ import { getState, subscribe } from "../state.js";
 let filter = "all";    // all | holdings | watchlist
 let newsCache = [];
 let loading = true;
+let _newsCancel = { cancelled: false };
 
 export function renderNews(main) {
+  _newsCancel.cancelled = true;
+  _newsCancel = { cancelled: false };
+  const myToken = _newsCancel;
+
   loading = true;
   render(main);
-  loadNews(main);
-  const unsub = subscribe(() => render(main));
-  window.addEventListener("hashchange", () => unsub?.(), { once: true });
+  loadNews(main, myToken);
+  const unsub = subscribe(() => { if (!myToken.cancelled) render(main); });
+  const onLeave = () => { myToken.cancelled = true; unsub?.(); };
+  window.addEventListener("hashchange", onLeave, { once: true });
 }
 
-async function loadNews(main) {
+async function loadNews(main, token) {
   try {
-    newsCache = await getNews({ limit: 40 });
+    const items = await getNews({ limit: 40 });
+    if (token.cancelled) return;
+    newsCache = items;
   } catch (e) {
+    if (token.cancelled) return;
     console.warn("news load failed:", e);
     newsCache = [];
   }
+  if (token.cancelled) return;
   loading = false;
   render(main);
 }

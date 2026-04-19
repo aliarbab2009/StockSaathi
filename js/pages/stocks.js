@@ -13,9 +13,11 @@ let filter = { q: "", sector: "all", kind: "all", sort: "marketCap" };
 let quoteCache = {};
 
 export function renderStocks(main) {
+  let cancelled = false;
   render();
-  const unsub = subscribe(render);
-  window.addEventListener("hashchange", () => unsub?.(), { once: true });
+  const unsub = subscribe(() => { if (!cancelled) render(); });
+  const onLeave = () => { cancelled = true; unsub?.(); };
+  window.addEventListener("hashchange", onLeave, { once: true });
 
   // Prefetch live quotes for top 30 in background
   setTimeout(prefetchQuotes, 100);
@@ -23,7 +25,9 @@ export function renderStocks(main) {
   async function prefetchQuotes() {
     try {
       const syms = STOCKS.slice(0, 30).map(s => s.symbol);
-      quoteCache = await getQuoteBatch(syms);
+      const quotes = await getQuoteBatch(syms);
+      if (cancelled) return;       // user navigated away — do NOT render
+      quoteCache = quotes;
       render();
     } catch {}
   }

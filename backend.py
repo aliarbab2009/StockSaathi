@@ -317,7 +317,38 @@ class SSHandler(http.server.SimpleHTTPRequestHandler):
                 },
             })
             return
+        # Yahoo Finance proxy — zero-CORS live prices for the frontend.
+        # Pattern: /api/yahoo/chart/<SYMBOL>?interval=1d&range=5d
+        if self.path.startswith("/api/yahoo/chart/"):
+            self._proxy_yahoo_chart()
+            return
         super().do_GET()
+
+    def _proxy_yahoo_chart(self):
+        # Extract symbol + query string from /api/yahoo/chart/<symbol>?...
+        path = self.path[len("/api/yahoo/chart/"):]
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{path}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/120.0.0.0 Safari/537.36"),
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+            })
+            with urllib.request.urlopen(req, timeout=10) as r:
+                body = r.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=45")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except urllib.error.HTTPError as e:
+            self._json(e.code, {"error": "yahoo_http", "status": e.code, "detail": str(e)})
+        except Exception as e:
+            self._json(502, {"error": "yahoo_unreachable", "detail": str(e)})
 
     def do_POST(self):
         if self.path not in ("/api/send-consent", "/api/send-email"):

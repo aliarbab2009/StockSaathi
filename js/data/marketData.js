@@ -84,27 +84,34 @@ function yahooTicker(sym) {
   return `${sym}.NS`;
 }
 
+/**
+ * Fetch a Yahoo chart URL. Strategy:
+ * 1. Our own backend proxy (/api/yahoo/chart/...) — guaranteed CORS-free.
+ * 2. Direct Yahoo — works in many browsers/regions.
+ * 3. corsproxy.io — free public proxy fallback.
+ * 4. allorigins.win — wraps JSON in { contents }.
+ */
 async function fetchYahooUrl(yahooUrl) {
-  // Strategy 1 — direct
+  // Extract path + query from the Yahoo URL so we can hit our own proxy
+  const m = yahooUrl.match(/\/v8\/finance\/chart\/(.+)$/);
+  if (m) {
+    const ourProxy = `/api/yahoo/chart/${m[1]}`;
+    const res = await fetchJsonWithTimeout(ourProxy);
+    if (res && !res.error) return res;
+  }
+
+  // Direct (works from browser in many regions)
   let res = await fetchJsonWithTimeout(yahooUrl);
   if (res) return res;
 
-  // Strategy 2 — corsproxy.io (free, no key, high availability)
-  const proxy1 = `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`;
-  res = await fetchJsonWithTimeout(proxy1);
+  // Public CORS proxies as last resort
+  const p1 = `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`;
+  res = await fetchJsonWithTimeout(p1);
   if (res) return res;
 
-  // Strategy 3 — allorigins.win (wraps JSON in { contents })
-  const proxy2 = `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`;
-  const wrapper = await fetchJsonWithTimeout(proxy2);
-  if (wrapper?.contents) {
-    try { return JSON.parse(wrapper.contents); } catch { return null; }
-  }
-
-  // Strategy 4 — codetabs proxy
-  const proxy3 = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`;
-  res = await fetchJsonWithTimeout(proxy3);
-  if (res) return res;
+  const p2 = `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`;
+  const w = await fetchJsonWithTimeout(p2);
+  if (w?.contents) { try { return JSON.parse(w.contents); } catch {} }
 
   return null;
 }

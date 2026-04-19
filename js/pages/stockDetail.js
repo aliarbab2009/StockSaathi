@@ -24,6 +24,7 @@ let ui = { side: "BUY", qty: 1, timeframe: "1M" };
 let liveQuote = null;
 let liveHistory = null;
 let qtySelectorHandle = null;
+let _cancelToken = { cancelled: false };    // shared per-mount token
 
 export function renderStockDetail(main, params) {
   const symbol = params.symbol;
@@ -33,6 +34,11 @@ export function renderStockDetail(main, params) {
     return;
   }
 
+  // Cancel any previous mount's pending work
+  _cancelToken.cancelled = true;
+  _cancelToken = { cancelled: false };
+  const myToken = _cancelToken;
+
   ui = { side: "BUY", qty: inst.kind === "MF" ? 0.5 : 1, timeframe: "1M" };
   liveQuote = null;
   liveHistory = null;
@@ -40,20 +46,24 @@ export function renderStockDetail(main, params) {
   qtySelectorHandle = null;
 
   render(inst, symbol);
-  const unsub = subscribe(() => render(inst, symbol));
-  window.addEventListener("hashchange", () => unsub?.(), { once: true });
+  const unsub = subscribe(() => { if (!myToken.cancelled) render(inst, symbol); });
+  const onLeave = () => { myToken.cancelled = true; unsub?.(); };
+  window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Fetch live data
+  // Fetch live quote
   (async () => {
     try {
       const q = await getQuote(symbol);
+      if (myToken.cancelled) return;
       if (q) { liveQuote = q; render(inst, symbol); }
     } catch (e) { console.warn("quote:", e); }
   })();
+  // Fetch history
   (async () => {
     try {
       const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
       const h = await getHistory(symbol, tf.range, tf.interval);
+      if (myToken.cancelled) return;
       if (h) { liveHistory = h; render(inst, symbol); }
     } catch (e) { console.warn("history:", e); }
   })();
@@ -62,6 +72,7 @@ export function renderStockDetail(main, params) {
   const existing = getState().coachMessages.some(m => m.eventType === "STOCK_INTRO" && m.triggerSymbol === symbol);
   if (!existing) {
     coach({ type: "STOCK_INTRO", symbol, instrument: inst }).then(msg => {
+      if (myToken.cancelled) return;
       msg.triggerSymbol = symbol;
       recordCoachMessage(msg);
     });
@@ -69,10 +80,12 @@ export function renderStockDetail(main, params) {
 }
 
 async function reloadHistory(inst, symbol) {
+  const myToken = _cancelToken;
   const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
   liveHistory = null;
   render(inst, symbol);
   const h = await getHistory(symbol, tf.range, tf.interval).catch(() => null);
+  if (myToken.cancelled) return;
   if (h) { liveHistory = h; render(inst, symbol); }
 }
 

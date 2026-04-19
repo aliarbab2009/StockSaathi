@@ -165,6 +165,7 @@ function render() {
   const form = root.querySelector("#coach-form");
   form?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    e.stopPropagation();          // don't let submit bubble anywhere weird
     const input = root.querySelector("#coach-input");
     const text = input.value.trim();
     if (!text || pending) return;
@@ -225,7 +226,9 @@ function renderMessagesHtml(state) {
 
   setTimeout(() => {
     root?.querySelectorAll("[data-suggest]").forEach(btn => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         const input = root.querySelector("#coach-input");
         if (input) { input.value = btn.dataset.suggest; input.focus(); }
       });
