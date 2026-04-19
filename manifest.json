@@ -1,0 +1,28 @@
+{
+  "name": "StockSaathi",
+  "short_name": "StockSaathi",
+  "description": "AI-coached Indian stock investing simulator for teens.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#00B386",
+  "background_color": "#F8F9FB",
+  "lang": "en-IN",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%2300B386'/%3E%3Cpath d='M48 120 L78 86 L102 110 L144 60' stroke='white' stroke-width='12' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='144' cy='60' r='9' fill='white'/%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='110' fill='%2300B386'/%3E%3Cpath d='M128 320 L208 230 L272 294 L384 160' stroke='white' stroke-width='32' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='384' cy='160' r='24' fill='white'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "education"],
+  "prefer_related_applications": false
+}

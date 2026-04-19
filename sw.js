@@ -6,6 +6,7 @@ const CACHE_NAME = "stocksaathi-v2";
 const STATIC = [
   "./",
   "./index.html",
+  "./manifest.json",
   "./css/main.css",
   "./css/components.css",
   "./js/app.js",

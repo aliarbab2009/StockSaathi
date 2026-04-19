@@ -131,8 +131,13 @@
 *, *::before, *::after { box-sizing: border-box; }
 html {
   -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;   /* kill grey iOS tap flash */
   scroll-behavior: smooth;
   font-feature-settings: "ss01", "cv11";
+  /* account for notches / dynamic island */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 body {
   margin: 0;
@@ -142,10 +147,17 @@ body {
   color: var(--text);
   background: var(--bg);
   min-height: 100vh;
+  min-height: 100dvh;  /* mobile browser chrome accounted for */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   letter-spacing: -0.005em;
+  overscroll-behavior-y: none;    /* no iOS bounce chaining to window */
+}
+/* body scroll lock when drawer / modal is open */
+body.scroll-lock {
+  overflow: hidden;
+  touch-action: none;
 }
 h1, h2, h3, h4, h5, h6 {
   margin: 0;
@@ -172,11 +184,23 @@ button {
   background: none;
   color: inherit;
   line-height: 1.2;
+  -webkit-tap-highlight-color: transparent;
 }
 input, select, textarea {
   font-family: inherit;
   font-size: inherit;
   color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+}
+/* Prevent iOS "date/time/number" zoom on focus — requires font-size >= 16px */
+@media screen and (max-width: 820px) {
+  input, select, textarea,
+  .input, .select, .qty-stepper input,
+  input[type="text"], input[type="email"], input[type="password"],
+  input[type="number"], input[type="search"], input[type="tel"] {
+    font-size: 16px !important;
+  }
 }
 :focus-visible {
   outline: none;
@@ -221,7 +245,9 @@ hr { border: none; border-top: 1px solid var(--divider); margin: var(--sp-4) 0; 
   max-width: var(--max-w);
   margin: 0 auto;
   padding: var(--sp-6) var(--sp-6) var(--sp-24);
+  padding-bottom: calc(var(--sp-24) + env(safe-area-inset-bottom));
   min-height: calc(100vh - var(--nav-h));
+  min-height: calc(100dvh - var(--nav-h));
 }
 .container {
   max-width: var(--max-w);
@@ -554,19 +580,50 @@ textarea.input { min-height: 88px; resize: vertical; }
 
 /* -------------------- Responsive -------------------- */
 @media (max-width: 768px) {
-  .main { padding: var(--sp-4); }
+  .main {
+    padding: var(--sp-4);
+    padding-bottom: calc(var(--sp-20) + env(safe-area-inset-bottom));
+  }
   .card { padding: var(--sp-4); }
+  .card-compact { padding: var(--sp-3); }
   h1 { font-size: var(--text-2xl); }
   h2 { font-size: var(--text-xl); }
+  h3 { font-size: var(--text-lg); }
   .text-5xl { font-size: var(--text-3xl); }
   .text-4xl { font-size: var(--text-2xl); }
+  .text-3xl { font-size: var(--text-2xl); }
+  .grid, .flex-col { gap: var(--sp-3); }
+  .flex { gap: var(--sp-2); }
+  /* Buttons bump to iOS-standard tap target on phones */
+  .btn { min-height: 44px; padding: 11px 18px; }
+  .btn-sm { min-height: 36px; padding: 8px 13px; }
+  .btn-icon { min-height: 40px; min-width: 40px; }
+  .disclaimer { padding: var(--sp-5) var(--sp-4); font-size: 11px; }
+}
+@media (max-width: 420px) {
+  .main { padding: var(--sp-3); }
+  .card { padding: var(--sp-3); }
+  h1 { font-size: var(--text-xl); }
+}
+/* Landscape phones: don't waste vertical space on hero */
+@media (max-height: 480px) and (orientation: landscape) {
+  .hero { padding: var(--sp-6) var(--sp-4); }
+  .hero h1 { font-size: 2rem; margin-bottom: var(--sp-3); }
+  .hero .tagline { font-size: var(--text-base); margin-bottom: var(--sp-4); }
+  .hero .stat-row { margin-top: var(--sp-5); }
 }
 
-/* -------------------- Scrollbars (subtle) -------------------- */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+/* -------------------- Scrollbars (subtle, desktop only) -------------------- */
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+}
+/* Momentum scrolling for horizontal overflow (tables, tab rows) */
+.table-wrap, .filter-pills, .lb-tabs, .tf-buttons {
+  -webkit-overflow-scrolling: touch;
+}
 
 /* -------------------- Utility extras -------------------- */
 .divider { height: 1px; background: var(--divider); }

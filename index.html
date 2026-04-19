@@ -2,14 +2,31 @@
 <html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#00B386" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5" />
+  <meta name="theme-color" content="#00B386" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0A0B0F" media="(prefers-color-scheme: dark)" />
+  <meta name="color-scheme" content="light dark" />
+
   <title>StockSaathi — Invest virtually, learn for real</title>
-  <meta name="description" content="An AI-coached Indian stock investing simulator for teens. Real stocks, virtual money, behavioral reflection — not advice." />
+  <meta name="description" content="AI-coached Indian stock investing simulator for teens. Real stocks, virtual money, behavioral reflection — not advice." />
+
+  <!-- iOS / PWA -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="StockSaathi" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="manifest" href="./manifest.json" />
+
+  <!-- Favicons / touch icons (inline SVG — no extra requests) -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300B386'/%3E%3Cpath d='M16 40 L26 28 L34 36 L48 20' stroke='white' stroke-width='4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='48' cy='20' r='3' fill='white'/%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='38' fill='%2300B386'/%3E%3Cpath d='M46 114 L74 86 L96 108 L136 60' stroke='white' stroke-width='11' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='136' cy='60' r='8' fill='white'/%3E%3C/svg%3E" />
+
+  <!-- Fonts (display=swap = no FOIT on slow mobile connections) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
   <link rel="stylesheet" href="./css/main.css" />
   <link rel="stylesheet" href="./css/components.css" />
   <link rel="preload" href="./js/app.js" as="script" crossorigin />

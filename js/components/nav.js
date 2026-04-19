@@ -1,5 +1,5 @@
 // =============================================================================
-// NAV — StockSaathi top navigation, auth-aware.
+// NAV — StockSaathi top navigation, auth-aware + mobile drawer.
 // =============================================================================
 
 import { getState, subscribe, setSetting } from "../state.js";
@@ -10,20 +10,24 @@ import { navigate, currentRoute } from "../router.js";
 import { switchUser } from "../state.js";
 
 const LINKS_AUTH = [
-  { route: "portfolio", label: "Portfolio" },
-  { route: "stocks",    label: "Markets" },
-  { route: "news",      label: "News" },
-  { route: "chat",      label: "Coach Chat" },
-  { route: "crash-replay", label: "Time Travel" },
-  { route: "leaderboard",  label: "Leaderboard" },
-  { route: "friends",   label: "Friends" },
+  { route: "portfolio", label: "Portfolio", icon: "📊" },
+  { route: "stocks",    label: "Markets",   icon: "📈" },
+  { route: "news",      label: "News",      icon: "📰" },
+  { route: "chat",      label: "Coach Chat", icon: "💬" },
+  { route: "crash-replay", label: "Time Travel", icon: "⏱" },
+  { route: "leaderboard",  label: "Leaderboard", icon: "🏆" },
+  { route: "friends",   label: "Friends",   icon: "👥" },
+  { route: "report-card", label: "Report Card", icon: "📋" },
 ];
 
 const LINKS_PUBLIC = [
-  { route: "chat",         label: "Coach Chat" },
-  { route: "crash-replay", label: "Time Travel" },
-  { route: "news",         label: "News" },
+  { route: "chat",         label: "Coach Chat", icon: "💬" },
+  { route: "crash-replay", label: "Time Travel", icon: "⏱" },
+  { route: "news",         label: "News",       icon: "📰" },
 ];
+
+// Keep only the most important 5 in the top bar on desktop to prevent overflow
+const DESKTOP_TOP5_AUTH = ["portfolio", "stocks", "news", "chat", "crash-replay"];
 
 export function mountNav() {
   const root = document.getElementById("nav-root");
@@ -32,28 +36,43 @@ export function mountNav() {
   subscribe(render);
   window.addEventListener("hashchange", render);
 
-  // Click-outside closes dropdown
+  // Click-outside closes user dropdown
   document.addEventListener("click", (e) => {
     const dd = root.querySelector(".dropdown");
     if (dd && !dd.contains(e.target)) dd.classList.remove("open");
+    const drawer = document.getElementById("nav-drawer");
+    if (drawer?.classList.contains("open") &&
+        !drawer.querySelector(".nav-drawer-panel").contains(e.target) &&
+        !e.target.closest(".nav-burger")) {
+      closeDrawer();
+    }
   });
+
+  // Close drawer on escape + on hashchange
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDrawer();
+  });
+  window.addEventListener("hashchange", closeDrawer);
 
   function render() {
     const state = getState();
     const active = currentRoute().name;
-    const links = state.isAuthed ? LINKS_AUTH : LINKS_PUBLIC;
+    const allLinks = state.isAuthed ? LINKS_AUTH : LINKS_PUBLIC;
+    const topLinks = state.isAuthed
+      ? allLinks.filter(l => DESKTOP_TOP5_AUTH.includes(l.route))
+      : allLinks;
     const pfValue = state.isAuthed ? (state.portfolio.cashPaise + computeHoldingsValue(state)) : 0;
     const ms = marketStatus();
 
     root.innerHTML = `
       <div class="nav-inner">
-        <a href="${state.isAuthed ? "#/portfolio" : "#/"}" class="brand-logo" aria-label="StockSaathi">
+        <a href="${state.isAuthed ? "#/portfolio" : "#/"}" class="brand-logo" aria-label="StockSaathi home">
           <span class="logo-mark">SS</span>
           <span>StockSaathi</span>
         </a>
 
-        <nav class="nav-links" aria-label="Main">
-          ${links.map(l => `
+        <nav class="nav-links" aria-label="Main navigation">
+          ${topLinks.map(l => `
             <a href="#/${l.route}" class="nav-link ${active === l.route ? "active" : ""}">${l.label}</a>
           `).join("")}
         </nav>
@@ -86,9 +105,17 @@ export function mountNav() {
             <a href="#/login" class="btn btn-ghost btn-sm">Log in</a>
             <a href="#/register" class="btn btn-primary btn-sm">Sign up</a>
           `}
+          <button class="nav-burger" aria-label="Open menu" id="nav-burger-btn">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M4 7h16M4 12h16M4 17h16"/>
+            </svg>
+          </button>
         </div>
       </div>
     `;
+
+    ensureDrawer();
+    renderDrawer(state, allLinks, active, pfValue, ms);
 
     const avatar = root.querySelector("#user-avatar");
     const dd = root.querySelector("#user-dd");
@@ -102,11 +129,115 @@ export function mountNav() {
       switchUser();
       navigate("/");
     });
+    root.querySelector("#nav-burger-btn")?.addEventListener("click", openDrawer);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Mobile drawer
+// ---------------------------------------------------------------------------
+
+function ensureDrawer() {
+  if (document.getElementById("nav-drawer")) return;
+  const drawer = document.createElement("div");
+  drawer.id = "nav-drawer";
+  drawer.className = "nav-drawer";
+  drawer.setAttribute("role", "dialog");
+  drawer.setAttribute("aria-modal", "true");
+  drawer.setAttribute("aria-hidden", "true");
+  drawer.innerHTML = `
+    <div class="nav-drawer-backdrop" data-close></div>
+    <div class="nav-drawer-panel"></div>
+  `;
+  document.body.appendChild(drawer);
+  drawer.querySelector("[data-close]").addEventListener("click", closeDrawer);
+}
+
+function renderDrawer(state, allLinks, active, pfValue, ms) {
+  const drawer = document.getElementById("nav-drawer");
+  if (!drawer) return;
+  const panel = drawer.querySelector(".nav-drawer-panel");
+  panel.innerHTML = `
+    <div class="drawer-head">
+      <div class="brand-logo">
+        <span class="logo-mark">SS</span>
+        <span>StockSaathi</span>
+      </div>
+      <button class="btn btn-ghost btn-icon" aria-label="Close menu" data-close-drawer>✕</button>
+    </div>
+
+    ${state.isAuthed ? `
+      <div class="drawer-stat">
+        <div class="muted text-xs" style="text-transform: uppercase; letter-spacing: 0.05em;">Portfolio</div>
+        <div class="val">${formatRupees(pfValue, { compact: true })}</div>
+        <div class="text-xs ${ms.open ? "up" : "muted"}" style="margin-top: 4px;">
+          ${ms.open ? "● Market open" : "○ Market closed"} · ${ms.istTime}
+        </div>
+      </div>
+    ` : ""}
+
+    <div class="drawer-section">Navigate</div>
+    ${allLinks.map(l => `
+      <a href="#/${l.route}" class="drawer-link ${active === l.route ? "active" : ""}" data-close-on-click>
+        <span>${l.icon} ${l.label}</span>
+        <span class="muted">›</span>
+      </a>
+    `).join("")}
+
+    ${state.isAuthed ? `
+      <div class="drawer-divider"></div>
+      <div class="drawer-section">${escapeHtml(state.user.displayName || state.user.username || "")}</div>
+      <a href="#/settings" class="drawer-link" data-close-on-click>
+        <span>⚙️ Settings</span>
+        <span class="muted">›</span>
+      </a>
+      <button class="drawer-link" id="drawer-logout" style="text-align: left; color: var(--negative);">
+        <span>↪ Log out</span>
+      </button>
+    ` : `
+      <div class="drawer-divider"></div>
+      <a href="#/login" class="drawer-link" data-close-on-click>
+        <span>Log in</span>
+        <span class="muted">›</span>
+      </a>
+      <a href="#/register" class="drawer-link" data-close-on-click style="color: var(--brand);">
+        <span>Create account</span>
+        <span class="muted">›</span>
+      </a>
+    `}
+  `;
+
+  panel.querySelectorAll("[data-close-on-click]").forEach(el =>
+    el.addEventListener("click", closeDrawer)
+  );
+  panel.querySelector("[data-close-drawer]")?.addEventListener("click", closeDrawer);
+  panel.querySelector("#drawer-logout")?.addEventListener("click", () => {
+    logoutAccount();
+    switchUser();
+    closeDrawer();
+    navigate("/");
+  });
+}
+
+function openDrawer() {
+  const drawer = document.getElementById("nav-drawer");
+  if (!drawer) return;
+  drawer.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  document.body.classList.add("scroll-lock");
+}
+function closeDrawer() {
+  const drawer = document.getElementById("nav-drawer");
+  if (!drawer) return;
+  drawer.classList.remove("open");
+  drawer.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("scroll-lock");
+}
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
 function computeHoldingsValue(state) {
-  // Lazy dep; using avg cost as conservative proxy — real numbers come from state.js
   let total = 0;
   for (const [sym, h] of Object.entries(state.holdings || {})) {
     total += Math.round(h.qty * h.avgCostPaise);
