@@ -23,7 +23,7 @@ HOSTS = [
 ]
 
 MAX_SYMBOLS = 60
-WORKERS = 20
+WORKERS = 40   # higher concurrency — one thread per symbol so tail latency = slowest single call
 
 
 def fetch_one(symbol):
@@ -36,7 +36,7 @@ def fetch_one(symbol):
                 "Accept": "application/json,text/plain,*/*",
                 "Accept-Language": "en-US,en;q=0.9",
             })
-            with urllib.request.urlopen(req, timeout=6) as r:
+            with urllib.request.urlopen(req, timeout=3.5) as r:
                 data = json.loads(r.read())
             result = (data.get("chart") or {}).get("result") or [{}]
             if not result:
@@ -75,7 +75,7 @@ class handler(BaseHTTPRequestHandler):
         quotes = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as ex:
             fut = {ex.submit(fetch_one, s): s for s in syms}
-            for f in concurrent.futures.as_completed(fut, timeout=20):
+            for f in concurrent.futures.as_completed(fut, timeout=9):
                 s = fut[f]
                 try:
                     quotes[s] = f.result()

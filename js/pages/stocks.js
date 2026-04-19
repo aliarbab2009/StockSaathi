@@ -16,9 +16,6 @@ export function renderStocks(main) {
   let cancelled = false;
   let pollUnsub = null;
 
-  // Live polling for top 50 symbols — every 10s for snappy feel
-  const topSyms = STOCKS.slice(0, 50).map(s => s.symbol);
-
   // Prefill from in-memory + localStorage cache SYNCHRONOUSLY so the very first
   // paint already shows last-known real prices (not universe placeholders).
   const allSyms = INSTRUMENTS.map(i => i.symbol);
@@ -29,8 +26,27 @@ export function renderStocks(main) {
   const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Background refresh — 10s polling keeps prices fresh after the instant paint
-  pollUnsub = subscribeToQuotes(topSyms, (quotes) => {
+  // Two-wave fetch: top-20 lands fast (≤4s), then the rest in background.
+  const wave1 = STOCKS.slice(0, 20).map(s => s.symbol);
+  const wave2 = STOCKS.slice(20, 50).map(s => s.symbol);
+
+  (async () => {
+    try {
+      const q1 = await getQuoteBatch(wave1);
+      if (cancelled) return;
+      quoteCache = { ...quoteCache, ...q1 };
+      render();
+    } catch {}
+    try {
+      const q2 = await getQuoteBatch(wave2);
+      if (cancelled) return;
+      quoteCache = { ...quoteCache, ...q2 };
+      render();
+    } catch {}
+  })();
+
+  // Then 10s polling over all top-50 to keep fresh
+  pollUnsub = subscribeToQuotes([...wave1, ...wave2], (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
     render();

@@ -19,8 +19,8 @@ import { getState } from "../state.js";
 const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
-const QUOTE_PERSIST_KEY = "ss.quotes.v1";
-const PERSIST_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // 6h max for stale-on-load
+const QUOTE_PERSIST_KEY = "ss.quotes.v2";
+const PERSIST_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;   // 14 days — weekends/holidays must still paint
 
 const _quoteCache = new Map();
 const _historyCache = new Map();
@@ -33,10 +33,14 @@ function loadPersistedQuotes() {
     if (!raw) return;
     const obj = JSON.parse(raw);
     const now = Date.now();
-    for (const [sym, data] of Object.entries(obj)) {
-      if (!data?.ts || now - data.ts > PERSIST_MAX_AGE_MS) continue;
-      // Mark as stale on load so UI can show "Updated Xs ago"
-      _quoteCache.set(sym, { data: { ...data, stale: true }, ts: data.ts });
+    for (const [sym, entry] of Object.entries(obj)) {
+      // entry = { data: {...quote}, savedAt: ms }  (new format)
+      const data = entry?.data || entry;   // back-compat
+      const savedAt = entry?.savedAt || data?.ts;
+      if (!data || !savedAt) continue;
+      if (now - savedAt > PERSIST_MAX_AGE_MS) continue;
+      // Mark as stale on load so UI can show a soft indicator
+      _quoteCache.set(sym, { data: { ...data, stale: true }, ts: savedAt });
     }
   } catch {}
 }
@@ -49,8 +53,9 @@ function persistSoon() {
     _persistTimer = null;
     try {
       const obj = {};
+      const now = Date.now();
       for (const [sym, entry] of _quoteCache.entries()) {
-        if (entry.data) obj[sym] = entry.data;
+        if (entry.data) obj[sym] = { data: entry.data, savedAt: now };
       }
       localStorage.setItem(QUOTE_PERSIST_KEY, JSON.stringify(obj));
     } catch {}
