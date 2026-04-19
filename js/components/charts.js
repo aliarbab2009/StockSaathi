@@ -152,8 +152,8 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
     const py = toY(panic[currentIndex]);
     scrubber = `
       <line x1="${x}" x2="${x}" y1="${paddingTop}" y2="${paddingTop + plotH}" stroke="var(--brand)" stroke-dasharray="3 3" stroke-width="1" opacity="0.6" />
-      <circle cx="${x}" cy="${hy}" r="5" fill="var(--green)" stroke="var(--bg-1)" stroke-width="2" />
-      <circle cx="${x}" cy="${py}" r="5" fill="var(--red)" stroke="var(--bg-1)" stroke-width="2" />
+      <circle cx="${x}" cy="${hy}" r="5" fill="var(--positive)" stroke="var(--bg)" stroke-width="2" />
+      <circle cx="${x}" cy="${py}" r="5" fill="var(--negative)" stroke="var(--bg)" stroke-width="2" />
     `;
   }
 
@@ -164,31 +164,31 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" aria-hidden="true">
       <defs>
         <linearGradient id="heldFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="var(--green)" stop-opacity="0.25" />
-          <stop offset="100%" stop-color="var(--green)" stop-opacity="0" />
+          <stop offset="0%" stop-color="var(--positive)" stop-opacity="0.25" />
+          <stop offset="100%" stop-color="var(--positive)" stop-opacity="0" />
         </linearGradient>
         <linearGradient id="panicFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="var(--red)" stop-opacity="0.2" />
-          <stop offset="100%" stop-color="var(--red)" stop-opacity="0" />
+          <stop offset="0%" stop-color="var(--negative)" stop-opacity="0.2" />
+          <stop offset="100%" stop-color="var(--negative)" stop-opacity="0" />
         </linearGradient>
       </defs>
       <g class="chart-grid">${gridLines}</g>
-      <line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${startY}" y2="${startY}" stroke="var(--text-3)" stroke-dasharray="4 4" stroke-width="1" opacity="0.6" />
+      <line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${startY}" y2="${startY}" stroke="var(--text-faint)" stroke-dasharray="4 4" stroke-width="1" opacity="0.6" />
       <text class="chart-axis-label" x="${width - paddingRight}" y="${startY - 4}" text-anchor="end">Start: ₹${formatAxisNumber(held[0])}</text>
 
       <path d="${heldPath} L${toX(held.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z" fill="url(#heldFill)" />
       <path d="${panicPath} L${toX(panic.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z" fill="url(#panicFill)" />
-      <path d="${heldPath.trim()}" fill="none" stroke="var(--green)" stroke-width="2.5" />
-      <path d="${panicPath.trim()}" fill="none" stroke="var(--red)" stroke-width="2.5" stroke-dasharray="4 3" />
+      <path d="${heldPath.trim()}" fill="none" stroke="var(--positive)" stroke-width="2.5" />
+      <path d="${panicPath.trim()}" fill="none" stroke="var(--negative)" stroke-width="2.5" stroke-dasharray="4 3" />
 
       ${scrubber}
       ${yLabels}
 
       <g>
-        <circle cx="${paddingLeft + 8}" cy="${paddingTop - 4}" r="5" fill="var(--green)" />
-        <text x="${paddingLeft + 20}" y="${paddingTop}" class="chart-axis-label" fill="var(--text-1)">If you held</text>
-        <circle cx="${paddingLeft + 110}" cy="${paddingTop - 4}" r="5" fill="var(--red)" />
-        <text x="${paddingLeft + 122}" y="${paddingTop}" class="chart-axis-label" fill="var(--text-1)">If you panic-sold</text>
+        <circle cx="${paddingLeft + 8}" cy="${paddingTop - 4}" r="5" fill="var(--positive)" />
+        <text x="${paddingLeft + 20}" y="${paddingTop}" class="chart-axis-label" fill="var(--text-muted)">If you held</text>
+        <circle cx="${paddingLeft + 110}" cy="${paddingTop - 4}" r="5" fill="var(--negative)" />
+        <text x="${paddingLeft + 122}" y="${paddingTop}" class="chart-axis-label" fill="var(--text-muted)">If you panic-sold</text>
       </g>
     </svg>
   `;
