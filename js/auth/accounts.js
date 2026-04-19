@@ -80,11 +80,15 @@ export async function registerAccount({ username, email, password, displayName }
       },
     });
     if (error) throw new Error(prettifySbError(error.message));
-    // The trigger handle_new_user() creates the profile + portfolio automatically.
-    // But the SDK may return user without a session if email-confirmation is on.
-    // For fastest onboarding, we rely on auto-confirm (dashboard setting). If not
-    // auto-confirmed, the user will need to click a confirmation link.
-    return { id: data.user?.id, username, email, displayName };
+    // If Supabase email-confirmation is ON, data.session is null — user is
+    // created but not logged in. The caller branches on needsConfirmation.
+    const hasSession = !!data.session;
+    return {
+      id: data.user?.id,
+      username, email, displayName,
+      hasSession,
+      needsConfirmation: !hasSession,
+    };
   }
 
   // Fallback: local mode
