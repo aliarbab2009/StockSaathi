@@ -15,9 +15,9 @@ import { getSeries as synthSeries, getPriceAt as synthPriceAt } from "./prices.j
 import { getInstrument } from "./universe.js";
 import { getState } from "../state.js";
 
-const QUOTE_TTL_MS = 30_000;
-const HISTORY_TTL_MS = 15 * 60_000;
-const FETCH_TIMEOUT_MS = 8_000;
+const QUOTE_TTL_MS = 15_000;          // 15s cache — tight so prices feel live
+const HISTORY_TTL_MS = 10 * 60_000;
+const FETCH_TIMEOUT_MS = 10_000;
 
 const _quoteCache = new Map();
 const _historyCache = new Map();
@@ -223,7 +223,7 @@ function fetchJsonWithTimeout(url, options = {}) {
   });
 }
 
-export function subscribeToQuotes(symbols, onUpdate, intervalMs = 45_000) {
+export function subscribeToQuotes(symbols, onUpdate, intervalMs = 15_000) {
   if (!symbols?.length) return () => {};
   let cancelled = false;
   async function tick() {
@@ -235,4 +235,10 @@ export function subscribeToQuotes(symbols, onUpdate, intervalMs = 45_000) {
   tick();
   const h = setInterval(tick, intervalMs);
   return () => { cancelled = true; clearInterval(h); };
+}
+
+/** Milliseconds since a quote was fetched — for "updated Xs ago" UI. */
+export function quoteAge(quote) {
+  if (!quote?.ts) return null;
+  return Date.now() - quote.ts;
 }

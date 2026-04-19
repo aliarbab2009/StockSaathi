@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 from collections import defaultdict, deque
 
 
-CHAT_RATE_PER_HOUR = int(os.environ.get("CHAT_RATE_PER_HOUR", "120"))
+CHAT_RATE_PER_HOUR = int(os.environ.get("CHAT_RATE_PER_HOUR", "100000"))
 _rate_lock = threading.Lock()
 _chat_bucket = defaultdict(deque)
 

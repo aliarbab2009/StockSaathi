@@ -38,7 +38,8 @@ const GLOBAL_SETTINGS_KEY = "ss.settings.v1";
 const GLOBAL_SETTINGS_DEFAULTS = {
   theme: "light",
   hinglish: false,
-  coachPanelOpen: true,
+  coachPanelOpen: false,  // Closed by default; user opens via FAB. Prevents
+                          // mobile overlay from blocking signup/CTAs.
   anthropicKey: "",
   finnhubKey: "",
   emailjs: { serviceId: "", templateId: "", publicKey: "" },

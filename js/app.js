@@ -8,6 +8,7 @@ import { mountCoachPanel } from "./components/coachPanel.js";
 import { mountRouter } from "./router.js";
 import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
 import { bootSync } from "./db/sync.js";
+import { startLimitMatcher } from "./features/limitOrders.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -23,12 +24,14 @@ mountNav();
 mountCoachPanel();
 mountRouter();
 
-// If Supabase is configured, boot cross-device sync in the background
+// If Supabase is configured, boot cross-device sync + start the limit-order
+// matcher in the background (only ticks when the user is authed + online).
 (async () => {
   try {
     await refreshCurrentUser();
     await bootSync();
     switchUser();
+    startLimitMatcher();
   } catch (e) { console.warn("Supabase boot skipped:", e); }
 })();
 

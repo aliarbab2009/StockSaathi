@@ -20,13 +20,13 @@ export function renderStocks(main) {
   const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Kick off live polling for top 40 symbols — updates every 20s
-  const topSyms = STOCKS.slice(0, 40).map(s => s.symbol);
+  // Live polling for top 50 symbols — every 15s for snappy feel
+  const topSyms = STOCKS.slice(0, 50).map(s => s.symbol);
   pollUnsub = subscribeToQuotes(topSyms, (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
     render();
-  }, 20_000);
+  }, 15_000);
 
   function render() {
     const state = getState();

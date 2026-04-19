@@ -65,7 +65,7 @@ def send_via_smtp(to_email, subject, body):
 
 def send_via_resend(to_email, subject, body):
     key = os.environ.get("RESEND_API_KEY")
-    sender = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+    sender = os.environ.get("RESEND_FROM", "StockSaathi <accounts@stocksaathi.co.in>")
     if not key:
         return {"ok": False, "reason": "resend_not_configured"}
     payload = json.dumps({
@@ -151,7 +151,7 @@ def consent_body(teen, parent_email, token, consent_url):
 
 def send_email(to_email, subject, body, token=None, teen=None, consent_url=None, relayed=False):
     attempts = []
-    # Resend first on Vercel (outbound SMTP sometimes blocked in serverless)
+    # Resend first: authentic from accounts@stocksaathi.co.in once verified.
     if os.environ.get("RESEND_API_KEY"):
         r = send_via_resend(to_email, subject, body)
         if r.get("ok"): return r

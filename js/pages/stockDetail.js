@@ -4,7 +4,8 @@
 // =============================================================================
 
 import { getInstrument } from "../data/universe.js";
-import { getQuote, getHistory, subscribeToQuotes } from "../data/marketData.js";
+import { getQuote, getHistory, subscribeToQuotes, quoteAge } from "../data/marketData.js";
+import { placeLimitOrder } from "../features/limitOrders.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange } from "../data/prices.js";
 import { candleChart, lineChart } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
@@ -20,7 +21,7 @@ import { toast } from "../components/toast.js";
 
 const TF_MAP = { "1W": { range: "5d", interval: "1d", days: 5 }, "1M": { range: "1mo", interval: "1d", days: 22 }, "3M": { range: "3mo", interval: "1d", days: 66 }, "6M": { range: "6mo", interval: "1d", days: 130 }, "1Y": { range: "1y", interval: "1d", days: 260 } };
 
-let ui = { side: "BUY", qty: 1, timeframe: "1M" };
+let ui = { side: "BUY", qty: 1, timeframe: "1M", orderType: "MARKET", limitPrice: 0 };
 let liveQuote = null;
 let liveHistory = null;
 let qtySelectorHandle = null;
@@ -39,7 +40,7 @@ export function renderStockDetail(main, params) {
   _cancelToken = { cancelled: false };
   const myToken = _cancelToken;
 
-  ui = { side: "BUY", qty: inst.kind === "MF" ? 0.5 : 1, timeframe: "1M" };
+  ui = { side: "BUY", qty: inst.kind === "MF" ? 0.5 : 1, timeframe: "1M", orderType: "MARKET", limitPrice: 0 };
   liveQuote = null;
   liveHistory = null;
   qtySelectorHandle?.destroy?.();
@@ -170,6 +171,25 @@ function render(inst, symbol) {
             <button class="trade-tab sell ${ui.side === "SELL" ? "active" : ""}" data-side="SELL">Sell</button>
           </div>
 
+          <div class="lb-tabs" style="margin-bottom: var(--sp-3); width: 100%;">
+            <button class="lb-tab ${ui.orderType === "MARKET" ? "active" : ""}" data-otype="MARKET" style="flex: 1;">Market</button>
+            <button class="lb-tab ${ui.orderType === "LIMIT" ? "active" : ""}" data-otype="LIMIT" style="flex: 1;">Limit</button>
+          </div>
+
+          ${ui.orderType === "LIMIT" ? `
+            <div style="margin-bottom: var(--sp-3);">
+              <label class="label" for="limit-price-input">Limit price (₹)</label>
+              <input class="input" id="limit-price-input" type="number" min="0.01" step="0.05"
+                placeholder="${(curPrice/100).toFixed(2)}"
+                value="${ui.limitPrice || (curPrice/100).toFixed(2)}" inputmode="decimal" />
+              <div class="dim text-xs" style="margin-top: 4px;">
+                ${ui.side === "BUY"
+                  ? "Fires when market price drops to this level or lower."
+                  : "Fires when market price rises to this level or higher."}
+              </div>
+            </div>
+          ` : ""}
+
           ${holding ? `
             <div class="pill pill-brand" style="margin-bottom: var(--sp-3); font-size: var(--text-xs);">
               Holding: ${formatQty(holding.qty, inst.kind)} @ ${formatRupees(holding.avgCostPaise)} avg
@@ -188,7 +208,7 @@ function render(inst, symbol) {
 
           <button class="btn btn-block ${ui.side === "BUY" ? "btn-buy" : "btn-sell"}" id="place-trade-btn"
             ${ui.side === "SELL" && !holding ? "disabled" : ""}>
-            Review ${ui.side === "BUY" ? "Buy" : "Sell"} order
+            ${ui.orderType === "LIMIT" ? `Place ${ui.side === "BUY" ? "Buy" : "Sell"} limit` : `Review ${ui.side === "BUY" ? "Buy" : "Sell"} order`}
           </button>
 
           <div class="dim text-xs center" style="margin-top: var(--sp-3);">
@@ -234,11 +254,26 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
   main.querySelectorAll("[data-side]").forEach(btn => {
     btn.addEventListener("click", () => {
       ui.side = btn.dataset.side;
-      // Reset qty to sensible default on tab change
       ui.qty = inst.kind === "MF" ? 0.5 : 1;
       render(inst, symbol);
     });
   });
+
+  main.querySelectorAll("[data-otype]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      ui.orderType = btn.dataset.otype;
+      if (ui.orderType === "LIMIT" && !ui.limitPrice) ui.limitPrice = (curPrice / 100).toFixed(2);
+      render(inst, symbol);
+    });
+  });
+
+  const limitInput = main.querySelector("#limit-price-input");
+  if (limitInput) {
+    limitInput.addEventListener("input", (e) => {
+      const v = parseFloat(e.target.value);
+      if (Number.isFinite(v) && v > 0) ui.limitPrice = v;
+    });
+  }
 
   main.querySelector(".watch-btn")?.addEventListener("click", () => {
     if (getState().watchlist.includes(symbol)) removeFromWatchlist(symbol);
@@ -250,13 +285,40 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
   });
 }
 
-function reviewTrade(inst, symbol, curPrice, holding) {
+async function reviewTrade(inst, symbol, curPrice, holding) {
   const qty = qtySelectorHandle?.get?.() ?? ui.qty;
   if (!qty || qty <= 0) { toast({ kind: "error", message: "Enter a valid quantity." }); return; }
   if (ui.side === "SELL" && (!holding || holding.qty < qty - 1e-9)) {
     toast({ kind: "error", message: `You only hold ${holding?.qty || 0}.` });
     return;
   }
+
+  // ---- Limit order path — DB RPC reserves cash and records order --------
+  if (ui.orderType === "LIMIT") {
+    const limitRupees = parseFloat(ui.limitPrice);
+    if (!Number.isFinite(limitRupees) || limitRupees <= 0) {
+      toast({ kind: "error", message: "Enter a valid limit price." });
+      return;
+    }
+    const limitPaise = Math.round(limitRupees * 100);
+    // Basic UX sanity: BUY limit above current price or SELL limit below
+    // current price would fire immediately — still valid, but warn once.
+    const wouldFireNow =
+      (ui.side === "BUY" && curPrice <= limitPaise) ||
+      (ui.side === "SELL" && curPrice >= limitPaise);
+    if (wouldFireNow && !confirm(`Your limit is already ${ui.side === "BUY" ? "above" : "below"} the market (${formatRupees(curPrice)}). The order will fill immediately. Continue?`)) {
+      return;
+    }
+    try {
+      await placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise });
+      toast({ kind: "success", message: `${ui.side} limit placed: ${formatQty(qty, inst.kind)} ${symbol} @ ₹${limitRupees.toFixed(2)}. Fills automatically when market crosses.` });
+    } catch (e) {
+      toast({ kind: "error", message: e.message || "Could not place limit order." });
+    }
+    return;
+  }
+
+  // ---- Market order path — existing flow --------------------------------
   if (ui.side === "BUY" && Math.round(qty * curPrice) > getState().portfolio.cashPaise) {
     toast({ kind: "error", message: "Not enough cash." });
     return;

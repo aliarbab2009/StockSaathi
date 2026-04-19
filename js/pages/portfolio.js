@@ -9,22 +9,39 @@ import {
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import { getInstrument } from "../data/universe.js";
 import { getPriceAt, getTodayChange } from "../data/prices.js";
-import { getQuoteBatch, getDataSource } from "../data/marketData.js";
+import { getQuoteBatch, getDataSource, subscribeToQuotes } from "../data/marketData.js";
+import { listPendingOrders, cancelOrder } from "../features/limitOrders.js";
 import { getNews, fmtRelativeTime, labelSentiment } from "../data/news.js";
 import { areaChart } from "../components/charts.js";
 
 let newsItems = [];
 let quoteCache = {};
+let pendingOrders = [];
 
 export function renderPortfolio(main) {
   let cancelled = false;
+  let pollUnsub = null;
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
-  const onLeave = () => { cancelled = true; unsub?.(); };
+  const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
   refreshData();
+
+  // Poll live quotes for user's holdings every 15s
+  const state0 = getState();
+  const holdingSyms = Object.keys(state0.holdings || {});
+  if (holdingSyms.length) {
+    pollUnsub = subscribeToQuotes(holdingSyms, (q) => {
+      if (cancelled) return;
+      quoteCache = { ...quoteCache, ...q };
+      render();
+    }, 15_000);
+  }
+
+  // Load pending limit orders
+  listPendingOrders().then(o => { if (!cancelled) { pendingOrders = o; render(); } }).catch(() => {});
 
   async function refreshData() {
     const state = getState();
@@ -124,6 +141,29 @@ export function renderPortfolio(main) {
             </div>
             ${holdings.length ? renderHoldingsTable(holdings) : renderEmptyHoldings()}
           </div>
+
+          ${pendingOrders.length ? `
+            <div class="card">
+              <div class="card-head">
+                <h3>Pending limit orders (${pendingOrders.length})</h3>
+              </div>
+              <div class="flex-col gap-2">
+                ${pendingOrders.map(o => {
+                  const inst = getInstrument(o.symbol) || { name: o.symbol };
+                  const limitRupees = Number(o.limit_price_paise) / 100;
+                  return `
+                    <div class="flex items-center justify-between" style="padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);">
+                      <div>
+                        <div class="text-md"><span class="pill ${o.side === "BUY" ? "pill-green" : "pill-red"}">${o.side} LIMIT</span> ${escapeHtml(inst.name)}</div>
+                        <div class="dim text-xs">${o.qty} × ₹${limitRupees.toFixed(2)} · ${timeSince(new Date(o.created_at))} ago</div>
+                      </div>
+                      <button class="btn btn-ghost btn-sm" data-cancel-order="${o.id}">Cancel</button>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            </div>
+          ` : ""}
 
           <div class="card">
             <div class="card-head"><h3>Recent activity</h3></div>

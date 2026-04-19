@@ -41,15 +41,7 @@ RESEND_API_KEY=re_xxxxxxxx
 RESEND_FROM=StockSaathi <accounts@stocksaathi.co.in>
 SUPPORT_EMAIL=accounts@stocksaathi.co.in
 
-# Transactional SMTP (backup if Resend is down)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=465
-SMTP_USER=astro14477ali@gmail.com
-SMTP_PASS=ecgidizlfdajgpma
-SMTP_FROM=StockSaathi <astro14477ali@gmail.com>
-
-# Rate limiting (free tier scale)
-RATE_LIMIT_PER_HOUR=60
+# Rate limits are DISABLED by default (default 100000/hr).
 IS_UPSTREAM=1
 ```
 

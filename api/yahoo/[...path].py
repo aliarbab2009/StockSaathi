@@ -1,10 +1,10 @@
 """GET /api/yahoo/...  —  Server-side Yahoo Finance proxy (CORS-free).
 
-Routes like:
-  /api/yahoo/chart/RELIANCE.NS?interval=1d&range=5d
-→ https://query1.finance.yahoo.com/v8/finance/chart/RELIANCE.NS?interval=1d&range=5d
+Robust against Vercel path quirks via regex. Tries query1 first, query2
+as fallback. Returns JSON matching Yahoo's v8 chart endpoint.
 """
 
+import re
 import json
 import urllib.request
 import urllib.error
@@ -13,25 +13,26 @@ from http.server import BaseHTTPRequestHandler
 
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
-              "Chrome/120.0.0.0 Safari/537.36")
+              "Chrome/125.0.0.0 Safari/537.36")
+
+# Hosts we'll try in order. If one blocks, the next usually works.
+YAHOO_HOSTS = [
+    "https://query1.finance.yahoo.com/v8/finance/chart",
+    "https://query2.finance.yahoo.com/v8/finance/chart",
+]
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # self.path is like '/api/yahoo/chart/RELIANCE.NS?interval=1d&range=5d'
-        p = self.path
-        # Strip '/api/yahoo/' prefix
-        for prefix in ("/api/yahoo/", "/yahoo/"):
-            if p.startswith(prefix):
-                p = p[len(prefix):]
-                break
-
-        # Route: chart/<symbol>
-        if p.startswith("chart/"):
-            self._proxy_chart(p[len("chart/"):])
+        # Extract the chart path from self.path, regardless of how Vercel
+        # presents it. Accepts: /api/yahoo/chart/X, /yahoo/chart/X, /chart/X
+        m = re.search(r"/chart/([^?]+)(\?.*)?$", self.path)
+        if not m:
+            self._json(400, {"error": "bad_path", "path": self.path})
             return
-
-        self._json(404, {"error": "unknown_yahoo_endpoint", "path": p})
+        ticker = m.group(1)
+        query = m.group(2) or ""
+        self._proxy_chart(ticker, query)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -48,25 +49,31 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _proxy_chart(self, rest):
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{rest}"
-        req = urllib.request.Request(url, headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json,text/plain,*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                body = r.read()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "public, max-age=45")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-        except urllib.error.HTTPError as e:
-            self._json(e.code if 400 <= e.code < 600 else 502,
-                       {"error": "yahoo_http", "status": e.code, "detail": str(e)})
-        except Exception as e:
-            self._json(502, {"error": "yahoo_unreachable", "detail": str(e)})
+    def _proxy_chart(self, ticker, query):
+        last_err = None
+        for base in YAHOO_HOSTS:
+            url = f"{base}/{ticker}{query}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    body = r.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=30")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            except urllib.error.HTTPError as e:
+                last_err = {"status": e.code, "detail": str(e)}
+                continue
+            except Exception as e:
+                last_err = {"detail": str(e)}
+                continue
+        # all hosts failed
+        self._json(502, {"error": "yahoo_unreachable", "last": last_err})

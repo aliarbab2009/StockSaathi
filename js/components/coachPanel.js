@@ -1,7 +1,7 @@
 // =============================================================================
-// COACH PANEL — Interactive chat + coach reflections. Right-docked on desktop.
-// Uses Claude (if API key in settings) or a smart template matcher grounded in
-// the user's actual portfolio and latest news.
+// COACH PANEL — Interactive chat. Right-docked on desktop, FAB + slide-over
+// on mobile. Hidden entirely on public routes (landing/login/register) so it
+// never overlays the signup CTAs on phones.
 // =============================================================================
 
 import { getState, subscribe, setSetting } from "../state.js";
@@ -15,7 +15,22 @@ const CHAT_LOG_KEY = "ss.coachchat.v1";
 
 let chatHistory = loadChat();
 let pending = false;
-let newsSnap = [];   // latest news cache
+let newsSnap = [];
+let root;
+let fab;
+
+// Routes where the coach panel + FAB are completely hidden
+const COACH_HIDDEN_ROUTES = new Set(["", "/", "/login", "/register"]);
+
+function isCoachAllowed() {
+  const state = getState();
+  if (!state.isAuthed) return false;
+  const hash = (location.hash.slice(1) || "/").split("?")[0];
+  if (COACH_HIDDEN_ROUTES.has(hash)) return false;
+  return true;
+}
+
+const SAATHI_SYSTEM = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.`;
 
 function loadChat() {
   try { const raw = localStorage.getItem(CHAT_LOG_KEY); return raw ? JSON.parse(raw) : []; }
@@ -33,23 +48,6 @@ function smartTemplateReply(userText, state) {
   });
 }
 
-async function callClaudeAgent(apiKey, history, state) {
-  // Fast path: obvious off-topic asks don't burn tokens
-  const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
-  if (isOffTopic(lastUser)) return offTopicRedirect(lastUser);
-
-  const portfolioSummary = summarisePortfolio(state);
-  const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
-  const system = `${SYSTEM_PROMPT}\n\n# RUNTIME CONTEXT\n## User portfolio snapshot\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, the market right now, or their portfolio. Never guess prices or numbers — always call the tool.`;
-
-  const messages = history.slice(-12).map(m => ({
-    role: m.role === "user" ? "user" : "assistant",
-    content: m.text,
-  }));
-
-  return await runAgent({ apiKey, system, messages });
-}
-
 function summarisePortfolio(state) {
   if (!state?.holdings) return "Not logged in.";
   const syms = Object.keys(state.holdings);
@@ -61,23 +59,35 @@ function summarisePortfolio(state) {
   return `Cash: ${formatRupees(state.portfolio.cashPaise, { compact: true })}\nHoldings (${syms.length}): ${lines.join(", ")}`;
 }
 
-// -----------------------------------------------------------------------------
-// Mount
-// -----------------------------------------------------------------------------
-let root;
+async function callClaudeAgent(apiKey, history, state) {
+  const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
+  if (isOffTopic(lastUser)) return offTopicRedirect(lastUser);
 
+  const portfolioSummary = summarisePortfolio(state);
+  const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
+  const system = `${SAATHI_SYSTEM}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}`;
+
+  const messages = history.slice(-12).map(m => ({
+    role: m.role === "user" ? "user" : "assistant",
+    content: m.text,
+  }));
+  return await runAgent({ apiKey, system, messages });
+}
+
+// -----------------------------------------------------------------------------
 export function mountCoachPanel() {
   root = document.getElementById("coach-root");
   if (!root) return;
 
-  // Pre-fetch news once at mount for context
+  // Pre-fetch news (best-effort) for chat context
   getNews({ limit: 12 }).then(items => { newsSnap = items || []; render(); }).catch(() => {});
 
   render();
   subscribe(render);
+  window.addEventListener("hashchange", render);
 
-  // FAB for mobile
-  const fab = document.createElement("button");
+  // FAB — only present when the coach is allowed on this route
+  fab = document.createElement("button");
   fab.className = "coach-fab";
   fab.setAttribute("aria-label", "Open coach");
   fab.innerHTML = `<span>💬</span>`;
@@ -86,8 +96,17 @@ export function mountCoachPanel() {
   });
   document.body.appendChild(fab);
 
-  const applyDock = () => {
+  const applyVisibility = () => {
+    const allowed = isCoachAllowed();
     const state = getState();
+    fab.style.display = allowed ? "" : "none";
+    if (!allowed) {
+      document.body.classList.remove("coach-docked");
+      root.classList.remove("open");
+      root.style.display = "none";
+      return;
+    }
+    root.style.display = "";
     if (window.innerWidth >= 1280 && state.settings.coachPanelOpen) {
       document.body.classList.add("coach-docked");
     } else {
@@ -95,9 +114,10 @@ export function mountCoachPanel() {
       root.classList.toggle("open", state.settings.coachPanelOpen);
     }
   };
-  applyDock();
-  window.addEventListener("resize", applyDock);
-  subscribe(applyDock);
+  applyVisibility();
+  window.addEventListener("resize", applyVisibility);
+  window.addEventListener("hashchange", applyVisibility);
+  subscribe(applyVisibility);
 }
 
 function render() {
@@ -112,7 +132,7 @@ function render() {
         <div class="coach-avatar-sm">SS</div>
         <div>
           <div style="font-size: var(--text-md);">Saathi</div>
-          <div class="dim" style="font-size: 11px; font-weight: 400;">${usingLLM ? "Claude-powered · finance only" : "Finance coach · template mode"}</div>
+          <div class="dim" style="font-size: 11px; font-weight: 400;">${usingLLM ? "Your key · finance only" : "Server LLM · finance only"}</div>
         </div>
       </div>
       <button class="btn btn-ghost btn-icon" id="coach-close-btn" aria-label="Close coach">✕</button>
@@ -123,16 +143,15 @@ function render() {
     </div>
 
     <form class="coach-chat-input" id="coach-form" autocomplete="off">
-      <input id="coach-input" placeholder="Ask about SIPs, P/E, crashes..." maxlength="300" ${pending ? "disabled" : ""} />
+      <input id="coach-input" placeholder="Ask about any stock, crypto, or concept…" maxlength="300" ${pending ? "disabled" : ""} />
       <button type="submit" id="coach-send" ${pending ? "disabled" : ""}>${pending ? "…" : "Send"}</button>
     </form>
 
     <div class="coach-footer">
-      ${usingLLM ? "<span class=\"pill-brand\">● Grounded in your portfolio + news</span>" : "Add Anthropic key in Settings for Claude-powered replies"}
+      Grounded in live prices + your portfolio + real news
     </div>
   `;
 
-  // Scroll to bottom of messages
   const ms = root.querySelector("#coach-messages-scroll");
   if (ms) ms.scrollTop = ms.scrollHeight;
 
@@ -143,7 +162,7 @@ function render() {
   const form = root.querySelector("#coach-form");
   form?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    e.stopPropagation();          // don't let submit bubble anywhere weird
+    e.stopPropagation();
     const input = root.querySelector("#coach-input");
     const text = input.value.trim();
     if (!text || pending) return;
@@ -155,9 +174,6 @@ function render() {
 
     const s = getState();
     let reply = null;
-
-    // REAL LLM agent with tool-use. Tries user's key first, then backend proxy,
-    // then (only if both fail) falls back to template matcher.
     try {
       reply = await callClaudeAgent(s.settings.anthropicKey || null, chatHistory, s);
     } catch (e) { console.warn("agent:", e); }
@@ -173,21 +189,14 @@ function render() {
 }
 
 function renderMessagesHtml(state) {
-  // Combine user chat history + recent coach trade reflections
   const trade = (state.coachMessages || []).slice(-5).map(m => ({
-    role: "assistant",
-    text: m.payload?.reflection || "",
-    context: m.payload?.historical_context,
-    question: m.payload?.suggested_q,
-    warning: m.payload?.warning_level,
-    citations: m.payload?.citations || [],
-    symbol: m.triggerSymbol,
-    ts: m.ts,
-    isTrade: true,
+    role: "assistant", text: m.payload?.reflection || "",
+    context: m.payload?.historical_context, question: m.payload?.suggested_q,
+    warning: m.payload?.warning_level, citations: m.payload?.citations || [],
+    symbol: m.triggerSymbol, ts: m.ts, isTrade: true,
   })).filter(m => m.text);
 
   const chat = chatHistory.slice(-20).map(m => ({ ...m, isTrade: false }));
-
   const all = [...trade, ...chat].sort((a, b) => a.ts - b.ts).slice(-25);
 
   if (!all.length && !pending) {
@@ -195,7 +204,7 @@ function renderMessagesHtml(state) {
       <div class="coach-empty">
         <span class="emoji">🎓</span>
         <div class="font-semi" style="color: var(--text-strong); font-size: var(--text-md);">Hi — I'm Saathi</div>
-        <div class="text-sm">I talk about one thing: money. Ask me about SIPs, crashes, valuations, taxes, behavioral traps, or anything finfluencer-adjacent. I explain — I don't give tips.</div>
+        <div class="text-sm">I talk about one thing: money. Ask me any stock or crypto price, any concept, or a trade you're thinking about. I explain — I don't give tips.</div>
         <div class="flex-col gap-2" style="margin-top: var(--sp-3); width: 100%;">
           ${STARTER_QUESTIONS.slice(0, 4).map(q =>
             `<button type="button" class="filter-pill" data-suggest="${escapeAttr(q)}" style="text-align: left; font-size: 11px;">💬 ${escapeHtml(q)}</button>`
@@ -208,8 +217,7 @@ function renderMessagesHtml(state) {
   setTimeout(() => {
     root?.querySelectorAll("[data-suggest]").forEach(btn => {
       btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         const input = root.querySelector("#coach-input");
         if (input) { input.value = btn.dataset.suggest; input.focus(); }
       });
