@@ -29,7 +29,7 @@ const DEFAULT_STATE = () => ({
   badges: [],
   profile: {
     riskProfile: null, school: null, classCode: null, age: null,
-    parentEmail: null, parentConsentAt: null, onboarded: false,
+    onboarded: false,
   },
   demo: { crashReplayCompleted: [], firstTradeDone: false },
 });
@@ -115,8 +115,6 @@ export function getState() {
       school: user?.school ?? us.profile.school,
       classCode: user?.classCode ?? us.profile.classCode,
       riskProfile: user?.riskProfile ?? us.profile.riskProfile,
-      parentEmail: user?.parentEmail ?? us.profile.parentEmail,
-      parentConsentAt: user?.parentConsentAt ?? us.profile.parentConsentAt,
       onboarded: user?.onboarded ?? us.profile.onboarded,
       createdAt: user?.createdAt || null,
     },
@@ -171,8 +169,6 @@ function applyFullPatch(full, prev) {
         school: full.user?.school ?? _userState.profile.school,
         classCode: full.user?.classCode ?? _userState.profile.classCode,
         age: full.user?.age ?? _userState.profile.age,
-        parentEmail: full.user?.parentEmail ?? _userState.profile.parentEmail,
-        parentConsentAt: full.user?.parentConsentAt ?? _userState.profile.parentConsentAt,
         onboarded: full.user?.onboarded ?? _userState.profile.onboarded,
       },
       demo: full.demo ?? _userState.demo,

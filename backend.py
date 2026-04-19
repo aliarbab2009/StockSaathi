@@ -252,36 +252,6 @@ def send_email(to_email, subject, body, token=None, teen=None, consent_url=None,
 # HTTP handler
 # --------------------------------------------------------------------------
 
-def consent_body(teen, parent_email, token, consent_url):
-    lines = [
-        "Hi,",
-        "",
-        f"{teen} is signing up for StockSaathi - a virtual-money investing simulator",
-        "designed for Indian teens aged 13-18. Because they're under 18, we need your",
-        "consent before they can begin.",
-        "",
-        "What StockSaathi is:",
-        "  - A virtual Rs.1,00,000 portfolio. NO real money, NO real trades.",
-        "  - Real Indian stock prices for learning.",
-        "  - An AI coach that reflects on decisions - never recommends trades.",
-        "",
-        f"Your consent code: {token}",
-        "",
-    ]
-    if consent_url:
-        lines.append(f"To approve, share this code with {teen}, or visit: {consent_url}")
-    else:
-        lines.append(f"To approve, read this code to {teen} - they enter it to proceed.")
-    lines += [
-        "",
-        "This code expires in 7 days. If you did not expect this email, ignore it.",
-        "",
-        "- StockSaathi",
-        "(Built for the Masters' Union AI Buildathon 2026. No funds at risk.)",
-    ]
-    return "\n".join(lines)
-
-
 class SSHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(APP_DIR), **kwargs)
