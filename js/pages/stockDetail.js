@@ -6,6 +6,7 @@
 import { getInstrument } from "../data/universe.js";
 import { getQuote, getHistory, subscribeToQuotes, quoteAge } from "../data/marketData.js";
 import { placeLimitOrder } from "../features/limitOrders.js";
+import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange } from "../data/prices.js";
 import { candleChart, lineChart } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
@@ -146,6 +147,8 @@ function render(inst, symbol) {
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
             : `<div style="height: 340px;">${candleChart(history, { height: 340 })}</div>`}
         </div>
+
+        ${inst.kind !== "MF" ? renderOrderBook(symbol, curPrice) : ""}
 
         <div class="card" style="margin-top: var(--sp-4);">
           <h3 style="margin-bottom: var(--sp-4);">Fundamentals</h3>
@@ -468,5 +471,72 @@ async function executeTrade(inst, side, qty, pricePaise, biasResult) {
 
 function fundRow(l, v, html = false) {
   return `<div class="item"><div class="l">${l}</div><div class="v">${html ? v : escapeHtml(v)}</div></div>`;
+}
+
+function renderOrderBook(symbol, curPrice) {
+  const ob = buildOrderBook(symbol, curPrice, 5);
+  const trades = buildRecentTrades(symbol, curPrice, 8);
+  if (!ob.bids.length) return "";
+  const fmt = p => "₹" + (p / 100).toFixed(2);
+  const nowAgo = ts => {
+    const s = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m`;
+  };
+  return `
+    <div class="card" style="margin-top: var(--sp-4);">
+      <div class="card-head">
+        <h3>Live order book</h3>
+        <span class="data-badge"><span class="dot"></span> Spread ${fmt(ob.spread)}</span>
+      </div>
+      <div class="grid" style="grid-template-columns: 1fr 1fr; gap: var(--sp-4);">
+        <div>
+          <div class="text-xs uppercase muted" style="margin-bottom: var(--sp-2); color: var(--positive);">Bids (buy orders)</div>
+          <div class="table-wrap">
+            <table class="table" style="font-size: var(--text-sm);">
+              <thead><tr><th class="num">Qty</th><th class="num">Price</th></tr></thead>
+              <tbody>
+                ${ob.bids.map(b => `
+                  <tr><td class="num">${b.qty.toLocaleString("en-IN")}</td>
+                      <td class="num up">${fmt(b.price)}</td></tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <div class="text-xs uppercase muted" style="margin-bottom: var(--sp-2); color: var(--negative);">Asks (sell orders)</div>
+          <div class="table-wrap">
+            <table class="table" style="font-size: var(--text-sm);">
+              <thead><tr><th class="num">Price</th><th class="num">Qty</th></tr></thead>
+              <tbody>
+                ${ob.asks.map(a => `
+                  <tr><td class="num down">${fmt(a.price)}</td>
+                      <td class="num">${a.qty.toLocaleString("en-IN")}</td></tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: var(--sp-4);">
+        <div class="text-xs uppercase muted" style="margin-bottom: var(--sp-2);">Recent trades</div>
+        <div class="table-wrap">
+          <table class="table" style="font-size: var(--text-sm);">
+            <thead><tr><th>When</th><th>Side</th><th class="num">Qty</th><th class="num">Price</th></tr></thead>
+            <tbody>
+              ${trades.map(t => `
+                <tr>
+                  <td class="dim">${nowAgo(t.ts)} ago</td>
+                  <td><span class="pill ${t.side === "BUY" ? "pill-green" : "pill-red"}" style="font-size: 10px;">${t.side}</span></td>
+                  <td class="num">${t.qty}</td>
+                  <td class="num">${fmt(t.price)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
 }
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }

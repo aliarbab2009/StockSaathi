@@ -20,13 +20,23 @@ export function renderStocks(main) {
   const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Live polling for top 50 symbols — every 15s for snappy feel
+  // Live polling for top 50 symbols — every 10s for snappy feel
   const topSyms = STOCKS.slice(0, 50).map(s => s.symbol);
+  // Kick off an immediate fetch so the first paint already has live data
+  (async () => {
+    try {
+      const { getQuoteBatch } = await import("../data/marketData.js");
+      const initial = await getQuoteBatch(topSyms);
+      if (cancelled) return;
+      quoteCache = { ...quoteCache, ...initial };
+      render();
+    } catch (e) { console.warn("initial quotes:", e); }
+  })();
   pollUnsub = subscribeToQuotes(topSyms, (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
     render();
-  }, 15_000);
+  }, 10_000);
 
   function render() {
     const state = getState();

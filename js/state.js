@@ -203,21 +203,16 @@ export function switchUser() {
 // ---- profile mutations (DB-backed via auth/accounts.js:updateProfile) ----
 import { updateProfile } from "./auth/accounts.js";
 
-export async function completeOnboarding({ age, school, classCode, riskProfile, parentEmail, parentConsentAt }) {
+export async function completeOnboarding({ age, school, classCode, riskProfile }) {
   try {
     await updateProfile({
-      age, school, classCode, riskProfile, parentEmail,
-      parentConsentAt: parentConsentAt || new Date().toISOString(),
+      age, school, classCode, riskProfile,
       onboarded: true,
     });
   } catch (e) { console.warn("onboarding profile update failed:", e); }
-  // Local mirror for instant UI
   setState(s => ({
     ...s,
-    user: {
-      ...s.user, age, school, classCode, riskProfile, parentEmail,
-      parentConsentAt: parentConsentAt || Date.now(), onboarded: true,
-    },
+    user: { ...s.user, age, school, classCode, riskProfile, onboarded: true },
   }));
 }
 

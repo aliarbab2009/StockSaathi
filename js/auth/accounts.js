@@ -110,6 +110,33 @@ export async function registerAccount({ username, email, password, displayName }
   return account;
 }
 
+/**
+ * Verify the 6-digit OTP code Supabase sends after signup. On success, the
+ * user is signed in and we can proceed to onboarding. Throws on bad code.
+ */
+export async function verifySignupOtp({ email, code }) {
+  const client = await sb();
+  if (!client) throw new Error("Backend not configured.");
+  const cleanCode = String(code).trim().replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(cleanCode)) throw new Error("Code must be 6 digits.");
+  const { data, error } = await client.auth.verifyOtp({
+    email, token: cleanCode, type: "signup",
+  });
+  if (error) throw new Error(prettifySbError(error.message));
+  return { ok: true, user: data.user, session: data.session };
+}
+
+/**
+ * Resend the signup OTP. Useful if the first email got lost.
+ */
+export async function resendSignupOtp(email) {
+  const client = await sb();
+  if (!client) throw new Error("Backend not configured.");
+  const { error } = await client.auth.resend({ type: "signup", email });
+  if (error) throw new Error(prettifySbError(error.message));
+  return { ok: true };
+}
+
 export async function loginAccount({ emailOrUsername, password }) {
   const client = await sb();
   if (client) {

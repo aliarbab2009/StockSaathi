@@ -49,32 +49,50 @@ After adding these, **Deployments → ⋯ → Redeploy** the latest build so env
 
 ---
 
-## 2.5 CRITICAL: Fix auth emails (Supabase → Resend)
+## 2.5 CRITICAL: Supabase auth — Site URL, OTP, custom SMTP
 
-**By default, Supabase sends auth emails (signup confirmation, password reset)
-from `noreply@mail.app.supabase.io`** — looks unprofessional AND rate-limits
-to 2-4 emails/hour on the free tier (that's why signups fail with "email rate
-limit exceeded").
+You need to set THREE things in the Supabase dashboard for production:
 
-**Fix both at once — point Supabase auth email at Resend:**
+### A. Site URL (fixes "redirects to localhost")
 
-1. **Supabase Dashboard → Authentication → Email Templates → SMTP Settings**
-2. Toggle **"Enable Custom SMTP"** on
-3. Fill in:
-   - **Sender email:** `accounts@stocksaathi.co.in`
-   - **Sender name:** `StockSaathi`
-   - **Host:** `smtp.resend.com`
-   - **Port:** `465`
-   - **Username:** `resend` (literal string)
-   - **Password:** your `RESEND_API_KEY` (the `re_...` value)
-4. **Save**
+**Authentication → URL Configuration → Site URL:** set to
+`https://stocksaathi.co.in`. Add the same to **Redirect URLs**. Without this,
+all confirmation/reset emails point at `localhost:3000`.
 
-**Also:** Authentication → Providers → Email → **turn OFF "Confirm email"** for
-an instant signup UX. Users go straight to the app — no email link step,
-zero friction. (You can re-enable later if you want email verification.)
+### B. Use OTP code (no clickable link)
 
-Now signups work unlimited (Resend limits = 3000/mo free, 50k/mo on $20 tier)
-AND confirmation/reset emails come from `accounts@stocksaathi.co.in`.
+We use 6-digit OTP verification, not magic links. Update the email template:
+
+**Authentication → Email Templates → "Confirm signup"** — replace the body with:
+
+```
+Your StockSaathi verification code is: {{ .Token }}
+
+Enter it in the app within 10 minutes.
+
+— StockSaathi
+```
+
+Just `{{ .Token }}`, no `{{ .ConfirmationURL }}`. The signup screen shows a
+6-digit input; after the user types it, we call `verifyOtp` and they're in.
+No localhost issues, no broken links.
+
+### C. Custom SMTP through Resend (so emails come from accounts@stocksaathi.co.in)
+
+**Authentication → Email Templates → SMTP Settings** — toggle **"Enable Custom
+SMTP"** ON, fill in exactly:
+
+- **Sender email:** `accounts@stocksaathi.co.in`
+- **Sender name:** `StockSaathi`
+- **Host:** `smtp.resend.com`
+- **Port:** `465`
+- **Username:** `resend` (literal)
+- **Password:** your `RESEND_API_KEY`
+
+Save.
+
+This eliminates the 2-4/hour Supabase rate limit (Resend = 3000/mo free,
+50k/mo on $20 tier) and brands every email as `accounts@stocksaathi.co.in`.
 
 ---
 
