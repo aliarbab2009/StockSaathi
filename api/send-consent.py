@@ -63,13 +63,9 @@ def send_via_smtp(to_email, subject, body):
         return {"ok": False, "reason": "smtp_error", "error": str(e)}
 
 
-def send_via_resend(to_email, subject, body):
-    key = os.environ.get("RESEND_API_KEY")
-    sender = os.environ.get("RESEND_FROM", "StockSaathi <accounts@stocksaathi.co.in>")
-    if not key:
-        return {"ok": False, "reason": "resend_not_configured"}
+def _resend_once(to_email, subject, body, sender, key):
     payload = json.dumps({
-        "from": sender, "to": to_email, "subject": subject, "text": body,
+        "from": sender, "to": [to_email], "subject": subject, "text": body,
     }).encode("utf-8")
     req = urllib.request.Request(
         "https://api.resend.com/emails",
@@ -85,13 +81,31 @@ def send_via_resend(to_email, subject, body):
     try:
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode("utf-8"))
-            return {"ok": True, "provider": "resend", "id": data.get("id")}
+            return {"ok": True, "provider": "resend", "id": data.get("id"), "from": sender}
     except urllib.error.HTTPError as e:
         try: err = json.loads(e.read().decode("utf-8"))
         except Exception: err = {"message": str(e)}
-        return {"ok": False, "reason": "resend_http_error", "status": e.code, "error": err}
+        return {"ok": False, "reason": "resend_http_error", "status": e.code, "error": err, "from": sender}
     except Exception as e:
-        return {"ok": False, "reason": "resend_exception", "error": str(e)}
+        return {"ok": False, "reason": "resend_exception", "error": str(e), "from": sender}
+
+
+def send_via_resend(to_email, subject, body):
+    key = os.environ.get("RESEND_API_KEY")
+    sender = os.environ.get("RESEND_FROM", "StockSaathi <accounts@stocksaathi.co.in>")
+    fallback = "StockSaathi <onboarding@resend.dev>"
+    if not key:
+        return {"ok": False, "reason": "resend_not_configured"}
+    r = _resend_once(to_email, subject, body, sender, key)
+    if r.get("ok"):
+        return r
+    msg = str(r.get("error") or "").lower()
+    if sender != fallback and any(s in msg for s in ("verify", "not verified", "domain", "invalid from", "no valid from")):
+        r2 = _resend_once(to_email, subject, body, fallback, key)
+        if r2.get("ok"):
+            r2["warning"] = "Sent from resend.dev sandbox — verify stocksaathi.co.in in Resend to send from " + sender
+            return r2
+    return r
 
 
 def send_via_upstream(to_email, teen, token, consent_url, relayed):
