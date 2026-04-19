@@ -135,10 +135,10 @@ export function renderRegister(main) {
           <form class="auth-form" id="otp-form" autocomplete="off">
             <div class="field">
               <label class="label" for="otp-input">Verification code</label>
-              <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="10" required
-                placeholder="Enter the code from your email"
+              <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required
+                placeholder="8-digit code"
                 style="font-family: var(--font-mono); letter-spacing: 0.25em; text-align: center; font-size: var(--text-xl); font-weight: 700;" />
-              <div class="dim text-xs" style="margin-top: 6px; text-align: center;">Accepts 4-10 digit codes.</div>
+              <div class="dim text-xs" style="margin-top: 6px; text-align: center;">Enter the 8-digit code from your email.</div>
             </div>
 
             <div id="otp-error" role="alert"></div>
@@ -171,8 +171,8 @@ export function renderRegister(main) {
       e.preventDefault();
       errBox.innerHTML = "";
       const code = main.querySelector("#otp-input").value.trim().replace(/\s+/g, "");
-      if (!/^\d{4,10}$/.test(code)) {
-        errBox.innerHTML = `<div class="error-msg">Enter the digit code from your email (4-10 digits).</div>`;
+      if (!/^\d{8}$/.test(code)) {
+        errBox.innerHTML = `<div class="error-msg">Enter the 8-digit code from your email.</div>`;
         return;
       }
       btn.disabled = true;
