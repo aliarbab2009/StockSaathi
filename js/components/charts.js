@@ -318,9 +318,13 @@ export function stockChart(ohlc, {
         ${lastLabel}
         <g class="chart-crosshair" style="display:none;">
           <line class="chart-crosshair-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
-                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" />
+                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6" />
           <line class="chart-crosshair-y" x1="${paddingLeft}" x2="${width - paddingRight}" y1="0" y2="0"
-                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" />
+                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6" />
+          <!-- Snapped breathing dot on the price line at the cursor's nearest bar.
+               Fill recoloured on the fly from JS (up=green, down=red vs first bar). -->
+          <circle class="chart-dot-halo" cx="0" cy="0" r="10" fill="currentColor" opacity="0.18" />
+          <circle class="chart-dot-core" cx="0" cy="0" r="4.5" fill="currentColor" stroke="var(--surface, #13161E)" stroke-width="2" />
         </g>
       </svg>
       <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:nowrap; z-index:2;"></div>
@@ -341,6 +345,8 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   const cross = container.querySelector(".chart-crosshair");
   const crossX = container.querySelector(".chart-crosshair-x");
   const crossY = container.querySelector(".chart-crosshair-y");
+  const dotHalo = container.querySelector(".chart-dot-halo");
+  const dotCore = container.querySelector(".chart-dot-core");
   if (!svg || !tooltip || !cross) return () => {};
 
   const W = +svg.dataset.w, H = +svg.dataset.h;
@@ -362,19 +368,32 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hide();
       return;
     }
-    // Find nearest candle index
+    // Find nearest candle index (for the snapped dot + tooltip data)
     const rel = (px - PL) / plotW;
     const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
     const k = ohlc[idx];
-    const cx = toX(idx);
-    // Snap the horizontal crosshair to the bar's CLOSE price, not the raw
-    // cursor Y — matches Google Finance / TradingView convention. The
-    // vertical line already snaps to the bar's X via toX(idx).
-    const cy = toY(k.c);
-    crossX.setAttribute("x1", cx);
-    crossX.setAttribute("x2", cx);
-    crossY.setAttribute("y1", cy);
-    crossY.setAttribute("y2", cy);
+    const bx = toX(idx);
+    const by = toY(k.c);
+
+    // Crosshair LINES follow the raw cursor — smooth, sub-pixel, no teleport.
+    // Only the DOT snaps to the data point.
+    crossX.setAttribute("x1", px);
+    crossX.setAttribute("x2", px);
+    crossY.setAttribute("y1", py);
+    crossY.setAttribute("y2", py);
+    // Breathing dot: position snapped to (barX, barClose). Colour reflects
+    // whether the hovered bar's close is up or down vs the range's first
+    // close — mirrors the area-chart colour convention.
+    const baseClose = ohlc[0].c;
+    const up = k.c >= baseClose;
+    const dotColor = up ? "var(--positive, #00B386)" : "var(--negative, #EB5757)";
+    for (const d of [dotHalo, dotCore]) {
+      if (!d) continue;
+      d.setAttribute("cx", bx);
+      d.setAttribute("cy", by);
+      d.setAttribute("fill", dotColor);
+      d.classList.add("breathing");
+    }
     cross.style.display = "";
 
     const d = new Date(k.t);

@@ -558,6 +558,33 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* Breathing price-dot on the chart crosshair. Halo pulses slow + wide so the
+   eye registers it as "live"; core stays sharp so the exact data point
+   remains clear. Color is set inline from JS (up=green, down=red). */
+.chart-dot-halo { transition: cx 120ms linear, cy 120ms linear; }
+.chart-dot-core { transition: cx 120ms linear, cy 120ms linear; }
+.chart-dot-halo.breathing {
+  animation: chart-dot-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+.chart-dot-core.breathing {
+  animation: chart-dot-shimmer 1.6s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+@keyframes chart-dot-pulse {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(1.35); }
+}
+@keyframes chart-dot-shimmer {
+  0%, 100% { opacity: 0.95; }
+  50%      { opacity: 0.70; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart-dot-halo.breathing, .chart-dot-core.breathing { animation: none; }
+}
+
 /* ============================== LANDING / HERO ====================== */
 .hero {
   text-align: center;
