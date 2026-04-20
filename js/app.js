@@ -10,6 +10,7 @@ import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
 import { bootSync } from "./db/sync.js";
 import { startLimitMatcher } from "./features/limitOrders.js";
 import { mountAiExplainer } from "./features/aiExplainer.js";
+import { mountCommandPalette, openCommandPalette } from "./components/commandPalette.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -24,6 +25,7 @@ switchUser();
 mountNav();
 mountCoachPanel();
 mountAiExplainer();
+mountCommandPalette();
 mountRouter();
 
 // If Supabase is configured, boot cross-device sync + start the limit-order

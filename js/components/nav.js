@@ -78,6 +78,11 @@ export function mountNav() {
         </nav>
 
         <div class="nav-right">
+          <button id="cmdk-open-btn" class="nav-cmdk-btn" type="button" aria-label="Ask Saathi (Ctrl+K)" title="Ask Saathi  ⌘K">
+            <span aria-hidden="true">✨</span>
+            <span class="nav-cmdk-label">Ask</span>
+            <kbd class="nav-cmdk-kbd">⌘K</kbd>
+          </button>
           ${themeToggleHtml(state.settings.theme)}
           ${state.isAuthed ? `
             <div class="market-status" title="${ms.istTime}"><span class="dot ${ms.open ? "" : "closed"}"></span><span class="muted">${ms.open ? "Live" : "Closed"}</span></div>
@@ -132,6 +137,9 @@ export function mountNav() {
     });
     root.querySelector("#nav-burger-btn")?.addEventListener("click", openDrawer);
     root.querySelector("#theme-toggle-btn")?.addEventListener("click", toggleTheme);
+    root.querySelector("#cmdk-open-btn")?.addEventListener("click", () => {
+      import("./commandPalette.js").then(m => m.openCommandPalette());
+    });
   }
 }
 
