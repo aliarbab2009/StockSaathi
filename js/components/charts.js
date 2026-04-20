@@ -361,7 +361,7 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   const plotH = H - PT - PB;
   const toX = (i) => PL + (N > 1 ? (i / (N - 1)) * plotW : 0);
   const toY = (v) => PT + plotH - ((v - MIN) / (MAX - MIN)) * plotH;
-  let lastIdx = -1, lastColor = "";
+  let lastColor = "";
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -372,33 +372,34 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hide();
       return;
     }
-    // Snap to the nearest bar. Dot sits on that bar's close so the mark,
-    // the vertical line's implied candle, and the tooltip all describe
-    // the same data point — no mismatch between what you see and what
-    // the tooltip says.
+
+    // Continuous sub-pixel position along the price line. We linearly
+    // interpolate the close between the two adjacent bars, so as the
+    // cursor moves 1px the dot's Y shifts to the exact point on the
+    // line segment — no bar-snap, no teleport.
     const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
-    const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
+    const exactPos = rel * (N - 1);
+    const i0 = Math.floor(exactPos);
+    const i1 = Math.min(N - 1, i0 + 1);
+    const frac = exactPos - i0;
+    const interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+    // Nearest bar supplies the OHLC + date shown in the tooltip — you
+    // can't interpolate open/high/low across candles, only close is
+    // continuous.
+    const idx = Math.max(0, Math.min(N - 1, Math.round(exactPos)));
     const k = ohlc[idx];
 
-    // Vertical cursor line follows the raw cursor X (smooth, sub-pixel) so
-    // the guide still feels analog even though the dot is bar-snapped.
+    // Vertical cursor line + dot both track the raw cursor X sub-pixel.
     cursorX.setAttribute("x1", px);
     cursorX.setAttribute("x2", px);
+    const by = toY(interpClose);
+    if (dotHalo) { dotHalo.setAttribute("cx", px); dotHalo.setAttribute("cy", by); }
+    if (dotCore) { dotCore.setAttribute("cx", px); dotCore.setAttribute("cy", by); }
 
-    // Dot position: bar-snapped. Only re-apply attrs when the bar actually
-    // changes — avoids layout thrash when the cursor moves inside one bar.
-    if (idx !== lastIdx) {
-      lastIdx = idx;
-      const bx = toX(idx);
-      const by = toY(k.c);
-      if (dotHalo) { dotHalo.setAttribute("cx", bx); dotHalo.setAttribute("cy", by); }
-      if (dotCore) { dotCore.setAttribute("cx", bx); dotCore.setAttribute("cy", by); }
-    }
-
-    // Price-responding colour: green if this bar's close is above the
-    // range's first close, red if below. Only write fill when it actually
-    // flips so we don't churn the DOM every frame.
-    const dotColor = k.c >= ohlc[0].c
+    // Price-responding colour flips based on the interpolated close vs
+    // the range's first close. Only write fill when it actually flips
+    // so we don't churn the DOM every frame.
+    const dotColor = interpClose >= ohlc[0].c
       ? "var(--positive, #00B386)"
       : "var(--negative, #EB5757)";
     if (dotColor !== lastColor) {
@@ -415,13 +416,18 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hour: "2-digit", minute: "2-digit",
     });
     const fmt = (p) => "₹" + (p / 100).toFixed(2);
+    // Area mode: show the interpolated close front and centre (that's
+    // what the dot is sitting on).
+    // Candle mode: still show the interpolated close at the top so it
+    // tracks the dot 1:1, then the nearest bar's OHLC+Vol beneath.
     const tipLines = mode === "area"
       ? [
           `<span style="color:var(--text-dim)">${dateStr}</span>`,
-          `<strong style="font-size:13px;">${fmt(k.c)}</strong>`,
+          `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
         ]
       : [
           `<span style="color:var(--text-dim)">${dateStr}</span>`,
+          `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
           `<span>O <strong>${fmt(k.o)}</strong>  H <strong style="color:var(--positive)">${fmt(k.h)}</strong></span>`,
           `<span>L <strong style="color:var(--negative)">${fmt(k.l)}</strong>  C <strong>${fmt(k.c)}</strong></span>`,
           k.v ? `<span style="color:var(--text-dim)">Vol ${k.v.toLocaleString("en-IN")}</span>` : "",
@@ -453,7 +459,6 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   function hide() {
     cursor.style.display = "none";
     tooltip.style.display = "none";
-    lastIdx = -1;
     lastColor = "";
   }
 
