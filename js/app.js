@@ -9,6 +9,7 @@ import { mountRouter } from "./router.js";
 import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
 import { bootSync } from "./db/sync.js";
 import { startLimitMatcher } from "./features/limitOrders.js";
+import { mountAiExplainer } from "./features/aiExplainer.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -22,6 +23,7 @@ switchUser();
 // Mount components
 mountNav();
 mountCoachPanel();
+mountAiExplainer();
 mountRouter();
 
 // If Supabase is configured, boot cross-device sync + start the limit-order

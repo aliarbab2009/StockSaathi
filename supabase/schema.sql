@@ -1045,6 +1045,29 @@ create policy "orders_self_all" on public.limit_orders for all
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- =============================================================================
+-- AI response cache — dedupes identical queries across every user so the
+-- second person to hover "P/E", search for "harshad mehta", or open a
+-- similar portfolio digest gets a cached answer instantly for $0.
+-- Bucket keys namespace the feature (explain, digest, nl_search, …) so
+-- one cache table serves all AI features.
+-- =============================================================================
+create table if not exists public.ai_response_cache (
+  bucket      text not null,
+  cache_key   text not null,
+  display_key text,
+  payload     jsonb not null,
+  created_at  timestamptz not null default now(),
+  hit_count   int not null default 1,
+  primary key (bucket, cache_key)
+);
+create index if not exists idx_ai_response_cache_bucket on public.ai_response_cache (bucket);
+alter table public.ai_response_cache enable row level security;
+drop policy if exists "ai_cache_public_read"  on public.ai_response_cache;
+create policy "ai_cache_public_read" on public.ai_response_cache for select using (true);
+-- No public write policy — only the server's SUPABASE_SERVICE_ROLE_KEY
+-- writes to this table, via /api/ai-cache-put.
+
+-- =============================================================================
 -- Realtime
 -- =============================================================================
 do $$ begin alter publication supabase_realtime add table public.portfolios;

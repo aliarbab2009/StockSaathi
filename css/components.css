@@ -579,6 +579,51 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* AI term wrapper — subtle dotted underline on terms that have an AI
+   hover explainer wired. Doesn't look clickable; looks like a hint.
+   Tooltip pops on :hover / :focus and fetches the definition lazily. */
+.ai-term {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--text-muted);
+  text-decoration-thickness: 1px;
+  cursor: help;
+  font-style: normal;
+}
+.ai-term:hover, .ai-term:focus-visible {
+  text-decoration-color: var(--brand);
+  color: var(--text-strong);
+  outline: none;
+}
+.ai-term-tooltip {
+  position: absolute;
+  z-index: 999;
+  max-width: 280px;
+  background: var(--surface-elev, var(--surface));
+  color: var(--text);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--r);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  box-shadow: var(--sh-lg, var(--sh-md));
+  pointer-events: none;
+  animation: ai-tip-in 140ms var(--ease, ease-out);
+}
+.ai-term-tooltip-head {
+  font-weight: 700;
+  font-size: var(--text-xs);
+  color: var(--brand);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.ai-term-tooltip-body { color: var(--text); }
+@keyframes ai-tip-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* Hover cursor: single vertical guide line + breathing price-dot. The
    line tracks cursor X; the dot bar-snaps to the nearest candle's close
    (matches the numbers in the tooltip) and colour-flips green/red vs the

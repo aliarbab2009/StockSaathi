@@ -19,6 +19,7 @@ import { buildAnalogContext } from "../coach/historicalAnalog.js";
 import { showInterventionModal } from "../components/interventionModal.js";
 import { mountQuantitySelector } from "../components/quantitySelector.js";
 import { toast } from "../components/toast.js";
+import { termHtml } from "../features/aiExplainer.js";
 
 // Timeframe → Yahoo range/interval. 1D uses 5m intraday so the chart looks
 // like Groww's (dense 1-min-ish bars), not a sparse 5-daily-candle bar.
@@ -566,19 +567,19 @@ function renderFundamentals(inst, live, hi52, lo52) {
   const tma = live?.two_hundred_day_average != null ? `₹${live.two_hundred_day_average.toFixed(2)}` : null;
 
   return [
-    fundRow("Market Cap", mcap),
-    fundRow("P/E Ratio", pe),
-    fundRow("P/B Ratio", pb),
-    fundRow("Div Yield", dy),
-    fundRow("Beta", beta),
-    fundRow("52W High", hi),
-    fundRow("52W Low", lo),
-    eps ? fundRow("EPS (TTM)", eps) : "",
-    fma ? fundRow("50-day avg", fma) : "",
-    tma ? fundRow("200-day avg", tma) : "",
-    fundRow("Risk tier", `<span class="risk-pill ${inst.risk}">${inst.risk.toUpperCase()}</span>`, true),
-    inst.kind === "MF" ? fundRow("Expense Ratio", `${inst.expenseRatio}%`) : "",
-    inst.kind === "MF" ? fundRow("AUM", inst.aum) : "",
+    fundRow(termHtml("Market Cap"), mcap),
+    fundRow(termHtml("P/E Ratio"), pe),
+    fundRow(termHtml("P/B Ratio"), pb),
+    fundRow(termHtml("Dividend Yield", "Div Yield"), dy),
+    fundRow(termHtml("Beta"), beta),
+    fundRow(termHtml("52-week high", "52W High"), hi),
+    fundRow(termHtml("52-week low", "52W Low"), lo),
+    eps ? fundRow(termHtml("EPS", "EPS (TTM)"), eps) : "",
+    fma ? fundRow(termHtml("50-day moving average", "50-day avg"), fma) : "",
+    tma ? fundRow(termHtml("200-day moving average", "200-day avg"), tma) : "",
+    fundRow(termHtml("Risk tier"), `<span class="risk-pill ${inst.risk}">${inst.risk.toUpperCase()}</span>`, true),
+    inst.kind === "MF" ? fundRow(termHtml("Expense Ratio"), `${inst.expenseRatio}%`) : "",
+    inst.kind === "MF" ? fundRow(termHtml("AUM"), inst.aum) : "",
   ].filter(Boolean).join("");
 }
 
