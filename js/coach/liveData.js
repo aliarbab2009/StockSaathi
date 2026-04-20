@@ -48,7 +48,7 @@ const STOCK_ALIASES_BASE = {
   axis: "AXISBANK", "axis bank": "AXISBANK",
   kotak: "KOTAKBANK", "kotak bank": "KOTAKBANK",
   maruti: "MARUTI", "maruti suzuki": "MARUTI",
-  "tata motors": "TATAMOTORS", tatamotors: "TATAMOTORS",
+  "tata motors": "TMPV", tatamotors: "TMPV", tmpv: "TMPV", tmcv: "TMCV",
   "tata steel": "TATASTEEL", tatasteel: "TATASTEEL",
   "jsw steel": "JSWSTEEL",
   hindalco: "HINDALCO",

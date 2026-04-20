@@ -25,7 +25,7 @@ import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote as url_quote
 
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -37,7 +37,7 @@ YAHOO_HOSTS = [
     "https://query2.finance.yahoo.com/v8/finance/chart",
 ]
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_&]{1,24}$")
 _RANGE_RE = re.compile(r"^(1d|5d|1mo|3mo|6mo|1y|2y|5y|10y|ytd|max)$")
 _INTERVAL_RE = re.compile(r"^(1m|2m|5m|15m|30m|60m|90m|1h|1d|5d|1wk|1mo|3mo)$")
 
@@ -54,7 +54,7 @@ _INTRADAY = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
 def fetch_yahoo(symbol, range_, interval):
     ticker = symbol if "." in symbol else f"{symbol}.NS"
     for base in YAHOO_HOSTS:
-        url = f"{base}/{ticker}?interval={interval}&range={range_}"
+        url = f"{base}/{url_quote(ticker, safe='.')}?interval={interval}&range={range_}"
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": UA,

@@ -269,7 +269,7 @@ const NAME_TO_SYMBOL = (() => {
     airtel: "BHARTIARTL", bharti: "BHARTIARTL",
     "l&t": "LT", lt: "LT", larsen: "LT",
     hul: "HINDUNILVR", "hindustan unilever": "HINDUNILVR",
-    "tata motors": "TATAMOTORS",
+    "tata motors": "TMPV", tmpv: "TMPV", tmcv: "TMCV",
     "tata steel": "TATASTEEL",
     nestle: "NESTLEIND",
     "sun pharma": "SUNPHARMA",

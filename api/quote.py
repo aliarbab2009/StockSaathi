@@ -9,7 +9,7 @@ import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote as url_quote
 
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -21,18 +21,18 @@ HOSTS = [
     "https://query2.finance.yahoo.com/v8/finance/chart",
 ]
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_&]{1,24}$")
 
 
 def fetch_one(symbol):
     """Fetch a single symbol from Yahoo. Returns dict or None."""
-    if "." not in symbol and "-" not in symbol.replace(".", ""):
-        ticker = f"{symbol}.NS"
-    else:
-        ticker = symbol
+    # Match the other API files: only skip the .NS suffix when the symbol
+    # already has an exchange dot-suffix (e.g. TATAMOTORS.BO). Hyphenated
+    # NSE tickers like BAJAJ-AUTO still need .NS appended.
+    ticker = symbol if "." in symbol else f"{symbol}.NS"
     for base in HOSTS:
         try:
-            url = f"{base}/{ticker}?interval=1d&range=5d"
+            url = f"{base}/{url_quote(ticker, safe='.')}?interval=1d&range=5d"
             req = urllib.request.Request(url, headers={
                 "User-Agent": UA,
                 "Accept": "application/json,text/plain,*/*",

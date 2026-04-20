@@ -34,7 +34,7 @@ import urllib.request
 import urllib.error
 import concurrent.futures
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote as url_quote
 
 SUPA_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPA_SRV = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -46,7 +46,7 @@ DHAN_CLIENT = os.environ.get("DHAN_CLIENT_ID", "").strip()
 # stocks only hit Yahoo/Dhan 6 times/minute total.
 CACHE_TTL_MS = int(os.environ.get("QUOTE_CACHE_TTL_MS", "10000"))
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_&]{1,24}$")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
        "AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/125.0.0.0 Safari/537.36")
@@ -199,7 +199,7 @@ def fetch_yahoo_one(symbol):
     ticker = symbol if "." in symbol else f"{symbol}.NS"
     for base in YAHOO_HOSTS:
         try:
-            url = f"{base}/{ticker}?interval=1d&range=5d"
+            url = f"{base}/{url_quote(ticker, safe='.')}?interval=1d&range=5d"
             req = urllib.request.Request(url, headers={
                 "User-Agent": _UA,
                 "Accept": "application/json,text/plain,*/*",

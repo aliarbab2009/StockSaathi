@@ -22,7 +22,7 @@ import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote as url_quote
 
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -42,7 +42,7 @@ V8_HOSTS = [
     "https://query2.finance.yahoo.com/v8/finance/chart",
 ]
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_]{1,24}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_&]{1,24}$")
 
 
 def _yahoo_fetch(url, timeout=6):
@@ -61,7 +61,7 @@ def _yahoo_fetch(url, timeout=6):
 # --- Tier 1 --------------------------------------------------------------
 def fetch_v7(ticker):
     for base in V7_HOSTS:
-        data = _yahoo_fetch(f"{base}?symbols={ticker}")
+        data = _yahoo_fetch(f"{base}?symbols={url_quote(ticker, safe='.')}")
         if not data:
             continue
         arr = (data.get("quoteResponse") or {}).get("result") or []
@@ -114,7 +114,7 @@ def _raw(obj, *path):
 def fetch_v10(ticker):
     modules = "summaryDetail,defaultKeyStatistics,financialData,price,summaryProfile"
     for base in V10_HOSTS:
-        data = _yahoo_fetch(f"{base}/{ticker}?modules={modules}")
+        data = _yahoo_fetch(f"{base}/{url_quote(ticker, safe='.')}?modules={modules}")
         if not data:
             continue
         result = ((data.get("quoteSummary") or {}).get("result") or [None])[0]
@@ -163,7 +163,7 @@ def fetch_v8_chart(ticker):
     """Pulls what we can from the chart endpoint — same one /api/quote uses.
     Has 52W high/low + day high/low + price/prev_close via closes[] walk."""
     for base in V8_HOSTS:
-        data = _yahoo_fetch(f"{base}/{ticker}?interval=1d&range=1y")
+        data = _yahoo_fetch(f"{base}/{url_quote(ticker, safe='.')}?interval=1d&range=1y")
         if not data:
             continue
         res = ((data.get("chart") or {}).get("result") or [None])[0]

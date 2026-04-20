@@ -39,7 +39,8 @@ export const STOCKS = [
 
   // Auto
   { symbol: "MARUTI",     name: "Maruti Suzuki India",       sector: "Auto",          marketCap: "4.0L Cr",  price:1278000, pe: 29.1, pb: 4.4, divYield: 0.95, beta: 0.87, risk: "med",  logo: "MSI" },
-  { symbol: "TATAMOTORS", name: "Tata Motors",               sector: "Auto",          marketCap: "3.2L Cr",  price:  85500, pe: 11.8, pb: 3.6, divYield: 0.35, beta: 1.42, risk: "high", logo: "TTM" },
+  { symbol: "TMPV",       name: "Tata Motors PV (JLR)",      sector: "Auto",          marketCap: "1.3L Cr",  price:  35570, pe: 11.8, pb: 3.6, divYield: 0.35, beta: 1.42, risk: "high", logo: "TMP" },
+  { symbol: "TMCV",       name: "Tata Motors CV",            sector: "Auto",          marketCap: "1.6L Cr",  price:  43840, pe: 14.2, pb: 3.1, divYield: 0.40, beta: 1.18, risk: "med",  logo: "TMC" },
   { symbol: "M&M",        name: "Mahindra & Mahindra",       sector: "Auto",          marketCap: "3.7L Cr",  price: 297500, pe: 28.4, pb: 4.0, divYield: 0.55, beta: 1.08, risk: "med",  logo: "M&M" },
   { symbol: "EICHERMOT",  name: "Eicher Motors",             sector: "Auto",          marketCap: "1.3L Cr",  price: 724300, pe: 31.5, pb: 6.4, divYield: 1.10, beta: 1.04, risk: "med",  logo: "EIC" },
   { symbol: "BAJAJ-AUTO", name: "Bajaj Auto",                sector: "Auto",          marketCap: "2.5L Cr",  price: 884500, pe: 34.4, pb: 7.7, divYield: 1.90, beta: 0.91, risk: "med",  logo: "BJA" },
@@ -230,7 +231,7 @@ export const ONBOARDING_PORTFOLIOS = {
     { symbol: "MF_NIFTY50_INDEX", qty: 1.5 },
   ],
   bold: [
-    { symbol: "TATAMOTORS",  qty: 20 },
+    { symbol: "TMPV",        qty: 20 },
     { symbol: "ETERNAL",     qty: 100 },
     { symbol: "ADANIENT",    qty: 5 },
     { symbol: "RELIANCE",    qty: 5 },
