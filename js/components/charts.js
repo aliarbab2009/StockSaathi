@@ -316,15 +316,12 @@ export function stockChart(ohlc, {
         ${yLabels}
         ${xLabels}
         ${lastLabel}
-        <g class="chart-crosshair" style="display:none;">
-          <line class="chart-crosshair-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
-                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6" />
-          <line class="chart-crosshair-y" x1="${paddingLeft}" x2="${width - paddingRight}" y1="0" y2="0"
-                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6" />
-          <!-- Snapped breathing dot on the price line at the cursor's nearest bar.
-               Fill recoloured on the fly from JS (up=green, down=red vs first bar). -->
-          <circle class="chart-dot-halo" cx="0" cy="0" r="10" fill="currentColor" opacity="0.18" />
-          <circle class="chart-dot-core" cx="0" cy="0" r="4.5" fill="currentColor" stroke="var(--surface, #13161E)" stroke-width="2" />
+        <g class="chart-cursor" style="display:none;">
+          <!-- Single solid vertical line tracking the cursor — no horizontal
+               crosshair, no pulsing dot. Keeps the eye on the price line
+               itself; tooltip next to the cursor shows the exact value. -->
+          <line class="chart-cursor-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
+                stroke="var(--text, #E2E5EC)" stroke-width="1.5" opacity="0.7" />
         </g>
       </svg>
       <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:nowrap; z-index:2;"></div>
@@ -342,22 +339,15 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   if (!container || !ohlc?.length) return () => {};
   const svg = container.querySelector(".chart-svg");
   const tooltip = container.querySelector(".chart-tooltip");
-  const cross = container.querySelector(".chart-crosshair");
-  const crossX = container.querySelector(".chart-crosshair-x");
-  const crossY = container.querySelector(".chart-crosshair-y");
-  const dotHalo = container.querySelector(".chart-dot-halo");
-  const dotCore = container.querySelector(".chart-dot-core");
-  if (!svg || !tooltip || !cross) return () => {};
+  const cursor = container.querySelector(".chart-cursor");
+  const cursorX = container.querySelector(".chart-cursor-x");
+  if (!svg || !tooltip || !cursor || !cursorX) return () => {};
 
   const W = +svg.dataset.w, H = +svg.dataset.h;
   const PL = +svg.dataset.pl, PR = +svg.dataset.pr;
   const PT = +svg.dataset.pt, PB = +svg.dataset.pb;
-  const MIN = +svg.dataset.min, MAX = +svg.dataset.max;
   const N = +svg.dataset.n;
   const plotW = W - PL - PR;
-  const plotH = H - PT - PB;
-  const toX = (i) => PL + (N > 1 ? (i / (N - 1)) * plotW : 0);
-  const toY = (v) => PT + plotH - ((v - MIN) / (MAX - MIN)) * plotH;
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -368,43 +358,16 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hide();
       return;
     }
-    // Continuous position along the price line. exactPos isn't rounded so
-    // the dot slides sub-pixel with the cursor instead of hard-jumping to
-    // the nearest bar. Y is linearly interpolated between adjacent closes.
+    // Tooltip uses the NEAREST bar so OHLC stays meaningful — you can't
+    // interpolate open/high/low across candles, only close is continuous.
     const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
-    const exactPos = rel * (N - 1);
-    const i0 = Math.floor(exactPos);
-    const i1 = Math.min(N - 1, i0 + 1);
-    const t = exactPos - i0;
-    const c0 = ohlc[i0].c;
-    const c1 = ohlc[i1].c;
-    const interpClose = c0 + (c1 - c0) * t;
-    // Dot X = cursor X (keeps dot on crosshair); Y = close at that X.
-    const bx = px;
-    const by = toY(interpClose);
-    // Tooltip uses the NEAREST bar so OHLC stays meaningful (you can't
-    // interpolate open/high/low across candles — only close is continuous).
-    const idx = Math.max(0, Math.min(N - 1, Math.round(exactPos)));
+    const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
     const k = ohlc[idx];
 
-    // Crosshair LINES follow the raw cursor (smooth, sub-pixel).
-    crossX.setAttribute("x1", px);
-    crossX.setAttribute("x2", px);
-    crossY.setAttribute("y1", py);
-    crossY.setAttribute("y2", py);
-    // Breathing dot: rides the price line continuously. Colour flips on the
-    // fly based on interpolated close vs the range's first close.
-    const baseClose = ohlc[0].c;
-    const up = interpClose >= baseClose;
-    const dotColor = up ? "var(--positive, #00B386)" : "var(--negative, #EB5757)";
-    for (const d of [dotHalo, dotCore]) {
-      if (!d) continue;
-      d.setAttribute("cx", bx);
-      d.setAttribute("cy", by);
-      d.setAttribute("fill", dotColor);
-      d.classList.add("breathing");
-    }
-    cross.style.display = "";
+    // Single vertical cursor line at the raw cursor X (smooth, sub-pixel).
+    cursorX.setAttribute("x1", px);
+    cursorX.setAttribute("x2", px);
+    cursor.style.display = "";
 
     const d = new Date(k.t);
     const dateStr = d.toLocaleString("en-IN", {
@@ -427,21 +390,29 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
 
     tooltip.innerHTML = tipLines.join("<br>");
     tooltip.style.display = "";
-    // Position the tooltip: convert chart-space cx back to container px
+    // Position the tooltip next to the cursor — NOT snapped to the bar, so
+    // it tracks 1:1 with the pointer. Reading the price never requires the
+    // eye to leave the line the user is tracing.
     const containerRect = container.getBoundingClientRect();
-    const cxPx = (cx / W) * rect.width;
+    const cursorPxX = e.clientX - containerRect.left;
+    const cursorPxY = e.clientY - containerRect.top;
     const tipW = tooltip.offsetWidth || 160;
     const tipH = tooltip.offsetHeight || 60;
-    let leftPx = cxPx + 12;
-    if (leftPx + tipW > rect.width) leftPx = cxPx - tipW - 12;
-    let topPx = (e.clientY - containerRect.top) - tipH - 10;
-    if (topPx < 0) topPx = (e.clientY - containerRect.top) + 16;
+    const GAP = 14;
+    // Prefer right of cursor; flip left if we'd overflow the container.
+    let leftPx = cursorPxX + GAP;
+    if (leftPx + tipW > containerRect.width - 4) leftPx = cursorPxX - tipW - GAP;
+    if (leftPx < 4) leftPx = 4;
+    // Vertically center on cursor; clamp inside container.
+    let topPx = cursorPxY - tipH / 2;
+    if (topPx < 4) topPx = 4;
+    if (topPx + tipH > containerRect.height - 4) topPx = containerRect.height - tipH - 4;
     tooltip.style.left = leftPx + "px";
     tooltip.style.top = topPx + "px";
   }
 
   function hide() {
-    cross.style.display = "none";
+    cursor.style.display = "none";
     tooltip.style.display = "none";
   }
 
