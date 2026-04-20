@@ -107,7 +107,12 @@ function renderSelector(main) {
       status.textContent = `Ready — ${scenario.title}. Loading replay…`;
       location.hash = "#/crash-replay/" + scenario.id;
     } catch (e) {
-      status.innerHTML = `<span style="color:var(--negative);">Couldn't generate that one — ${escapeHtml(e.message || "unknown error")}. Try a different phrasing, or pick a curated replay below.</span>`;
+      const msg = String(e?.message || "unknown error");
+      // Route quota / key errors straight through so the guidance survives.
+      // For anything else, soften with a rephrase hint.
+      const isAuthIssue = /quota|key|rate-?limit/i.test(msg);
+      const extra = isAuthIssue ? "" : " Try a different phrasing, or pick a curated replay below.";
+      status.innerHTML = `<span style="color:var(--negative);">${escapeHtml(msg)}${escapeHtml(extra)}</span>`;
       button.disabled = false;
       input.disabled = false;
       button.textContent = "Generate replay";
