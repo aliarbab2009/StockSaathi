@@ -343,6 +343,12 @@ async function callLLM({ apiKey, system, messages, tools }) {
     messages: openaiMessages,
     tools,
     tool_choice: "auto",
+    // Tells /api/chat which upstream lane to use. Coach chat wants
+    // reasoning + warmth, not raw speed — GPT primary, Gemini Pro
+    // fallback, Groq/Llama as final floor. Server ignores unknown
+    // fields so this is harmless on providers that don't understand
+    // profiles.
+    profile: "reasoning",
   };
 
   // If user has their own Groq key → direct call (fastest path)

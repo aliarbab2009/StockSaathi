@@ -98,6 +98,9 @@ async function callLlmForMeta(description, temperature) {
       temperature,
       max_tokens: 800,
       response_format: { type: "json_object" },
+      // Structured JSON about niche Indian events needs the strongest
+      // model available — GPT primary, Gemini Pro as peer fallback.
+      profile: "json",
     }),
   });
   if (!res.ok) {
