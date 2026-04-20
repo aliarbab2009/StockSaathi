@@ -579,6 +579,41 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* Today's market mood — AI one-paragraph summary at top of /#/stocks */
+.market-mood-card {
+  padding: var(--sp-4);
+  border-radius: var(--r-lg, var(--r));
+  background: var(--bg-soft);
+  border: 1px solid var(--divider);
+  margin-bottom: var(--sp-4);
+}
+.market-mood-card.mood-hot   { border-top: 3px solid var(--negative); }
+.market-mood-card.mood-warm  { border-top: 3px solid var(--brand); }
+.market-mood-card.mood-mild  { border-top: 3px solid var(--text-muted); }
+.market-mood-card.mood-cold  { border-top: 3px solid var(--positive); opacity: 0.95; }
+.mood-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.mood-pill {
+  font-size: var(--text-10);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 10px;
+  border-radius: var(--r-full);
+}
+.mood-pill.mood-hot  { background: var(--negative-soft); color: var(--negative); }
+.mood-pill.mood-warm { background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); }
+.mood-pill.mood-mild { background: var(--bg-soft); color: var(--text-muted); }
+.mood-pill.mood-cold { background: var(--positive-soft); color: var(--positive); }
+.mood-body { line-height: 1.55; color: var(--text-strong); font-size: var(--text-md); }
+
+.ai-search-result-card {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--brand) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, var(--border));
+  margin-bottom: var(--sp-3);
+}
+
 /* Stock "Why is this moving?" AI card on the detail page */
 .stock-why-card {
   border-left: 3px solid var(--brand);

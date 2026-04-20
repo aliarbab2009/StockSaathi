@@ -8,9 +8,15 @@ import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getIn
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
+import { toast } from "../components/toast.js";
 
 let filter = { q: "", sector: "all", kind: "all", sort: "marketCap" };
 let quoteCache = {};
+let marketMood = null;       // { narrative, temperature } | null
+let _moodFetched = false;
+let aiSearch = null;          // { matches: ["TCS", ...], rationale: "..." } | null — when present, overrides the normal filter pipeline
+let aiSearchLoading = false;
+let aiSearchQuery = "";
 
 export function renderStocks(main) {
   let cancelled = false;
@@ -46,6 +52,17 @@ export function renderStocks(main) {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
     render();
+    // Fire the daily market-mood card once quotes have landed for the
+    // first time. Cached across the whole site per day, so most visits
+    // are instant + free.
+    if (!marketMood && !_moodFetched && Object.keys(quoteCache).length > 50) {
+      _moodFetched = true;
+      fetchMarketMood().then((m) => {
+        if (cancelled) return;
+        marketMood = m;
+        render();
+      }).catch(() => {});
+    }
   }, 10_000);
 
   function render() {
@@ -69,11 +86,33 @@ export function renderStocks(main) {
         <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
       </div>
 
+      ${marketMood ? `
+        <div class="market-mood-card mood-${escapeAttr(marketMood.temperature)}">
+          <div class="mood-head">
+            <span class="pf-digest-label">Today's mood</span>
+            <span class="mood-pill mood-${escapeAttr(marketMood.temperature)}">${escapeHtml(marketMood.temperature)}</span>
+          </div>
+          <div class="mood-body">${escapeHtml(marketMood.narrative)}</div>
+        </div>
+      ` : ""}
+
+      ${aiSearch ? `
+        <div class="ai-search-result-card">
+          <div class="flex items-center gap-2" style="margin-bottom: 6px;">
+            <span class="pf-digest-label">Saathi filter</span>
+            <span class="dim text-xs">"${escapeHtml(aiSearchQuery)}" · ${aiSearch.matches.length} matches</span>
+            <button class="btn btn-ghost btn-sm" id="ai-search-clear" style="margin-left:auto;">✕ Clear</button>
+          </div>
+          ${aiSearch.rationale ? `<div class="muted text-sm" style="margin-bottom: 8px;">${escapeHtml(aiSearch.rationale)}</div>` : ""}
+        </div>
+      ` : ""}
+
       <div class="stocks-toolbar">
         <div class="input-prefix">
           <span class="px">🔍</span>
-          <input type="search" id="stocks-search" placeholder="Search stocks, mutual funds, sectors..." value="${escapeAttr(filter.q)}" />
+          <input type="search" id="stocks-search" placeholder="Search, or try &quot;cheap IT stocks with low debt&quot;..." value="${escapeAttr(filter.q)}" />
         </div>
+        <button class="btn btn-ghost btn-sm" id="ask-saathi-btn" title="Filter the universe with natural language" ${aiSearchLoading ? "disabled" : ""}>${aiSearchLoading ? "…" : "✨ Ask Saathi"}</button>
         <select class="select" id="stocks-sort" style="max-width: 200px;">
           <option value="marketCap" ${filter.sort === "marketCap" ? "selected" : ""}>Top by size</option>
           <option value="gainers" ${filter.sort === "gainers" ? "selected" : ""}>Top gainers today</option>
@@ -121,7 +160,103 @@ export function renderStocks(main) {
         else addToWatchlist(sym);
       });
     });
+
+    main.querySelector("#ask-saathi-btn")?.addEventListener("click", () => {
+      const q = filter.q.trim();
+      if (q.length < 3) {
+        toast({ kind: "info", message: "Type a few words — e.g. 'IT stocks with low debt' — then hit Ask Saathi." });
+        return;
+      }
+      runAiSearch(q, render);
+    });
+    main.querySelector("#ai-search-clear")?.addEventListener("click", () => {
+      aiSearch = null;
+      aiSearchQuery = "";
+      render();
+    });
+    // Also trigger AI search on Enter inside the search input when the
+    // query has multiple words (looks like natural language, not a ticker).
+    searchEl.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        const q = filter.q.trim();
+        if (q.split(/\s+/).length >= 2 && q.length >= 6) {
+          e.preventDefault();
+          runAiSearch(q, render);
+        }
+      }
+    });
   }
+}
+
+async function runAiSearch(query, render) {
+  if (aiSearchLoading) return;
+  aiSearchLoading = true;
+  aiSearchQuery = query;
+  render();
+  try {
+    // Build candidate rows from INSTRUMENTS + live quoteCache for dayPct.
+    const candidates = INSTRUMENTS.slice(0, 200).map(i => {
+      const q = quoteCache[i.symbol];
+      return {
+        symbol: i.symbol,
+        name: i.name,
+        sector: i.sector || "",
+        marketCap: i.marketCap || "",
+        pe: i.pe ?? null,
+        pb: i.pb ?? null,
+        divYield: i.divYield ?? null,
+        beta: i.beta ?? null,
+        risk: i.risk || "",
+        dayPct: q?.changePct != null ? q.changePct * 100 : null,
+      };
+    });
+    const res = await fetch("/api/market-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, candidates }),
+    });
+    if (!res.ok) throw new Error("http_" + res.status);
+    const d = await res.json();
+    aiSearch = d?.matches?.length ? { matches: d.matches, rationale: d.rationale || "" } : { matches: [], rationale: d?.rationale || "No matches in the current universe." };
+  } catch (e) {
+    aiSearch = { matches: [], rationale: "Saathi couldn't search just now. Try again in a moment." };
+  } finally {
+    aiSearchLoading = false;
+    render();
+  }
+}
+
+async function fetchMarketMood() {
+  const bySector = {};
+  for (const inst of INSTRUMENTS) {
+    const q = quoteCache[inst.symbol];
+    if (!q || typeof q.changePct !== "number" || !inst.sector) continue;
+    if (!bySector[inst.sector]) bySector[inst.sector] = { pcts: [], up: { sym: "", pct: -Infinity }, down: { sym: "", pct: Infinity } };
+    const pct = q.changePct * 100;
+    bySector[inst.sector].pcts.push(pct);
+    if (pct > bySector[inst.sector].up.pct) bySector[inst.sector].up = { sym: inst.symbol, pct };
+    if (pct < bySector[inst.sector].down.pct) bySector[inst.sector].down = { sym: inst.symbol, pct };
+  }
+  const sectors = Object.entries(bySector)
+    .map(([name, v]) => ({
+      name,
+      avgPct: v.pcts.reduce((a, b) => a + b, 0) / v.pcts.length,
+      count: v.pcts.length,
+      topUp: v.up.sym ? `${v.up.sym} ${v.up.pct>=0?"+":""}${v.up.pct.toFixed(1)}%` : "",
+      topDown: v.down.sym ? `${v.down.sym} ${v.down.pct>=0?"+":""}${v.down.pct.toFixed(1)}%` : "",
+    }))
+    .sort((a, b) => Math.abs(b.avgPct) - Math.abs(a.avgPct))
+    .slice(0, 10);
+  if (!sectors.length) return null;
+  const r = await fetch("/api/market-mood", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sectors, asOf: Date.now() }),
+  });
+  if (!r.ok) return null;
+  const d = await r.json();
+  if (!d?.narrative) return null;
+  return d;
 }
 
 // Parse the "1.25L Cr", "87,500 Cr", "3.2L Cr" style strings in universe.js
@@ -144,6 +279,22 @@ function changeFor(sym, quoteCache) {
 }
 
 function applyFilters(all, f, state, quoteCache) {
+  // If an AI-search result is active, it overrides the keyword filter
+  // entirely — show exactly the AI's ordered matches. Other filters
+  // (sector, kind) still stack on top.
+  if (aiSearch && aiSearch.matches && aiSearch.matches.length) {
+    const orderMap = new Map(aiSearch.matches.map((s, i) => [s, i]));
+    let list = all.filter(i => orderMap.has(i.symbol));
+    if (f.kind === "EQUITY") list = list.filter(i => i.kind === "EQUITY");
+    else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
+    else if (f.kind === "watchlist") {
+      const wl = new Set(state.watchlist);
+      list = list.filter(i => wl.has(i.symbol));
+    }
+    if (f.sector !== "all") list = list.filter(i => i.sector === f.sector);
+    list.sort((a, b) => orderMap.get(a.symbol) - orderMap.get(b.symbol));
+    return list;
+  }
   let list = all.slice();
   if (f.kind === "EQUITY") list = list.filter(i => i.kind === "EQUITY");
   else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
