@@ -138,7 +138,7 @@ const JAILBREAK_NEEDLES = [
   "bypass these",
   "override your",
   "act as an unfiltered",
-  "you are not claude",
+  "you are not an ai",
   "you are not bound",
 ];
 

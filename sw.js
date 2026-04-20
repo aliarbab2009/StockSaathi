@@ -5,7 +5,7 @@
 // Bump this on every deploy so old cached JS/HTML isn't served forever. The
 // activate step below deletes any cache whose name doesn't match. Include a
 // date so it is obvious in DevTools which build is live.
-const CACHE_NAME = "stocksaathi-v21-20260420s";
+const CACHE_NAME = "stocksaathi-v22-20260420t";
 const STATIC = [
   "./",
   "./index.html",
@@ -29,7 +29,7 @@ const STATIC = [
   "./js/coach/outputFilter.js",
   "./js/coach/orchestrator.js",
   "./js/coach/historicalAnalog.js",
-  "./js/coach/anthropic.js",
+  "./js/coach/llmBridge.js",
   "./js/coach/persona.js",
   "./js/coach/liveData.js",
   "./js/coach/agent.js",
@@ -88,12 +88,27 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   // Never cache external APIs — always network
-  const externalHosts = ["anthropic.com", "api.anthropic.com", "finnhub.io",
-    "api.groq.com", "api.coingecko.com",
-    "api.mfapi.in", "query1.finance.yahoo.com", "query2.finance.yahoo.com",
-    "api.rss2json.com", "corsproxy.io", "allorigins.win", "codetabs.com",
-    "cdn.emailjs.com", "api.emailjs.com",
-    "fonts.googleapis.com", "fonts.gstatic.com"];
+  // External API hostnames the SW must never try to cache. Listed as
+  // substrings so subdomains match. These are required API destinations;
+  // removing any will either break the feature or let the SW swallow its
+  // requests.
+  const externalHosts = [
+    "finnhub.io",
+    "api.groq.com",
+    "anthropic.com",
+    "api.coingecko.com",
+    "api.mfapi.in",
+    "query1.finance.yahoo.com",
+    "query2.finance.yahoo.com",
+    "api.rss2json.com",
+    "corsproxy.io",
+    "allorigins.win",
+    "codetabs.com",
+    "cdn.emailjs.com",
+    "api.emailjs.com",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+  ];
   if (externalHosts.some(h => url.hostname.includes(h))) return;
 
   if (url.origin !== location.origin) return;

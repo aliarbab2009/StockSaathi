@@ -1,6 +1,7 @@
 // =============================================================================
 // CHAT — A simple coaching chatbot for teens learning to invest.
-// Uses Claude (if API key set) or deterministic template responses as fallback.
+// Uses the BYO LLM path (if API key set) or deterministic template responses
+// as fallback.
 // =============================================================================
 
 import { getState } from "../state.js";
@@ -36,14 +37,14 @@ export function renderChat(main) {
 
   function render() {
     const state = getState();
-    const usingLLM = !!state.settings.anthropicKey;
+    const usingLLM = !!state.settings.llmApiKey;
 
     main.innerHTML = `
       <div style="max-width: 760px; margin: 0 auto;">
         <div style="margin-bottom: var(--sp-4);">
           <div class="flex items-center gap-3">
             <h1>Saathi</h1>
-            <span class="data-badge"><span class="dot ${usingLLM ? "" : "offline"}"></span> ${usingLLM ? "Claude-powered · finance only" : "Template mode · finance only"}</span>
+            <span class="data-badge"><span class="dot ${usingLLM ? "" : "offline"}"></span> ${usingLLM ? "LLM · finance only" : "Template mode · finance only"}</span>
           </div>
           <p class="muted">I'm Saathi — your finance coach. Ask anything about money, investing, Indian markets, taxes, behavioral econ, or how a past crash played out. Out of scope: everything else.</p>
         </div>
@@ -196,7 +197,7 @@ async function sendAndReply(userText) {
     }));
     const system = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.`;
     replyText = await runAgent({
-      apiKey: state.settings.anthropicKey || null,
+      apiKey: state.settings.llmApiKey || null,
       system,
       messages,
     });

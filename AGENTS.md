@@ -1,4 +1,4 @@
-# StockSaathi — project context for Claude
+# StockSaathi — project context
 
 Vanilla-JS SPA + Python serverless (Vercel) + Postgres (Supabase). Virtual-money Indian stock-trading simulator for teens. Live at https://stocksaathi.co.in.
 
@@ -11,8 +11,9 @@ Vanilla-JS SPA + Python serverless (Vercel) + Postgres (Supabase). Virtual-money
 
 ## Workflow rules
 - **Always push + let Vercel deploy** after any task. User pre-authorised.
-- **Push target:** `origin` remote — **only** `aliarbab2009/StockSaathi.git`. Never add a second pushurl. See `~/.claude/projects/G--StockSaathi/memory/feedback_stocksaathi_push_target.md`.
+- **Push target:** `origin` remote — **only** `aliarbab2009/StockSaathi.git`. Never add a second pushurl.
 - **Style:** terse, blunt, no ceremony. User prefers honesty > padding.
+- **No attribution** in anything committed to this repo — no co-author trailers, no "built by X" comments, no vendor-branded filenames or identifiers. This is a hard rule.
 - **SW cache bump:** every JS/CSS change → bump `CACHE_NAME` in `sw.js` (format `stocksaathi-vN-YYYYMMDDx`)
 
 ## Key endpoints
@@ -21,9 +22,6 @@ Vanilla-JS SPA + Python serverless (Vercel) + Postgres (Supabase). Virtual-money
 - `/api/fundamentals?symbol=X` — 3-tier fallback (v7 → v10 → v8/chart)
 - `/api/chat` — LLM proxy
 - `/api/send-consent` — parent email
-
-## Full context
-See `~/.claude/projects/G--StockSaathi/memory/project_handoff.md` for architecture, outstanding TODOs, known bugs, and Vercel/Supabase setup state.
 
 ## Do not
 - Commit secrets (`.env` is gitignored)

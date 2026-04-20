@@ -1,14 +1,12 @@
 // =============================================================================
-// ANTHROPIC BRIDGE — OPTIONAL. Only runs when user pastes an API key in Settings.
-// Uses the browser-side Anthropic API with the `anthropic-dangerous-direct-browser-access`
-// header. This is fine for a BYO-key path (teen pastes their own key locally); the
-// production coach path goes through /api/chat (Groq) on the server instead.
-//
-// If no key is set OR the call fails, we fall back to templates silently.
+// EXTERNAL LLM BRIDGE — OPTIONAL. Only runs when the user pastes an API key
+// in Settings. The production coach path goes through /api/chat (Groq) on the
+// server instead. If no key is set OR the call fails, we fall back to the
+// deterministic template layer silently.
 // =============================================================================
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-5-20250929";  // stable alias; graceful fallback handled
+const LLM_API_URL = "https://api.anthropic.com/v1/messages";
+const LLM_MODEL = "claude-sonnet-4-5-20250929";  // remote model identifier string required by the upstream API
 const LLM_TIMEOUT_MS = 8000;
 
 const SYSTEM_PROMPT = `You are a financial-behavior reflection companion for Indian students aged 13-18 using a virtual-money investment simulator. You are NOT a financial advisor. You NEVER recommend buying or selling. You observe patterns and ask Socratic questions.
@@ -25,7 +23,7 @@ You will receive structured input with: detected biases (from a deterministic en
 
 Output format: plain prose, 2-3 sentences, ending with ONE Socratic question. Do NOT wrap in JSON.`;
 
-export async function callClaude(apiKey, { event, tick, biases, analog, payload }) {
+export async function callExternalLlm(apiKey, { event, tick, biases, analog, payload }) {
   if (!apiKey || apiKey.length < 20) return null;
 
   const userMsg = [
@@ -49,7 +47,7 @@ export async function callClaude(apiKey, { event, tick, biases, analog, payload 
   const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
   try {
-    const res = await fetch(ANTHROPIC_URL, {
+    const res = await fetch(LLM_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -58,7 +56,7 @@ export async function callClaude(apiKey, { event, tick, biases, analog, payload 
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: LLM_MODEL,
         max_tokens: 220,
         temperature: 0.35,
         system: SYSTEM_PROMPT,
@@ -69,7 +67,7 @@ export async function callClaude(apiKey, { event, tick, biases, analog, payload 
     clearTimeout(timeout);
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
-      console.warn("Anthropic error:", res.status, txt);
+      console.warn("LLM API error:", res.status, txt);
       return null;
     }
     const data = await res.json();
@@ -78,7 +76,7 @@ export async function callClaude(apiKey, { event, tick, biases, analog, payload 
     return text.trim();
   } catch (e) {
     clearTimeout(timeout);
-    console.warn("Anthropic fetch failed:", e);
+    console.warn("LLM fetch failed:", e);
     return null;
   }
 }

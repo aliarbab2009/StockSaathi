@@ -40,7 +40,7 @@ const GLOBAL_SETTINGS_DEFAULTS = {
   hinglish: false,
   coachPanelOpen: false,  // Closed by default; user opens via FAB. Prevents
                           // mobile overlay from blocking signup/CTAs.
-  anthropicKey: "",
+  llmApiKey: "",
   finnhubKey: "",
   emailjs: { serviceId: "", templateId: "", publicKey: "" },
 };
@@ -85,7 +85,15 @@ function writeUserState(userId, st) {
 function readSettings() {
   try {
     const raw = localStorage.getItem(GLOBAL_SETTINGS_KEY);
-    return raw ? { ...GLOBAL_SETTINGS_DEFAULTS, ...JSON.parse(raw) } : { ...GLOBAL_SETTINGS_DEFAULTS };
+    if (!raw) return { ...GLOBAL_SETTINGS_DEFAULTS };
+    const parsed = JSON.parse(raw);
+    // Migrate legacy field name to the current one; write-back happens on the
+    // next setSetting() call so old key drops from storage naturally.
+    if (parsed && parsed.anthropicKey && !parsed.llmApiKey) {
+      parsed.llmApiKey = parsed.anthropicKey;
+    }
+    delete parsed.anthropicKey;
+    return { ...GLOBAL_SETTINGS_DEFAULTS, ...parsed };
   } catch { return { ...GLOBAL_SETTINGS_DEFAULTS }; }
 }
 function writeSettings(s) { localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(s)); }

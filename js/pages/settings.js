@@ -61,10 +61,9 @@ export function renderSettings(main) {
             The Saathi coach is powered by <strong>Groq's Llama 3.3 70B</strong> by default (via this site's backend — free, fast, no setup). If you want to use your own key for unlimited calls, sign up <a href="https://console.groq.com/keys" target="_blank" rel="noopener">here</a> (30 seconds, no card). Keys stay in your browser and only call Groq directly.
           </p>
           <div class="field">
-            <label class="label" for="anthro-key">Your Groq API key (optional)</label>
-            <input class="input" id="anthro-key" type="password" placeholder="gsk_..." value="${escapeAttr(state.settings.anthropicKey || "")}" />
+            <label class="label" for="llm-key">Your Groq API key (optional)</label>
+            <input class="input" id="llm-key" type="password" placeholder="gsk_..." value="${escapeAttr(state.settings.llmApiKey || "")}" />
           </div>
-          <div class="muted text-xs" style="margin-top: var(--sp-2);">Legacy: an Anthropic key (<code>sk-ant-...</code>) also works in the same field if you have one.</div>
         </div>
 
         <div class="card" style="margin-top: var(--sp-4);">
@@ -104,7 +103,7 @@ export function renderSettings(main) {
         <div class="card" style="margin-top: var(--sp-4); background: var(--bg-soft);">
           <h3 style="margin-bottom: var(--sp-3);">About</h3>
           <p class="text-sm" style="line-height: 1.7;"><strong>StockSaathi</strong> — an AI-coached investment simulator for Indian teens. Real stocks, virtual money, behavioral coach.</p>
-          <p class="muted text-sm" style="line-height: 1.7; margin-top: var(--sp-2);">Stack: vanilla ES modules, custom SVG charts, client-side state with localStorage persistence, Web Crypto password hashing (PBKDF2), optional Claude LLM + EmailJS + Finnhub. Zero build step. Works fully offline after first load.</p>
+          <p class="muted text-sm" style="line-height: 1.7; margin-top: var(--sp-2);">Stack: vanilla ES modules, custom SVG charts, client-side state with localStorage persistence, Web Crypto password hashing (PBKDF2), optional server-side LLM + EmailJS + Finnhub. Zero build step. Works fully offline after first load.</p>
           <p class="dim text-xs" style="line-height: 1.7; margin-top: var(--sp-2);">Not affiliated with SEBI, NSE, BSE, or any broker. All prices are delayed; they come from Yahoo Finance or a synthetic fallback. No advice is ever provided; this product is behavioral reflection, not investment advice.</p>
         </div>
       </div>
@@ -117,7 +116,7 @@ export function renderSettings(main) {
     main.querySelector("#toggle-hinglish").addEventListener("change", (e) => setSetting("hinglish", e.target.checked));
 
     main.querySelector("#finnhub-key").addEventListener("change", (e) => { setSetting("finnhubKey", e.target.value.trim()); toast({ kind: "success", message: "Finnhub key saved." }); });
-    main.querySelector("#anthro-key").addEventListener("change", (e) => { setSetting("anthropicKey", e.target.value.trim()); toast({ kind: "success", message: "Anthropic key saved." }); });
+    main.querySelector("#llm-key").addEventListener("change", (e) => { setSetting("llmApiKey", e.target.value.trim()); toast({ kind: "success", message: "LLM key saved." }); });
 
     const saveEJS = () => {
       setSettings({

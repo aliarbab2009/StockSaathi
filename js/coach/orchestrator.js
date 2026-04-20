@@ -13,7 +13,7 @@ import { filterOutput, safeFallback } from "./outputFilter.js";
 import { getInstrument } from "../data/universe.js";
 import { getPriceAt } from "../data/prices.js";
 import { getState } from "../state.js";
-import { callClaude } from "./anthropic.js";
+import { callExternalLlm } from "./llmBridge.js";
 
 /**
  * @param {Object} event — { type, ...fields }
@@ -85,9 +85,9 @@ export async function coach(event) {
   // 2. Optional LLM augmentation — ONLY if API key provided.
   // Fire-and-forget; does not block the primary render.
   let model = "template";
-  if (s.settings.anthropicKey) {
+  if (s.settings.llmApiKey) {
     try {
-      const llmText = await callClaude(s.settings.anthropicKey, {
+      const llmText = await callExternalLlm(s.settings.llmApiKey, {
         event, tick, biases, analog, payload,
       });
       if (llmText) {
@@ -97,7 +97,7 @@ export async function coach(event) {
         });
         if (filteredLlm.ok) {
           payload = filteredLlm.payload;
-          model = "claude-sonnet-4-6";
+          model = "llm";
         }
       }
     } catch (e) {

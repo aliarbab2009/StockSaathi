@@ -75,7 +75,7 @@ function summarisePortfolio(state) {
   return `Cash: ${formatRupees(state.portfolio.cashPaise, { compact: true })}\nHoldings (${syms.length}): ${lines.join(", ")}`;
 }
 
-async function callClaudeAgent(apiKey, history, state) {
+async function callLlmAgent(apiKey, history, state) {
   const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
   if (isOffTopic(lastUser)) return offTopicRedirect(lastUser);
 
@@ -140,7 +140,7 @@ function render() {
   if (!root) return;
   const state = getState();
   const messages = renderMessagesHtml(state);
-  const usingLLM = !!state.settings.anthropicKey;
+  const usingLLM = !!state.settings.llmApiKey;
 
   root.innerHTML = `
     <div class="coach-header">
@@ -191,7 +191,7 @@ function render() {
     const s = getState();
     let reply = null;
     try {
-      reply = await callClaudeAgent(s.settings.anthropicKey || null, chatHistory, s);
+      reply = await callLlmAgent(s.settings.llmApiKey || null, chatHistory, s);
     } catch (e) { console.warn("agent:", e); }
     if (!reply) reply = smartTemplateReply(text, s);
 

@@ -175,17 +175,14 @@ Should return:
 ```json
 {
   "ok": true,
-  "providers": {
-    "supabase": true,
-    "groq": true,
-    "resend": true,
-    "smtp": true,
-    "anthropic": false
-  }
+  "runtime": "vercel",
+  "email_configured": true,
+  "llm_configured": true,
+  "db_configured": true
 }
 ```
 
-All four of `supabase`, `groq`, `resend`, `smtp` should be **true**.
+All three of `email_configured`, `llm_configured`, `db_configured` should be **true**.
 
 Now:
 1. Open the live site → **Sign up** with a fresh email.

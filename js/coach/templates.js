@@ -1,8 +1,8 @@
 // =============================================================================
 // COACH TEMPLATES — Deterministic response templates keyed by (event_type, bias).
 // These are the PRIMARY coach outputs. Used directly when no LLM is configured.
-// An optional Anthropic API key in Settings can augment with streaming text,
-// but the DEMO path is fully self-contained.
+// An optional user-provided LLM API key in Settings can augment with
+// streaming text, but the DEMO path is fully self-contained.
 //
 // Every template produces the same schema:
 //   { reflection, historical_context, warning_level, suggested_q, citations[] }

@@ -14,8 +14,7 @@ class handler(BaseHTTPRequestHandler):
             (os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
             or os.environ.get("RESEND_API_KEY")
         )
-        any_llm = bool(os.environ.get("GROQ_API_KEY")
-                       or os.environ.get("ANTHROPIC_API_KEY"))
+        any_llm = bool(os.environ.get("GROQ_API_KEY"))
         any_db = bool(os.environ.get("SUPABASE_URL")
                       and os.environ.get("SUPABASE_ANON_KEY"))
         body = json.dumps({

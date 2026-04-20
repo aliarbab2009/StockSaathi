@@ -1,5 +1,5 @@
 // =============================================================================
-// AGENT — Real LLM with tool-use. Groq-first (free + fast), Anthropic fallback.
+// AGENT — Real LLM with tool-use. Groq-first (free + fast), BYO-key fallback.
 //
 // Groq Llama 3.3 70B: 500+ tokens/sec, free tier generous enough for 100-user
 // pitch demos, OpenAI-compatible tool-use API. User's own key (if set in
