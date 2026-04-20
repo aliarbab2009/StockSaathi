@@ -141,12 +141,17 @@ function applyFilters(all, f, state) {
 function renderStockCard(inst, state) {
   const closes = getCloses(inst.symbol, 40);
   const quote = quoteCache[inst.symbol];
-  const price = quote?.pricePaise ?? inst.price;
-  const change = quote?.changePct ?? getTodayChange(inst.symbol);
+  // LIVE first, always. inst.price is a seeded reference only — used as an
+  // initial skeleton placeholder before live data arrives. When the universe
+  // scales to all ~2000 NSE stocks, hand-maintaining static prices is
+  // impossible, so the UI must tolerate no-static-price gracefully.
+  const hasLive = quote?.pricePaise != null;
+  const price = hasLive ? quote.pricePaise : (inst.price ?? null);
+  const change = quote?.changePct ?? (inst.price != null ? getTodayChange(inst.symbol) : 0);
   const isWatched = state.watchlist.includes(inst.symbol);
-  // LIVE = fresh quote from live feed. DELAYED = we have a feed value but
-  // it's minutes-to-hours stale (Yahoo's free NSE feed lags unpredictably).
-  // No badge at all = no live data, rendering static fallback only.
+  // Badge logic. LIVE = fresh real feed. DELAYED = feed value older than
+  // expected during market hours. SYNCING = no live quote yet + we have
+  // only a static seed price. "—" price is shown if we have neither.
   let badge = "";
   if (quote?.source) {
     if (quote.stale) {
@@ -154,10 +159,12 @@ function renderStockCard(inst, state) {
         ? `${(quote.staleAgeMinutes / 60).toFixed(1)}h old`
         : `${quote.staleAgeMinutes}m old`;
       const asOf = quote.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
-      badge = `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Data as of ${asOf} IST — Yahoo's free feed is behind">DELAYED ${ageLabel}</span>`;
+      badge = `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Data as of ${asOf} IST — upstream feed is behind">DELAYED ${ageLabel}</span>`;
     } else {
       badge = `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;">LIVE</span>`;
     }
+  } else if (inst.price != null) {
+    badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing — price shown is a reference, not current">SYNCING</span>`;
   }
   const liveBadge = badge;
   return `
@@ -172,10 +179,10 @@ function renderStockCard(inst, state) {
       </div>
       <div class="flex items-center justify-between">
         <div>
-          <div class="stock-price tabular">${formatRupees(price)}</div>
-          <div class="stock-change ${deltaClass(change)}">${formatPct(change, { sign: true })} today ${liveBadge}</div>
+          <div class="stock-price tabular">${price != null ? formatRupees(price) : `<span class="dim">₹—</span>`}</div>
+          <div class="stock-change ${deltaClass(change)}">${hasLive ? `${formatPct(change, { sign: true })} today` : `<span class="dim">—</span>`} ${liveBadge}</div>
         </div>
-        <span class="risk-pill ${inst.risk}">${inst.risk.toUpperCase()}</span>
+        <span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "MED").toUpperCase()}</span>
       </div>
       <div class="stock-sparkline">${sparkline(closes)}</div>
     </div>

@@ -351,6 +351,7 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   const plotW = W - PL - PR;
   const plotH = H - PT - PB;
   const toX = (i) => PL + (N > 1 ? (i / (N - 1)) * plotW : 0);
+  const toY = (v) => PT + plotH - ((v - MIN) / (MAX - MIN)) * plotH;
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -366,10 +367,14 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
     const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
     const k = ohlc[idx];
     const cx = toX(idx);
+    // Snap the horizontal crosshair to the bar's CLOSE price, not the raw
+    // cursor Y — matches Google Finance / TradingView convention. The
+    // vertical line already snaps to the bar's X via toX(idx).
+    const cy = toY(k.c);
     crossX.setAttribute("x1", cx);
     crossX.setAttribute("x2", cx);
-    crossY.setAttribute("y1", py);
-    crossY.setAttribute("y2", py);
+    crossY.setAttribute("y1", cy);
+    crossY.setAttribute("y2", cy);
     cross.style.display = "";
 
     const d = new Date(k.t);
