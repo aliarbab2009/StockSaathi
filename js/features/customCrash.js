@@ -52,6 +52,7 @@ export async function generateCustomCrash(description) {
   for (let attempt = 0; attempt < TEMPS.length; attempt++) {
     try {
       const meta = await callLlmForMeta(description, TEMPS[attempt]);
+      reshape(meta);
       const valid = validate(meta);
       if (!valid.ok) { lastErr = valid.error; continue; }
       return buildScenario(meta);
@@ -60,6 +61,29 @@ export async function generateCustomCrash(description) {
     }
   }
   throw new Error(lastErr || "Could not generate scenario after 3 attempts.");
+}
+
+// Mutate the raw LLM output into something the validator/builder can
+// accept. LLMs tend to describe long-arc events with key moments that
+// overflow the day window they pick — rather than reject, grow the
+// window to fit the story (within our 140-day cap).
+function reshape(m) {
+  if (!m || typeof m !== "object") return;
+  if (Array.isArray(m.keyMoments)) {
+    let maxDay = 0;
+    for (const km of m.keyMoments) {
+      if (km && typeof km.day === "number" && km.day > maxDay) maxDay = km.day;
+    }
+    if (maxDay >= (m.totalDays ?? 0)) {
+      m.totalDays = Math.min(MAX_DAYS, Math.max(m.totalDays || 0, maxDay + 3));
+    }
+  }
+  if (typeof m.totalDays === "number") {
+    m.totalDays = Math.max(10, Math.min(MAX_DAYS, Math.floor(m.totalDays)));
+  }
+  if (typeof m.troughDay === "number" && typeof m.totalDays === "number") {
+    m.troughDay = Math.max(1, Math.min(m.totalDays - 1, Math.floor(m.troughDay)));
+  }
 }
 
 async function callLlmForMeta(description, temperature) {
@@ -109,8 +133,7 @@ function validate(m) {
   if (!Array.isArray(m.keyMoments) || m.keyMoments.length < 2)
     return { ok: false, error: "need ≥ 2 keyMoments" };
   for (const km of m.keyMoments) {
-    if (!n(km?.day) || km.day < 0 || km.day >= m.totalDays)
-      return { ok: false, error: "keyMoment day out of range" };
+    if (!n(km?.day)) return { ok: false, error: "keyMoment missing day" };
     if (!km?.label || !km?.narration)
       return { ok: false, error: "keyMoment missing label/narration" };
   }
@@ -135,8 +158,14 @@ function buildScenario(m) {
   }
 
   // Sort key moments by day + dedupe on day (prefer first), then attach.
+  // Clamp any day that crept outside the window — reshape() should have
+  // grown totalDays to fit, but defend just in case the LLM reshuffled.
   const seenDays = new Set();
   const cleanMoments = m.keyMoments
+    .map(km => ({
+      ...km,
+      day: Math.max(0, Math.min(m.totalDays - 1, Math.floor(km.day))),
+    }))
     .filter(km => {
       if (seenDays.has(km.day)) return false;
       seenDays.add(km.day);
