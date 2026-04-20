@@ -90,6 +90,15 @@ export function getDataSource() {
 
 function normalizeFromApi(payload, symbol) {
   if (!payload?.ok) return null;
+  const ts = payload.ts_ms || Date.now();
+  // Staleness detection. Yahoo's free NSE feed is officially 15 min delayed
+  // but in practice can fall hours behind during busy sessions. If the
+  // quote's own timestamp is more than 5 min old DURING MARKET HOURS, flip
+  // the "LIVE" badge to "DELAYED" so we don't lie to users. Outside market
+  // hours the old timestamp is expected (market is closed).
+  const marketOpenNow = _isNseOpen(Date.now());
+  const ageMinutes = (Date.now() - ts) / 60000;
+  const stale = marketOpenNow && ageMinutes > 5;
   return {
     symbol,
     pricePaise: Math.round(payload.price * 100),
@@ -99,10 +108,25 @@ function normalizeFromApi(payload, symbol) {
     low: Math.round(payload.day_low * 100),
     volume: payload.volume || 0,
     currency: payload.currency || "INR",
-    ts: payload.ts_ms || Date.now(),
-    stale: false,
+    ts,
+    stale,
+    staleAgeMinutes: stale ? Math.round(ageMinutes) : 0,
     source: payload.source || "yahoo",
   };
+}
+
+function _isNseOpen(nowMs) {
+  // Cheap + correct: use Intl for Asia/Kolkata, mirror prices.js marketStatus.
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", weekday: "short",
+      hour12: false,
+    }).formatToParts(new Date(nowMs)).reduce((a, p) => (a[p.type] = p.value, a), {});
+    const mins = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
+    const weekday = (parts.weekday || "").toLowerCase();
+    if (["sat", "sun"].includes(weekday)) return false;
+    return mins >= 9 * 60 + 15 && mins < 15 * 60 + 30;
+  } catch { return false; }
 }
 
 // ---------- Public API -----------------------------------------------------

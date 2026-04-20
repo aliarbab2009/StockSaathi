@@ -144,7 +144,22 @@ function renderStockCard(inst, state) {
   const price = quote?.pricePaise ?? inst.price;
   const change = quote?.changePct ?? getTodayChange(inst.symbol);
   const isWatched = state.watchlist.includes(inst.symbol);
-  const liveBadge = quote?.source && !quote.stale ? `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;">LIVE</span>` : "";
+  // LIVE = fresh quote from live feed. DELAYED = we have a feed value but
+  // it's minutes-to-hours stale (Yahoo's free NSE feed lags unpredictably).
+  // No badge at all = no live data, rendering static fallback only.
+  let badge = "";
+  if (quote?.source) {
+    if (quote.stale) {
+      const ageLabel = quote.staleAgeMinutes >= 60
+        ? `${(quote.staleAgeMinutes / 60).toFixed(1)}h old`
+        : `${quote.staleAgeMinutes}m old`;
+      const asOf = quote.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
+      badge = `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Data as of ${asOf} IST — Yahoo's free feed is behind">DELAYED ${ageLabel}</span>`;
+    } else {
+      badge = `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;">LIVE</span>`;
+    }
+  }
+  const liveBadge = badge;
   return `
     <div class="stock-card" data-sym="${inst.symbol}" role="button" tabindex="0" aria-label="${escapeAttr(inst.name)}">
       <div class="stock-head">
