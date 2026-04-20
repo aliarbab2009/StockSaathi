@@ -526,7 +526,7 @@ function renderOrderBook(symbol, curPrice) {
   return `
     <div class="card" style="margin-top: var(--sp-4);">
       <div class="card-head">
-        <h3>Live order book</h3>
+        <h3>Order book <span class="pill pill-yellow" style="font-size:10px; margin-left:6px; vertical-align:middle;" title="Real NSE market depth requires a paid data feed (Dhan/TrueData). This book + trades are synthesised around the live LTP — useful for teaching the concept, not actual tradeable queue positions.">SIMULATED</span></h3>
         <span class="data-badge"><span class="dot"></span> Spread ${fmt(ob.spread)}</span>
       </div>
       <div class="grid" style="grid-template-columns: 1fr 1fr; gap: var(--sp-4);">
@@ -560,7 +560,7 @@ function renderOrderBook(symbol, curPrice) {
         </div>
       </div>
       <div style="margin-top: var(--sp-4);">
-        <div class="text-xs uppercase muted" style="margin-bottom: var(--sp-2);">Recent trades</div>
+        <div class="text-xs uppercase muted" style="margin-bottom: var(--sp-2);">Recent trades <span class="dim" style="text-transform:none; font-weight:400;">(simulated)</span></div>
         <div class="table-wrap">
           <table class="table" style="font-size: var(--text-sm);">
             <thead><tr><th>When</th><th>Side</th><th class="num">Qty</th><th class="num">Price</th></tr></thead>

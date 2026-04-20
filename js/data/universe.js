@@ -12,7 +12,10 @@ export const STOCKS = [
   // loads the page while the Yahoo proxy is unreachable.
   { symbol: "RELIANCE",   name: "Reliance Industries",       sector: "Energy",        marketCap: "18.5L Cr", price: 136490, pe: 25.4, pb: 2.1, divYield: 0.35, beta: 0.95, risk: "low",  logo: "RIL" },
   { symbol: "TCS",        name: "Tata Consultancy Services", sector: "IT Services",   marketCap: "14.8L Cr", price: 410000, pe: 31.2, pb: 14.1, divYield: 1.40, beta: 0.85, risk: "low",  logo: "TCS" },
-  { symbol: "HDFCBANK",   name: "HDFC Bank",                 sector: "Banking",       marketCap: "13.2L Cr", price: 174500, pe: 20.1, pb: 2.9, divYield: 1.05, beta: 0.98, risk: "low",  logo: "HDB" },
+  // HDFC Bank did a 1:1 bonus issue in 2025 → share count doubled, per-share
+  // price ~halved. Old static value (₹1,745 pre-bonus) was making the 52W
+  // synthetic range compute ₹2,812/₹1,626 when real was ₹1,020/₹726.
+  { symbol: "HDFCBANK",   name: "HDFC Bank",                 sector: "Banking",       marketCap: "12.3L Cr", price: 79500, pe: 15.9, pb: 2.2, divYield: 1.37, beta: 0.88, risk: "low",  logo: "HDB" },
   { symbol: "INFY",       name: "Infosys",                   sector: "IT Services",   marketCap: "7.5L Cr",  price: 181200, pe: 28.6, pb: 9.3, divYield: 2.35, beta: 0.91, risk: "low",  logo: "INF" },
   { symbol: "ICICIBANK",  name: "ICICI Bank",                sector: "Banking",       marketCap: "9.3L Cr",  price: 133200, pe: 18.5, pb: 3.3, divYield: 0.80, beta: 1.04, risk: "low",  logo: "ICB" },
   { symbol: "BHARTIARTL", name: "Bharti Airtel",             sector: "Telecom",       marketCap: "8.8L Cr",  price: 158900, pe: 80.5, pb: 9.8, divYield: 0.55, beta: 0.79, risk: "med",  logo: "AIR" },
