@@ -50,7 +50,7 @@ export function renderStocks(main) {
 
   function render() {
     const state = getState();
-    const list = applyFilters(INSTRUMENTS, filter, state);
+    const list = applyFilters(INSTRUMENTS, filter, state, quoteCache);
     const src = getDataSource();
     // Preserve focus + caret on the search input across the re-render — every
     // keystroke triggers this render and the 10s live-quote poll does too, so
@@ -124,7 +124,26 @@ export function renderStocks(main) {
   }
 }
 
-function applyFilters(all, f, state) {
+// Parse the "1.25L Cr", "87,500 Cr", "3.2L Cr" style strings in universe.js
+// into a plain number of crores so we can sort numerically. Falls back to
+// 0 for anything we can't parse — those sink to the bottom, which is fine.
+function parseMarketCapCr(s) {
+  if (!s) return 0;
+  const str = String(s).toLowerCase().replace(/,/g, "").trim();
+  const n = parseFloat(str);
+  if (!Number.isFinite(n)) return 0;
+  if (str.includes("l cr") || str.includes("lc")) return n * 1e5;   // lakh crore
+  if (str.includes("k cr")) return n * 1e3;
+  return n;
+}
+
+function changeFor(sym, quoteCache) {
+  const q = quoteCache?.[sym];
+  if (q && Number.isFinite(q.changePct)) return q.changePct;
+  return getTodayChange(sym);
+}
+
+function applyFilters(all, f, state, quoteCache) {
   let list = all.slice();
   if (f.kind === "EQUITY") list = list.filter(i => i.kind === "EQUITY");
   else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
@@ -141,9 +160,10 @@ function applyFilters(all, f, state) {
       (i.sector || "").toLowerCase().includes(q)
     );
   }
-  if (f.sort === "gainers") list.sort((a, b) => getTodayChange(b.symbol) - getTodayChange(a.symbol));
-  else if (f.sort === "losers") list.sort((a, b) => getTodayChange(a.symbol) - getTodayChange(b.symbol));
+  if (f.sort === "gainers") list.sort((a, b) => changeFor(b.symbol, quoteCache) - changeFor(a.symbol, quoteCache));
+  else if (f.sort === "losers") list.sort((a, b) => changeFor(a.symbol, quoteCache) - changeFor(b.symbol, quoteCache));
   else if (f.sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
+  else if (f.sort === "marketCap") list.sort((a, b) => parseMarketCapCr(b.marketCap) - parseMarketCapCr(a.marketCap));
   return list;
 }
 

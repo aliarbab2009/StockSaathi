@@ -83,21 +83,21 @@ function renderReplay(main, scenario) {
   const markers = buildMarkers(scenario);
 
   main.innerHTML = `
-    <div style="margin-bottom: var(--sp-4);">
-      <div class="flex items-center gap-3">
-        <a href="#/crash-replay" class="btn btn-ghost btn-sm">← Scenarios</a>
-      </div>
-    </div>
-    <section class="crash-hero" style="padding-top: var(--sp-4); padding-bottom: var(--sp-4); text-align: left;">
-      <div class="flex items-center gap-3 wrap">
-        <span class="pill pill-brand">⏱ Time Travel · ${scenario.id.replace(/_/g, " ")}</span>
+    <div class="replay-topbar">
+      <a href="#/crash-replay" class="btn btn-ghost btn-sm">← Scenarios</a>
+      <div class="replay-title-inline">
+        <span class="pill pill-brand">⏱ ${scenario.id.replace(/_/g, " ")}</span>
+        <strong>${scenario.title}</strong>
         <span class="mood-indicator calm" id="mood-indicator">🧘 Calm</span>
       </div>
-      <h1 class="tight" style="margin-top: var(--sp-2);">${scenario.title}</h1>
-      <p class="muted" style="max-width: 720px; font-size: var(--text-base); margin-top: var(--sp-2);">
-        ${scenario.description}
-      </p>
-    </section>
+      <div class="replay-controls replay-controls-top">
+        <button class="btn btn-primary btn-sm" id="play-btn">▶ Play (15s)</button>
+        <button class="btn btn-ghost btn-sm" id="play-slow-btn">🐢 Slow</button>
+        <button class="btn btn-ghost btn-sm" id="reset-btn">⟲ Reset</button>
+        <button class="btn btn-ghost btn-sm" id="jump-bottom-btn">📉 Bottom</button>
+        <button class="btn btn-ghost btn-sm" id="jump-end-btn">⏭ End</button>
+      </div>
+    </div>
 
     <div class="replay-panel">
       <div class="replay-stats">
@@ -112,8 +112,6 @@ function renderReplay(main, scenario) {
           <div class="delta tabular" id="panic-delta">+0.00%</div>
         </div>
       </div>
-
-      <div style="height: 340px; margin: var(--sp-4) 0;" id="replay-chart"></div>
 
       <div class="replay-slider-wrap">
         <div class="replay-slider-meta">
@@ -131,13 +129,7 @@ function renderReplay(main, scenario) {
         <input type="range" min="0" max="${totalFrames - 1}" value="0" class="replay-slider" id="scrubber" step="1" aria-label="Time travel scrubber" />
       </div>
 
-      <div class="replay-controls">
-        <button class="btn btn-ghost btn-sm" id="reset-btn">⟲ Reset</button>
-        <button class="btn btn-primary btn-sm" id="play-btn">▶ Auto-play (15s)</button>
-        <button class="btn btn-ghost btn-sm" id="play-slow-btn">🐢 Slow (30s)</button>
-        <button class="btn btn-ghost btn-sm" id="jump-bottom-btn">📉 Jump to bottom</button>
-        <button class="btn btn-ghost btn-sm" id="jump-end-btn">⏭ Jump to end</button>
-      </div>
+      <div style="height: 340px; margin: var(--sp-4) 0 0;" id="replay-chart"></div>
 
       <div class="replay-narration" id="narration">
         ${escapeHtml(scenario.narrations[frames[0].n] || "Move the slider or click a date marker to begin.")}
@@ -155,6 +147,11 @@ function renderReplay(main, scenario) {
         </div>
       </div>
     </div>
+
+    <details class="replay-context-details">
+      <summary class="muted">What this scenario is</summary>
+      <p class="muted" style="margin-top: var(--sp-3); font-size: var(--text-base); line-height: 1.6;">${scenario.description}</p>
+    </details>
 
     <div class="grid" style="grid-template-columns: 1fr 1fr; gap: var(--sp-4); margin-top: var(--sp-6);">
       <div class="card">

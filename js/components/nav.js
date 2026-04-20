@@ -78,6 +78,7 @@ export function mountNav() {
         </nav>
 
         <div class="nav-right">
+          ${themeToggleHtml(state.settings.theme)}
           ${state.isAuthed ? `
             <div class="market-status" title="${ms.istTime}"><span class="dot ${ms.open ? "" : "closed"}"></span><span class="muted">${ms.open ? "Live" : "Closed"}</span></div>
             <div class="nav-cash" aria-label="Portfolio value">
@@ -130,7 +131,27 @@ export function mountNav() {
       navigate("/");
     });
     root.querySelector("#nav-burger-btn")?.addEventListener("click", openDrawer);
+    root.querySelector("#theme-toggle-btn")?.addEventListener("click", toggleTheme);
   }
+}
+
+// Site-wide theme toggle. Accessible from every page without diving into
+// Settings. State change propagates via the existing subscribe() wired
+// in app.js, which flips the <html data-theme="…"> attribute, which all
+// CSS vars are keyed off.
+function toggleTheme() {
+  const cur = getState().settings.theme || "light";
+  const next = cur === "dark" ? "light" : "dark";
+  setSetting("theme", next);
+}
+
+function themeToggleHtml(theme) {
+  const isDark = (theme || "light") === "dark";
+  // Sun icon when dark (click → go light), moon when light (click → go dark).
+  const icon = isDark
+    ? `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>`
+    : `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+  return `<button id="theme-toggle-btn" class="nav-theme-toggle" type="button" aria-label="${isDark ? "Switch to light mode" : "Switch to dark mode"}" title="${isDark ? "Switch to light mode" : "Switch to dark mode"}">${icon}</button>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +205,12 @@ function renderDrawer(state, allLinks, active, pfValue, ms) {
       </a>
     `).join("")}
 
+    <div class="drawer-divider"></div>
+    <button class="drawer-link" id="drawer-theme-toggle" type="button" style="text-align: left;">
+      <span>${(state.settings.theme || "light") === "dark" ? "☀️ Light mode" : "🌙 Dark mode"}</span>
+      <span class="muted">↔</span>
+    </button>
+
     ${state.isAuthed ? `
       <div class="drawer-divider"></div>
       <div class="drawer-section">${escapeHtml(state.user.displayName || state.user.username || "")}</div>
@@ -211,6 +238,7 @@ function renderDrawer(state, allLinks, active, pfValue, ms) {
     el.addEventListener("click", closeDrawer)
   );
   panel.querySelector("[data-close-drawer]")?.addEventListener("click", closeDrawer);
+  panel.querySelector("#drawer-theme-toggle")?.addEventListener("click", toggleTheme);
   panel.querySelector("#drawer-logout")?.addEventListener("click", () => {
     logoutAccount();
     switchUser();

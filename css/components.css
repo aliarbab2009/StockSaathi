@@ -120,6 +120,27 @@
   .nav-burger { display: grid; }
 }
 
+/* Site-wide theme toggle in the nav. Same subtle shape as the burger so
+   it reads as "controls" rather than content. Shown on every page. */
+.nav-theme-toggle {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--text-muted);
+  place-items: center;
+  border: 1px solid transparent;
+  transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1);
+  cursor: pointer;
+}
+.nav-theme-toggle:hover, .nav-theme-toggle:focus-visible {
+  background: var(--bg-soft);
+  border-color: var(--border);
+  color: var(--text);
+}
+.nav-theme-toggle svg { display: block; }
+
 /* Mobile drawer — slides in from the right when burger is tapped */
 .nav-drawer {
   position: fixed;
@@ -1228,6 +1249,57 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   justify-content: center;
   margin: var(--sp-4) 0;
   flex-wrap: wrap;
+}
+
+/* Sticky top-of-page bar: back link + inline title + playback controls.
+   Keeps the play / slow / reset / bottom / end buttons above the fold
+   on every resolution so users can start the replay without scrolling. */
+.replay-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-3) 0;
+  margin-bottom: var(--sp-3);
+  position: sticky;
+  top: 60px;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--divider);
+}
+.replay-title-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.replay-title-inline strong {
+  font-size: var(--text-lg);
+  color: var(--text-strong);
+}
+.replay-controls-top {
+  margin: 0;
+  justify-content: flex-end;
+}
+.replay-context-details {
+  margin-top: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-soft);
+  border: 1px solid var(--divider);
+  border-radius: var(--r);
+}
+.replay-context-details summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  user-select: none;
+}
+@media (max-width: 680px) {
+  .replay-topbar { top: 56px; flex-direction: column; align-items: stretch; }
+  .replay-controls-top { justify-content: center; }
+  .replay-controls-top .btn-sm { flex: 1 0 auto; }
+  .replay-title-inline strong { font-size: var(--text-md); }
 }
 .replay-narration {
   background: var(--bg-soft);
