@@ -579,6 +579,51 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* Portfolio daily digest card — one-paragraph AI take at the top of
+   /#/portfolio, tinted subtly by day mood. Loads async then fades in. */
+.pf-digest-card {
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-lg, var(--r));
+  background: var(--bg-soft);
+  border: 1px solid var(--divider);
+  margin-bottom: var(--sp-4);
+  position: relative;
+  overflow: hidden;
+}
+.pf-digest-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--brand);
+  opacity: 0.7;
+}
+.pf-digest-card.mood-up::before   { background: var(--positive); }
+.pf-digest-card.mood-down::before { background: var(--negative); }
+.pf-digest-card.mood-flat::before { background: var(--text-muted); }
+.pf-digest-card.mood-empty::before { background: var(--brand); }
+.pf-digest-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.pf-digest-label {
+  font-size: var(--text-10);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--brand);
+  padding: 3px 8px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+.pf-digest-body {
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--text-strong);
+}
+
 /* AI term wrapper — subtle dotted underline on terms that have an AI
    hover explainer wired. Doesn't look clickable; looks like a hint.
    Tooltip pops on :hover / :focus and fetches the definition lazily. */

@@ -13,10 +13,13 @@ import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes } from
 import { listPendingOrders, cancelOrder } from "../features/limitOrders.js";
 import { getNews, fmtRelativeTime, labelSentiment } from "../data/news.js";
 import { areaChart } from "../components/charts.js";
+import { fetchDigest, cachedDigest } from "../features/portfolioDigest.js";
 
 let newsItems = [];
 let quoteCache = {};
 let pendingOrders = [];
+let aiDigest = null;      // { narrative, mood } | null
+let aiDigestLoading = false;
 
 export function renderPortfolio(main) {
   let cancelled = false;
@@ -25,6 +28,11 @@ export function renderPortfolio(main) {
   // Instant first paint: prefill cache from localStorage-backed in-memory cache
   const state0Syms = Object.keys(getState().holdings || {});
   if (state0Syms.length) quoteCache = { ...quoteCache, ...getCachedQuotes(state0Syms) };
+
+  // Show any same-day cached AI digest immediately so the card isn't a
+  // loading skeleton on reload.
+  const state0 = getState();
+  aiDigest = cachedDigest(state0.user?.id || "anon");
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
@@ -71,6 +79,50 @@ export function renderPortfolio(main) {
     }
     if (cancelled) return;
     render();
+    // Fire the AI digest once quotes + news have landed. Cached hits return
+    // instantly; uncached generation runs ~2 s on Gemini Pro and patches in.
+    refreshAiDigest();
+  }
+
+  async function refreshAiDigest() {
+    if (aiDigestLoading) return;
+    const state = getState();
+    const userId = state.user?.id || "anon";
+    const pf = getPortfolioValue(state);
+    const holdings = Object.entries(state.holdings).map(([sym, h]) => {
+      const inst = getInstrument(sym);
+      const quote = quoteCache[sym];
+      const curPx = quote?.pricePaise ?? getPriceAt(sym, 0);
+      return {
+        symbol: sym,
+        name: inst?.name || sym,
+        sector: inst?.sector || "",
+        qty: h.qty,
+        avgRupees: h.avgCostPaise / 100,
+        curRupees: curPx / 100,
+        dayPct: (quote?.changePct ?? getTodayChange(sym)) * 100,
+        plPct: (curPx - h.avgCostPaise) / h.avgCostPaise,
+      };
+    });
+    const payload = {
+      totalRupees: pf / 100,
+      deltaPct: getPortfolioReturnPct(state) * 100,
+      cashRupees: state.portfolio.cashPaise / 100,
+      holdings,
+    };
+    aiDigestLoading = true;
+    render();
+    try {
+      const d = await fetchDigest(userId, payload);
+      if (cancelled) return;
+      aiDigest = d;
+    } catch (e) {
+      console.warn("portfolio digest:", e);
+      // Leave any previously-cached digest on screen; fail silently.
+    } finally {
+      aiDigestLoading = false;
+      if (!cancelled) render();
+    }
   }
 
   function render() {
@@ -116,6 +168,8 @@ export function renderPortfolio(main) {
           <a href="#/report-card" class="btn btn-ghost">Report card</a>
         </div>
       </div>
+
+      ${renderDigestCard()}
 
       <div class="portfolio-stats">
         <div class="stat-tile"><div class="l">Cash</div><div class="v tabular">${formatRupees(cash, { compact: true })}</div></div>
@@ -208,6 +262,28 @@ export function renderPortfolio(main) {
             </div>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  function renderDigestCard() {
+    if (!aiDigest && !aiDigestLoading) return "";
+    if (aiDigestLoading && !aiDigest) {
+      return `
+        <div class="pf-digest-card loading">
+          <div class="pf-digest-head"><span class="pf-digest-label">Saathi</span><span class="dim text-xs">reading your portfolio…</span></div>
+          <div class="pf-digest-body skeleton" style="height: 48px; border-radius: 6px;"></div>
+        </div>
+      `;
+    }
+    const moodClass = `mood-${aiDigest.mood || "flat"}`;
+    return `
+      <div class="pf-digest-card ${moodClass}">
+        <div class="pf-digest-head">
+          <span class="pf-digest-label">Saathi</span>
+          ${aiDigestLoading ? `<span class="dim text-xs">refreshing…</span>` : ""}
+        </div>
+        <div class="pf-digest-body">${escapeHtml(aiDigest.narrative)}</div>
       </div>
     `;
   }
