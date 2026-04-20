@@ -23,9 +23,14 @@ from collections import defaultdict, deque
 
 CHAT_RATE_PER_HOUR = int(os.environ.get("CHAT_RATE_PER_HOUR", "240"))
 MAX_BODY = int(os.environ.get("MAX_CHAT_BODY", str(64 * 1024)))  # 64 KB
-CHAT_MODEL_PIN = os.environ.get("CHAT_MODEL", "llama-3.3-70b-versatile")
 CHAT_MAX_TOKENS = int(os.environ.get("CHAT_MAX_TOKENS", "800"))
 PUBLIC_ORIGIN = os.environ.get("PUBLIC_ORIGIN", "").rstrip("/")
+
+# Two upstreams, both OpenAI-compatible. xAI wins when its key is set;
+# otherwise the original Groq/Llama path stays in force. Swapping brains
+# is a pure env-var flip — no code re-deploy needed after this lands.
+XAI_MODEL = os.environ.get("XAI_MODEL", "grok-4-latest")
+GROQ_MODEL = os.environ.get("CHAT_MODEL", "llama-3.3-70b-versatile")
 
 _rate_lock = threading.Lock()
 _chat_bucket = defaultdict(deque)
@@ -97,11 +102,23 @@ class handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "forbidden_origin"}, origin)
             return
 
+        # Pick the brain: xAI Grok when its key is set, otherwise Groq/Llama.
+        # Both endpoints are OpenAI-compatible so the request body shape is
+        # identical; we only swap URL + bearer + model name.
+        xai_key = os.environ.get("XAI_API_KEY", "").strip()
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if not groq_key:
+        if xai_key:
+            upstream_url = "https://api.x.ai/v1/chat/completions"
+            upstream_key = xai_key
+            upstream_model = XAI_MODEL
+        elif groq_key:
+            upstream_url = "https://api.groq.com/openai/v1/chat/completions"
+            upstream_key = groq_key
+            upstream_model = GROQ_MODEL
+        else:
             self._json(501, {
                 "error": "no_server_key",
-                "detail": "Set GROQ_API_KEY env var on Vercel (free at console.groq.com).",
+                "detail": "Coach brain not configured.",
             }, origin)
             return
 
@@ -137,7 +154,7 @@ class handler(BaseHTTPRequestHandler):
 
         # Pin model; strip tools; cap max_tokens. Client cannot upgrade to
         # an expensive model or plug arbitrary tools in on our dime.
-        payload["model"] = CHAT_MODEL_PIN
+        payload["model"] = upstream_model
         if not isinstance(payload.get("max_tokens"), int) or payload["max_tokens"] > CHAT_MAX_TOKENS:
             payload["max_tokens"] = CHAT_MAX_TOKENS
         payload.pop("tools", None)
@@ -149,11 +166,11 @@ class handler(BaseHTTPRequestHandler):
         safe_body = json.dumps(payload).encode("utf-8")
 
         req = urllib.request.Request(
-            "https://api.groq.com/openai/v1/chat/completions",
+            upstream_url,
             data=safe_body,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {groq_key}",
+                "Authorization": f"Bearer {upstream_key}",
                 "User-Agent": "StockSaathi-Vercel/1.0",
             },
             method="POST",
@@ -183,5 +200,5 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(err_body)
         except Exception as e:
-            self._json(502, {"error": "groq_unreachable",
+            self._json(502, {"error": "upstream_unreachable",
                              "detail": _redact(str(e))[:120]}, origin)
