@@ -45,50 +45,6 @@ export function renderSettings(main) {
         </div>
 
         <div class="card" style="margin-top: var(--sp-4);">
-          <h3 style="margin-bottom: var(--sp-3);">Real-time data</h3>
-          <p class="muted text-sm" style="margin-bottom: var(--sp-3);">
-            Yahoo Finance is used by default (no key). Add a <a href="https://finnhub.io/dashboard" target="_blank" rel="noopener">Finnhub API key</a> for premium fallback on rate-limit hits. Keys live in localStorage only.
-          </p>
-          <div class="field">
-            <label class="label" for="finnhub-key">Finnhub API key</label>
-            <input class="input" id="finnhub-key" type="password" placeholder="e.g. cnxxxxx" value="${escapeAttr(state.settings.finnhubKey || "")}" />
-          </div>
-        </div>
-
-        <div class="card" style="margin-top: var(--sp-4);">
-          <h3 style="margin-bottom: var(--sp-3);">Coach LLM (optional)</h3>
-          <p class="muted text-sm" style="margin-bottom: var(--sp-3);">
-            The Saathi coach is powered by <strong>Groq's Llama 3.3 70B</strong> by default (via this site's backend — free, fast, no setup). If you want to use your own key for unlimited calls, sign up <a href="https://console.groq.com/keys" target="_blank" rel="noopener">here</a> (30 seconds, no card). Keys stay in your browser and only call Groq directly.
-          </p>
-          <div class="field">
-            <label class="label" for="llm-key">Your Groq API key (optional)</label>
-            <input class="input" id="llm-key" type="password" placeholder="gsk_..." value="${escapeAttr(state.settings.llmApiKey || "")}" />
-          </div>
-        </div>
-
-        <div class="card" style="margin-top: var(--sp-4);">
-          <h3 style="margin-bottom: var(--sp-3);">Parent-consent email (EmailJS)</h3>
-          <p class="muted text-sm" style="margin-bottom: var(--sp-3);">
-            StockSaathi can send the consent email via <a href="https://www.emailjs.com/" target="_blank" rel="noopener">EmailJS</a> (free tier: 200 emails/mo). Without these, onboarding falls back to opening the user's email client with a pre-filled message.
-          </p>
-          <div class="flex-col gap-3">
-            <div class="field">
-              <label class="label" for="ejs-service">Service ID</label>
-              <input class="input" id="ejs-service" placeholder="service_xxxxxx" value="${escapeAttr(state.settings.emailjs?.serviceId || "")}" />
-            </div>
-            <div class="field">
-              <label class="label" for="ejs-template">Template ID</label>
-              <input class="input" id="ejs-template" placeholder="template_xxxxxx" value="${escapeAttr(state.settings.emailjs?.templateId || "")}" />
-            </div>
-            <div class="field">
-              <label class="label" for="ejs-public">Public key</label>
-              <input class="input" id="ejs-public" type="password" placeholder="e.g. rxxxxxxx" value="${escapeAttr(state.settings.emailjs?.publicKey || "")}" />
-            </div>
-            <p class="dim text-xs">Template variables expected: {{to_email}}, {{teen_name}}, {{consent_code}}, {{consent_url}}, {{message}}.</p>
-          </div>
-        </div>
-
-        <div class="card" style="margin-top: var(--sp-4);">
           <h3 style="margin-bottom: var(--sp-3);">Danger zone</h3>
           <div class="settings-row">
             <div class="label-wrap"><div class="title">Reset portfolio</div><div class="desc">Clear your trades, cash, coach history, transfers. You keep your account and friends.</div></div>
@@ -103,7 +59,7 @@ export function renderSettings(main) {
         <div class="card" style="margin-top: var(--sp-4); background: var(--bg-soft);">
           <h3 style="margin-bottom: var(--sp-3);">About</h3>
           <p class="text-sm" style="line-height: 1.7;"><strong>StockSaathi</strong> — an AI-coached investment simulator for Indian teens. Real stocks, virtual money, behavioral coach.</p>
-          <p class="muted text-sm" style="line-height: 1.7; margin-top: var(--sp-2);">Stack: vanilla ES modules, custom SVG charts, client-side state with localStorage persistence, Web Crypto password hashing (PBKDF2), optional server-side LLM + EmailJS + Finnhub. Zero build step. Works fully offline after first load.</p>
+          <p class="muted text-sm" style="line-height: 1.7; margin-top: var(--sp-2);">Real stocks, virtual money, behavioural coach. Zero setup — just sign up and start.</p>
           <p class="dim text-xs" style="line-height: 1.7; margin-top: var(--sp-2);">Not affiliated with SEBI, NSE, BSE, or any broker. All prices are delayed; they come from Yahoo Finance or a synthetic fallback. No advice is ever provided; this product is behavioral reflection, not investment advice.</p>
         </div>
       </div>
@@ -114,22 +70,6 @@ export function renderSettings(main) {
     main.querySelector("[data-theme='dark']").addEventListener("click", () => { document.documentElement.setAttribute("data-theme", "dark"); setSetting("theme", "dark"); });
     main.querySelector("#toggle-coach").addEventListener("change", (e) => setSetting("coachPanelOpen", e.target.checked));
     main.querySelector("#toggle-hinglish").addEventListener("change", (e) => setSetting("hinglish", e.target.checked));
-
-    main.querySelector("#finnhub-key").addEventListener("change", (e) => { setSetting("finnhubKey", e.target.value.trim()); toast({ kind: "success", message: "Finnhub key saved." }); });
-    main.querySelector("#llm-key").addEventListener("change", (e) => { setSetting("llmApiKey", e.target.value.trim()); toast({ kind: "success", message: "LLM key saved." }); });
-
-    const saveEJS = () => {
-      setSettings({
-        emailjs: {
-          serviceId: main.querySelector("#ejs-service").value.trim(),
-          templateId: main.querySelector("#ejs-template").value.trim(),
-          publicKey: main.querySelector("#ejs-public").value.trim(),
-        },
-      });
-    };
-    main.querySelector("#ejs-service").addEventListener("change", saveEJS);
-    main.querySelector("#ejs-template").addEventListener("change", saveEJS);
-    main.querySelector("#ejs-public").addEventListener("change", () => { saveEJS(); toast({ kind: "success", message: "EmailJS config saved." }); });
 
     main.querySelector("#reset-pf-btn").addEventListener("click", async () => {
       if (!confirm("Reset your portfolio, trades, coach messages, and transfers? Your account stays.")) return;

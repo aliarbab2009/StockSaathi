@@ -10,17 +10,9 @@
 // client-side with a realistic piecewise curve — this keeps the LLM call
 // small (fits in the 800-token cap) and the output shape deterministic.
 //
-// Provider routing:
-//   - If the user pasted their own Groq key (gsk_…) in Settings, call
-//     Groq directly from the browser — their quota, unlimited to them.
-//   - Else proxy through the site's /api/chat, which shares one quota
-//     across all users and will 429 when the day's tokens run out.
-//
 // Retries up to 3 times with rising temperature; each attempt runs the
 // returned JSON through a shape validator before accepting.
 // =============================================================================
-
-import { getState } from "../state.js";
 
 const SYSTEM_PROMPT = `You are a financial-history data extractor. Given a description of a market event that affected Indian equities (anywhere in India, any sector or instrument — retail listed stocks, scams, regulatory shocks, regional events, black-market / unaccounted-money episodes, demerger panics, anything), return a single JSON object with this EXACT shape:
 
@@ -95,69 +87,40 @@ function reshape(m) {
 }
 
 async function callLlmForMeta(description, temperature) {
-  const userKey = (getState().settings?.llmApiKey || "").trim();
-  if (userKey.startsWith("gsk_") && userKey.length >= 20) {
-    return callGroqDirect(userKey, description, temperature);
-  }
-  return callServerProxy(description, temperature);
-}
-
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-
-function bodyFor(description, temperature) {
-  return {
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: String(description).trim().slice(0, 800) },
-    ],
-    temperature,
-    max_tokens: 800,
-    response_format: { type: "json_object" },
-  };
-}
-
-async function callGroqDirect(apiKey, description, temperature) {
-  const res = await fetch(GROQ_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model: GROQ_MODEL, ...bodyFor(description, temperature) }),
-  });
-  return readLlmResponse(res, "your Groq key");
-}
-
-async function callServerProxy(description, temperature) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(bodyFor(description, temperature)),
+    body: JSON.stringify({
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: String(description).trim().slice(0, 800) },
+      ],
+      temperature,
+      max_tokens: 800,
+      response_format: { type: "json_object" },
+    }),
   });
-  return readLlmResponse(res, "shared coach LLM");
-}
-
-async function readLlmResponse(res, sourceLabel) {
   if (!res.ok) {
-    const raw = await res.text().catch(() => "");
+    // Translate HTTP failures into user-facing, jargon-free messages.
+    // The UI never mentions API, keys, tokens, settings, or providers —
+    // the user should never think about infrastructure.
     if (res.status === 429) {
-      if (sourceLabel === "shared coach LLM") {
-        throw new Error("Daily quota for the shared coach LLM is exhausted. Paste your own free Groq key in Settings → Coach LLM to continue — takes 30 seconds, no card needed.");
-      }
-      throw new Error(`${sourceLabel} rate-limited by Groq. Wait a minute and retry.`);
+      throw new Error("The coach is a bit overloaded right now. Try again in a few minutes, or pick one of the curated replays below.");
     }
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(`${sourceLabel} was rejected (${res.status}). Double-check it in Settings → Coach LLM.`);
+    if (res.status === 403) {
+      throw new Error("Couldn't reach the coach from this page. Try refreshing.");
     }
-    throw new Error(`HTTP ${res.status} from ${sourceLabel}: ${raw.slice(0, 160)}`);
+    if (res.status >= 500) {
+      throw new Error("The coach hiccuped on our side. Try again in a moment.");
+    }
+    throw new Error("The coach couldn't build that one. Try a different phrasing or a curated replay.");
   }
   const body = await res.json();
   const text = body?.choices?.[0]?.message?.content;
-  if (!text) throw new Error("Empty LLM response");
+  if (!text) throw new Error("The coach returned an empty answer. Try again.");
   let meta;
   try { meta = JSON.parse(text); }
-  catch { throw new Error("LLM returned non-JSON"); }
+  catch { throw new Error("The coach's answer didn't parse cleanly. Try again or rephrase."); }
   return meta;
 }
 
