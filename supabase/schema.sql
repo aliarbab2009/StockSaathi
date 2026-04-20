@@ -904,9 +904,15 @@ create table if not exists public.quote_cache (
   volume             bigint default 0,
   change_pct         double precision default 0,
   ts_ms              bigint not null,
+  -- When OUR server wrote this row. Distinct from ts_ms (which is the
+  -- upstream market time — could be hours stale during Yahoo lag). Cache
+  -- TTL filtering uses cached_at_ms, freshness-badge logic uses ts_ms.
+  cached_at_ms       bigint not null default (extract(epoch from now()) * 1000)::bigint,
   source             text not null default 'yahoo',
   updated_at         timestamptz not null default now()
 );
+alter table public.quote_cache add column if not exists cached_at_ms bigint not null default (extract(epoch from now()) * 1000)::bigint;
+create index if not exists idx_quote_cache_cached_at on public.quote_cache (cached_at_ms desc);
 create index if not exists idx_quote_cache_updated on public.quote_cache (updated_at desc);
 
 -- DhanHQ instrument master: NSE symbol → Dhan security_id mapping.

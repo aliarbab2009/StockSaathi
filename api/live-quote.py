@@ -71,14 +71,16 @@ def _supa_headers():
 
 
 def read_cache(symbols):
-    """Returns {symbol: row_dict} for rows newer than CACHE_TTL_MS."""
+    """Returns {symbol: row_dict} for rows WRITTEN to cache within CACHE_TTL_MS.
+    Filters on cached_at_ms (when our server wrote), NOT ts_ms (Yahoo market
+    time, which can be hours stale during Yahoo lag)."""
     if not (SUPA_URL and SUPA_SRV) or not symbols:
         return {}
     cutoff = int(time.time() * 1000) - CACHE_TTL_MS
     sym_list = ",".join(f'"{s}"' for s in symbols)
     url = (f"{SUPA_URL}/rest/v1/quote_cache"
            f"?symbol=in.({sym_list})"
-           f"&ts_ms=gte.{cutoff}"
+           f"&cached_at_ms=gte.{cutoff}"
            f"&select=*")
     req = urllib.request.Request(url, headers=_supa_headers())
     try:
@@ -253,7 +255,10 @@ def fetch_yahoo_batch(symbols):
 # --------------------------------------------------------------------------
 
 def _to_cache_row(q):
-    """Convert a fetched quote dict to a quote_cache row."""
+    """Convert a fetched quote dict to a quote_cache row.
+    ts_ms  = upstream market time (Yahoo regularMarketTime / Dhan trade ts).
+    cached_at_ms = when OUR server wrote this row. Used for TTL eviction.
+    """
     return {
         "symbol": q["symbol"],
         "price_paise": int(round(q["price"] * 100)),
@@ -263,6 +268,7 @@ def _to_cache_row(q):
         "volume": q.get("volume", 0),
         "change_pct": q.get("change_pct", 0.0),
         "ts_ms": q["ts_ms"],
+        "cached_at_ms": int(time.time() * 1000),
         "source": q.get("source", "yahoo"),
     }
 
@@ -340,7 +346,6 @@ class handler(BaseHTTPRequestHandler):
                 "yahoo": True,
                 "cache": bool(SUPA_URL and SUPA_SRV),
             },
-            "_debug_last_write": _last_write_error,
         })
 
     def do_OPTIONS(self):
