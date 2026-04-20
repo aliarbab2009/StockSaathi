@@ -108,6 +108,17 @@ export async function registerAccount({ username, email, password, displayName }
       },
     });
     if (error) throw new Error(prettifySbError(error.message));
+    // Supabase's email-collision obfuscation: when the email is already
+    // confirmed, signUp returns success with a DECOY user object but an
+    // EMPTY identities array AND sends no email. Without this check the
+    // UI would show "Check your email" forever while nothing arrives.
+    // See: https://supabase.com/docs/reference/javascript/auth-signup
+    const identities = data?.user?.identities;
+    if (Array.isArray(identities) && identities.length === 0) {
+      const err = new Error("An account with this email already exists. Please log in instead.");
+      err.code = "email_already_registered";
+      throw err;
+    }
     const hasSession = !!data.session;
     return {
       id: data.user?.id,

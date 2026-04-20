@@ -7,6 +7,12 @@ import { switchUser } from "../state.js";
 import { navigate } from "../router.js";
 
 export function renderLogin(main) {
+  // Prefill email from ?email= query param — used when register detects
+  // the account already exists and redirects here so the user doesn't
+  // have to retype.
+  const q = (location.hash.split("?")[1] || "");
+  const prefilledEmail = new URLSearchParams(q).get("email") || "";
+
   main.innerHTML = `
     <div class="auth-wrap">
       <div class="auth-card">
@@ -16,7 +22,7 @@ export function renderLogin(main) {
         <form class="auth-form" id="login-form" autocomplete="on">
           <div class="field">
             <label class="label" for="l-handle">Email or username</label>
-            <input class="input" id="l-handle" name="username" type="text" required autocomplete="username" placeholder="you@example.com or yourname" />
+            <input class="input" id="l-handle" name="username" type="text" required autocomplete="username" placeholder="you@example.com or yourname" value="${escapeAttr(prefilledEmail)}" />
           </div>
           <div class="field">
             <label class="label" for="l-pw">Password</label>
@@ -32,6 +38,12 @@ export function renderLogin(main) {
       </div>
     </div>
   `;
+
+  // If the email was prefilled (coming from register's "already exists"
+  // redirect), focus the password field so the user can type straight in.
+  if (prefilledEmail) {
+    queueMicrotask(() => main.querySelector("#l-pw")?.focus());
+  }
 
   const form = main.querySelector("#login-form");
   const errBox = main.querySelector("#login-error");
@@ -67,3 +79,4 @@ export function renderLogin(main) {
 function escapeHtml(s) {
   const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML;
 }
+function escapeAttr(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

@@ -134,6 +134,18 @@ export function renderRegister(main) {
         switchUser();
         navigate("/onboarding");
       } catch (err) {
+        // Email-already-registered is a super common case — send them to
+        // /login with the email prefilled instead of leaving them staring
+        // at a red error that says "log in instead" with no link.
+        if (err.code === "email_already_registered" || /already exists|already registered/i.test(err.message || "")) {
+          errBox.innerHTML = `<div class="error-msg">
+            An account with <strong>${escapeHtml(email)}</strong> already exists.
+            <a href="#/login?email=${encodeURIComponent(email)}" style="margin-left:6px;">Log in instead →</a>
+          </div>`;
+          btn.disabled = false;
+          btn.textContent = "Create account";
+          return;
+        }
         showErr(err.message);
         btn.disabled = false;
         btn.textContent = "Create account";
@@ -154,16 +166,16 @@ export function renderRegister(main) {
           <div style="text-align: center; margin-bottom: var(--sp-4);">
             <div style="font-size: 48px; margin-bottom: var(--sp-2);">📬</div>
             <h1>Check your email</h1>
-            <p class="sub">We sent a <strong>6-digit code</strong> to <strong>${escapeHtml(pendingEmail)}</strong>. Enter it below to activate your account.</p>
+            <p class="sub">We sent a verification code to <strong>${escapeHtml(pendingEmail)}</strong>. Enter it below to activate your account.</p>
           </div>
 
           <form class="auth-form" id="otp-form" autocomplete="off">
             <div class="field">
               <label class="label" for="otp-input">Verification code</label>
               <input class="input" id="otp-input" type="text" inputmode="numeric" pattern="[0-9]{4,10}" maxlength="10" required
-                placeholder="123456" autocomplete="one-time-code"
+                placeholder="Enter the code" autocomplete="one-time-code"
                 style="font-family: var(--font-mono); letter-spacing: 0.25em; text-align: center; font-size: var(--text-xl); font-weight: 700;" />
-              <div class="dim text-xs" style="margin-top: 6px; text-align: center;">6-digit code from the email.</div>
+              <div class="dim text-xs" style="margin-top: 6px; text-align: center;">From the email we just sent.</div>
             </div>
 
             <div id="otp-error" role="alert"></div>
@@ -247,7 +259,7 @@ export function renderRegister(main) {
       errBox.innerHTML = "";
       const code = main.querySelector("#otp-input").value.trim().replace(/\s+/g, "");
       if (!/^\d{4,10}$/.test(code)) {
-        errBox.innerHTML = `<div class="error-msg">Enter the 6-digit code from your email.</div>`;
+        errBox.innerHTML = `<div class="error-msg">Enter the code from your email (digits only).</div>`;
         return;
       }
       btn.disabled = true;
