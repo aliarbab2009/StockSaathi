@@ -1,5 +1,5 @@
 // =============================================================================
-// NEWS — Real-time Indian market news with sentiment. Filters work correctly.
+// NEWS — Real-time Indian market news with sentiment + AI retail-angle tag.
 // =============================================================================
 
 import { getNews, fmtRelativeTime, labelSentiment } from "../data/news.js";
@@ -9,6 +9,12 @@ let filter = "all";    // all | holdings | watchlist
 let newsCache = [];
 let loading = true;
 let _newsCancel = { cancelled: false };
+// AI-tag memo: { [headlineHash]: { sentiment, tldr, loading } }. Keyed on
+// the headline text itself so duplicates across sources dedupe naturally.
+const aiTags = new Map();
+let aiQueueRunning = 0;
+const AI_MAX_CONCURRENT = 3;
+const aiQueue = [];
 
 export function renderNews(main) {
   _newsCancel.cancelled = true;
@@ -104,23 +110,103 @@ function render(main) {
       if (url && url !== "#") window.open(url, "_blank", "noopener,noreferrer");
     });
   });
+
+  // Lazy-fire AI tagging for each visible item that hasn't been analysed.
+  // Cached hits come back instant; fresh ones take ~1 s and stream in
+  // as they complete. The retail-angle line replaces the "Analysing…"
+  // skeleton without a re-render.
+  visible.slice(0, 20).forEach(n => enqueueAiTag(main, n));
 }
 
 function renderNewsItem(n) {
+  const hk = headlineKey(n.headline);
+  const ai = aiTags.get(hk);
+  const aiBlock = ai && ai.tldr
+    ? `<div class="news-ai-take sentiment-${escapeAttr(ai.sentiment)}" data-ai-hk="${escapeAttr(hk)}"><span class="news-ai-label">Saathi take</span><span class="news-ai-body">${escapeHtml(ai.tldr)}</span></div>`
+    : `<div class="news-ai-take loading" data-ai-hk="${escapeAttr(hk)}"><span class="news-ai-label">Saathi take</span><span class="news-ai-body dim">Analysing…</span></div>`;
   return `
     <article class="news-item" data-newsurl="${escapeAttr(n.url)}" tabindex="0" role="link" aria-label="${escapeAttr(n.headline)}">
       <div class="meta">
         <span class="news-source">${escapeHtml(n.source)} · ${fmtRelativeTime(n.ts)}</span>
-        <span class="sentiment ${n.sentiment}">${labelSentiment(n.sentiment)}</span>
+        <span class="sentiment ${ai?.sentiment || n.sentiment}">${labelSentiment(ai?.sentiment || n.sentiment)}</span>
       </div>
       <div class="headline">${escapeHtml(n.headline)}</div>
       ${n.summary ? `<div class="summary">${escapeHtml(n.summary)}</div>` : ""}
+      ${aiBlock}
       <div class="flex gap-1 wrap items-center justify-between" style="margin-top: 6px;">
         ${n.symbols?.length ? `<div class="flex gap-1 wrap">${n.symbols.slice(0, 4).map(s => `<span class="pill pill-neutral" style="font-size: 10px;">${s}</span>`).join("")}</div>` : `<span></span>`}
         ${n.url && n.url !== "#" ? `<span class="text-xs brand">Read →</span>` : ""}
       </div>
     </article>
   `;
+}
+
+function headlineKey(headline) {
+  return String(headline || "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200);
+}
+
+function enqueueAiTag(main, n) {
+  const hk = headlineKey(n.headline);
+  if (!hk) return;
+  const existing = aiTags.get(hk);
+  if (existing && (existing.tldr || existing.loading)) return;
+  aiTags.set(hk, { loading: true });
+  aiQueue.push({ main, n, hk });
+  pumpAiQueue();
+}
+
+async function pumpAiQueue() {
+  while (aiQueueRunning < AI_MAX_CONCURRENT && aiQueue.length) {
+    const job = aiQueue.shift();
+    aiQueueRunning++;
+    fetchAiTag(job).finally(() => {
+      aiQueueRunning--;
+      pumpAiQueue();
+    });
+  }
+}
+
+async function fetchAiTag({ main, n, hk }) {
+  try {
+    const r = await fetch("/api/news-tldr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ headline: n.headline, source: n.source, symbols: n.symbols || [] }),
+    });
+    if (!r.ok) throw new Error("http_" + r.status);
+    const j = await r.json();
+    if (!j?.tldr) throw new Error("no_tldr");
+    aiTags.set(hk, { sentiment: j.sentiment || "neutral", tldr: j.tldr, loading: false });
+    patchNewsItem(main, hk);
+  } catch {
+    aiTags.set(hk, { loading: false });
+    // Quietly remove the skeleton for failed items so the card isn't stuck on "Analysing…"
+    const el = main?.querySelector(`[data-ai-hk="${cssEscape(hk)}"]`);
+    if (el) el.remove();
+  }
+}
+
+function patchNewsItem(main, hk) {
+  const ai = aiTags.get(hk);
+  if (!ai || !ai.tldr) return;
+  const el = main?.querySelector(`[data-ai-hk="${cssEscape(hk)}"]`);
+  if (!el) return;
+  el.className = `news-ai-take sentiment-${ai.sentiment}`;
+  el.innerHTML = `<span class="news-ai-label">Saathi take</span><span class="news-ai-body">${escapeHtml(ai.tldr)}</span>`;
+  // Also update the top-right sentiment pill on the same card to match
+  // what the AI concluded (often more accurate than the keyword-based
+  // sentiment from data/news.js).
+  const card = el.closest(".news-item");
+  const sentPill = card?.querySelector(".sentiment");
+  if (sentPill) {
+    sentPill.className = `sentiment ${ai.sentiment}`;
+    sentPill.textContent = labelSentiment(ai.sentiment);
+  }
+}
+
+function cssEscape(s) {
+  if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
+  return String(s).replace(/"/g, '\\"');
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }

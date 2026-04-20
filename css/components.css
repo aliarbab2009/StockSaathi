@@ -1893,9 +1893,39 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   padding: 2px 8px;
   border-radius: var(--r-full);
 }
-.sentiment.bull { background: var(--positive-soft); color: var(--positive); }
-.sentiment.bear { background: var(--negative-soft); color: var(--negative); }
+.sentiment.bull, .sentiment.bullish { background: var(--positive-soft); color: var(--positive); }
+.sentiment.bear, .sentiment.bearish { background: var(--negative-soft); color: var(--negative); }
 .sentiment.neutral { background: var(--bg-soft); color: var(--text-muted); }
+
+/* Saathi-take row — subtle AI-tagged retail-relevance one-liner below
+   the headline. Loads async; shows a skeleton shimmer until the tag
+   returns from /api/news-tldr. */
+.news-ai-take {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--divider);
+  color: var(--text);
+}
+.news-ai-take.loading .news-ai-body { font-style: italic; opacity: 0.7; }
+.news-ai-take.sentiment-bullish { border-top-color: var(--positive); }
+.news-ai-take.sentiment-bearish { border-top-color: var(--negative); }
+.news-ai-label {
+  font-size: var(--text-10);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--brand);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+.news-ai-body { flex: 1; }
 
 /* ============================== FRIENDS / TRANSFERS ================ */
 .friend-row {
