@@ -49,6 +49,7 @@ function renderSelector(main) {
         <input id="custom-crash-input" class="input" style="flex:1; min-width: 240px;" type="text" maxlength="200" placeholder="e.g. Harshad Mehta 1992 securities scam" />
         <button id="custom-crash-btn" class="btn btn-primary">Generate replay</button>
       </div>
+      <div id="custom-crash-suggestions" class="custom-crash-suggestions"></div>
       <div id="custom-crash-status" class="muted text-xs" style="margin-top: var(--sp-2); min-height: 1.2em;"></div>
     </div>
 
@@ -121,6 +122,32 @@ function renderSelector(main) {
 
   button.addEventListener("click", trigger);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") trigger(); });
+
+  // Populate AI-generated suggestion chips. One LLM call per week for the
+  // whole site — cached server-side.
+  const suggHost = main.querySelector("#custom-crash-suggestions");
+  fetch("/api/crash-suggestions").then(r => r.ok ? r.json() : null).then(d => {
+    if (!d?.suggestions?.length || !suggHost) return;
+    suggHost.innerHTML = d.suggestions.slice(0, 8).map(s =>
+      `<button class="crash-sugg-chip" data-sugg="${escapeAttr(s)}">${escapeHtml(s)}</button>`
+    ).join("");
+    suggHost.querySelectorAll("[data-sugg]").forEach(chip => {
+      chip.addEventListener("click", () => {
+        input.value = chip.dataset.sugg;
+        input.focus();
+      });
+    });
+    // Also rotate through as placeholder text every 4s until the user types.
+    let i = 0;
+    const rotate = () => {
+      if (input.value) return;
+      input.placeholder = "e.g. " + d.suggestions[i % d.suggestions.length];
+      i++;
+    };
+    rotate();
+    const h = setInterval(rotate, 4000);
+    window.addEventListener("hashchange", () => clearInterval(h), { once: true });
+  }).catch(() => {});
 }
 
 function renderReplay(main, scenario) {

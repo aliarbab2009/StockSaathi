@@ -10,6 +10,10 @@ import { runDetectors, ALL_DETECTORS } from "../coach/biasDetectors.js";
 import { getInstrument, SECTORS } from "../data/universe.js";
 import { getPriceAt } from "../data/prices.js";
 
+let aiCard = null;           // { narrative, strengths, watchouts } | null
+let aiCardLoading = false;
+let aiCardSignature = null;  // last user-signature we requested — refire only when stats meaningfully change
+
 const BADGES = [
   { code: "first_trade",    title: "First Steps",    emoji: "🌱", desc: "Placed your first trade" },
   { code: "diversified",    title: "Well Diversified", emoji: "🪻", desc: "Held ≥5 positions across ≥3 sectors" },
@@ -23,6 +27,9 @@ const BADGES = [
 
 export function renderReportCard(main) {
   render();
+  // Kick off the AI narrative fetch once on mount
+  const initialState = getState();
+  maybeFetchAiCard(initialState).then(d => { if (d) { aiCard = d; aiCardLoading = false; render(); } });
   const unsub = subscribe(render);
   window.addEventListener("hashchange", () => unsub?.(), { once: true });
 
@@ -36,6 +43,8 @@ export function renderReportCard(main) {
         <h1 style="font-size: var(--text-3xl); letter-spacing: -0.02em; margin-bottom: var(--sp-2);">Report Card</h1>
         <p class="muted">Your behavioral fingerprint. Updates with every decision.</p>
       </div>
+
+      ${renderAiCard()}
 
       <div class="report-grade" style="--pct: ${analysis.score};">
         <div class="report-grade-circle">
@@ -243,4 +252,105 @@ function escapeHtml(s) {
   const d = document.createElement("div");
   d.textContent = String(s ?? "");
   return d.innerHTML;
+}
+
+function renderAiCard() {
+  if (!aiCard && !aiCardLoading) return "";
+  if (aiCardLoading && !aiCard) {
+    return `
+      <div class="pf-digest-card mood-flat loading" style="margin-bottom: var(--sp-5);">
+        <div class="pf-digest-head"><span class="pf-digest-label">Saathi</span><span class="dim text-xs">reading your file…</span></div>
+        <div class="pf-digest-body skeleton" style="height: 48px; border-radius: 6px;"></div>
+      </div>
+    `;
+  }
+  const sList = (aiCard.strengths || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+  const wList = (aiCard.watchouts || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+  return `
+    <div class="pf-digest-card mood-up" style="margin-bottom: var(--sp-5);">
+      <div class="pf-digest-head"><span class="pf-digest-label">Saathi</span></div>
+      <div class="pf-digest-body" style="margin-bottom: var(--sp-3);">${escapeHtml(aiCard.narrative || "")}</div>
+      <div class="report-ai-grid">
+        ${sList ? `<div><h4 class="up" style="font-size:var(--text-sm);margin:0 0 6px 0;">Strengths</h4><ul class="report-ai-list">${sList}</ul></div>` : ""}
+        ${wList ? `<div><h4 class="down" style="font-size:var(--text-sm);margin:0 0 6px 0;">Watch-outs</h4><ul class="report-ai-list">${wList}</ul></div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function signatureOf(state) {
+  // Trigger regen on meaningful stat movement only.
+  const tx = state.transactions.length;
+  const holds = Object.keys(state.holdings).length;
+  return `${tx}|${holds}|${Math.round(getPortfolioReturnPct(state) * 1000)}`;
+}
+
+async function maybeFetchAiCard(state) {
+  const sig = signatureOf(state);
+  if (aiCardSignature === sig && aiCard) return null;
+  aiCardSignature = sig;
+  aiCardLoading = true;
+
+  // Build the stats payload. Compute win-rate + biggest win/loss + avg hold-days
+  // from transactions. Bias flags come from runDetectors on each trade.
+  const txs = state.transactions || [];
+  let wins = 0, losses = 0, biggestWin = 0, biggestLoss = 0;
+  let totalHoldDays = 0, closedCount = 0;
+  const avgByBuy = {};
+  for (const t of txs) {
+    if (t.side === "BUY") {
+      avgByBuy[t.symbol] = avgByBuy[t.symbol] || { qty: 0, cost: 0, firstAt: t.ts };
+      avgByBuy[t.symbol].qty += t.qty;
+      avgByBuy[t.symbol].cost += t.qty * t.pricePaise;
+    } else if (t.side === "SELL") {
+      const b = avgByBuy[t.symbol];
+      if (b?.qty) {
+        const avgCost = b.cost / b.qty;
+        const pl = (t.pricePaise - avgCost) * t.qty;
+        if (pl > 0) { wins++; if (pl > biggestWin) biggestWin = pl; }
+        else if (pl < 0) { losses++; if (-pl > biggestLoss) biggestLoss = -pl; }
+        b.qty -= t.qty;
+        b.cost -= avgCost * t.qty;
+        const holdDays = (t.ts - b.firstAt) / 86400000;
+        totalHoldDays += holdDays;
+        closedCount++;
+      }
+    }
+  }
+  const sectorCounts = {};
+  for (const [sym] of Object.entries(state.holdings || {})) {
+    const inst = getInstrument(sym);
+    if (inst?.sector) sectorCounts[inst.sector] = (sectorCounts[inst.sector] || 0) + 1;
+  }
+  const topSectors = Object.entries(sectorCounts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([s]) => s);
+
+  const biasFlagSet = new Set();
+  for (const msg of state.coachMessages || []) {
+    (msg.biases || []).forEach(b => biasFlagSet.add(b.bias || b));
+  }
+
+  try {
+    const res = await fetch("/api/report-card", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        totalTrades: txs.length,
+        winRate: (wins + losses) ? wins / (wins + losses) : 0,
+        biggestWin: Math.round(biggestWin / 100),
+        biggestLoss: Math.round(biggestLoss / 100),
+        avgHoldDays: closedCount ? Math.round(totalHoldDays / closedCount) : 0,
+        biasFlags: [...biasFlagSet],
+        portfolioReturnPct: getPortfolioReturnPct(state) * 100,
+        topSectors,
+        startedAt: state.portfolio?.startedAt ? new Date(state.portfolio.startedAt).toLocaleDateString("en-IN") : "",
+      }),
+    });
+    if (!res.ok) throw new Error("http_" + res.status);
+    const data = await res.json();
+    if (!data?.narrative) throw new Error("no_narrative");
+    return data;
+  } catch (e) {
+    aiCardLoading = false;
+    return null;
+  }
 }

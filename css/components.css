@@ -579,6 +579,45 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* AI-suggested crash prompts — chip row under the custom-crash input */
+.custom-crash-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--sp-3);
+}
+.crash-sugg-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-xs);
+  padding: 4px 10px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: background var(--dur-1), border-color var(--dur-1);
+}
+.crash-sugg-chip:hover {
+  background: color-mix(in srgb, var(--brand) 10%, var(--surface));
+  border-color: var(--brand);
+}
+
+/* Report-card AI strengths + watch-outs grid */
+.report-ai-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.report-ai-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.55;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.report-ai-list li { margin-bottom: 4px; }
+@media (max-width: 620px) { .report-ai-grid { grid-template-columns: 1fr; } }
+
 /* Today's market mood — AI one-paragraph summary at top of /#/stocks */
 .market-mood-card {
   padding: var(--sp-4);
