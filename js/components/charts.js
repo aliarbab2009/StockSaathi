@@ -433,8 +433,13 @@ export function areaChart(values, opts = {}) {
 
 function formatAxisNumber(v) {
   const abs = Math.abs(v);
+  // Enough precision that 5 ticks spanning a typical stock-price range never
+  // collapse to duplicate labels. Previous rounded-to-"k" logic meant a chart
+  // spanning ₹1,267–₹1,612 rendered as "1k, 1k, 1k, 2k, 2k" — unreadable.
   if (abs >= 1e7) return (v / 1e7).toFixed(2) + "Cr";
   if (abs >= 1e5) return (v / 1e5).toFixed(2) + "L";
-  if (abs >= 1e3) return Math.round(v / 1e3) + "k";
-  return Math.round(v).toString();
+  if (abs >= 1e4) return (v / 1e3).toFixed(1) + "k";   // 10k–99.9k
+  if (abs >= 1e3) return (v / 1e3).toFixed(2) + "k";   // 1.00k–9.99k
+  if (abs >= 100) return v.toFixed(0);                  // 100–999
+  return v.toFixed(2);                                  // <100
 }
