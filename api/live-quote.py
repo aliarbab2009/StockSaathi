@@ -89,9 +89,13 @@ def read_cache(symbols):
         return {}
 
 
+_last_write_error = {"status": None, "body": None, "key_prefix": None}
+
 def write_cache(rows):
-    """Upsert rows into quote_cache. Silent on failure — cache is best-effort."""
+    """Upsert rows into quote_cache. Stores last failure for diagnostics."""
+    global _last_write_error
     if not (SUPA_URL and SUPA_SRV) or not rows:
+        _last_write_error = {"status": "skipped", "body": "SUPA_URL or SUPA_SRV empty", "key_prefix": None}
         return
     url = f"{SUPA_URL}/rest/v1/quote_cache"
     headers = _supa_headers()
@@ -99,9 +103,14 @@ def write_cache(rows):
     body = json.dumps(rows).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        urllib.request.urlopen(req, timeout=3).read()
-    except Exception:
-        pass
+        r = urllib.request.urlopen(req, timeout=3)
+        _last_write_error = {"status": r.status, "body": None, "key_prefix": SUPA_SRV[:12] + "..."}
+    except urllib.error.HTTPError as e:
+        try: err_body = e.read().decode("utf-8")[:300]
+        except Exception: err_body = str(e)
+        _last_write_error = {"status": e.code, "body": err_body, "key_prefix": SUPA_SRV[:12] + "..."}
+    except Exception as e:
+        _last_write_error = {"status": "exception", "body": str(e)[:200], "key_prefix": SUPA_SRV[:12] + "..."}
 
 
 # --------------------------------------------------------------------------
@@ -331,6 +340,7 @@ class handler(BaseHTTPRequestHandler):
                 "yahoo": True,
                 "cache": bool(SUPA_URL and SUPA_SRV),
             },
+            "_debug_last_write": _last_write_error,
         })
 
     def do_OPTIONS(self):
