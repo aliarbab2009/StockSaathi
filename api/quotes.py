@@ -48,7 +48,13 @@ def fetch_one(symbol):
             price = meta.get("regularMarketPrice")
             if price is None:
                 continue
-            prev = meta.get("chartPreviousClose") or meta.get("previousClose") or price
+            # See quote.py — regularMarketPreviousClose is yesterday's close
+            # (what "today's % change" should compare against). chartPreviousClose
+            # is the close before the chart range — 5 days ago for range=5d.
+            prev = (meta.get("regularMarketPreviousClose")
+                    or meta.get("previousClose")
+                    or meta.get("chartPreviousClose")
+                    or price)
             return {
                 "symbol": symbol, "ticker": ticker,
                 "price": float(price),

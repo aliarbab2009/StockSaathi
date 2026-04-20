@@ -214,7 +214,14 @@ def fetch_yahoo_one(symbol):
             price = meta.get("regularMarketPrice")
             if price is None:
                 continue
-            prev = meta.get("chartPreviousClose") or meta.get("previousClose") or price
+            # regularMarketPreviousClose = yesterday's close (canonical for
+            # today's %-change calc). chartPreviousClose is the close before
+            # the chart range starts — 5 trading days ago when range=5d — so
+            # treating it as prev_close inflates/deflates today's % change.
+            prev = (meta.get("regularMarketPreviousClose")
+                    or meta.get("previousClose")
+                    or meta.get("chartPreviousClose")
+                    or price)
             ts_ms = int((meta.get("regularMarketTime") or 0)) * 1000 or int(time.time() * 1000)
             return {
                 "symbol": symbol,
