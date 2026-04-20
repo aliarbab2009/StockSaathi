@@ -67,6 +67,18 @@ export function renderStockDetail(main, params) {
     } catch (e) { console.warn("history:", e); }
   })();
 
+  // Fetch fundamentals. This was missing — liveFundamentals was declared
+  // but never populated, so the Fundamentals card sat on "Loading…" forever
+  // and fell back to universe.js static values + synthetic 52W range.
+  (async () => {
+    try {
+      if (inst.kind === "MF") return;   // MFs don't have per-share fundamentals
+      const f = await getFundamentals(symbol);
+      if (myToken.cancelled) return;
+      if (f) { liveFundamentals = f; render(inst, symbol); }
+    } catch (e) { console.warn("fundamentals:", e); }
+  })();
+
   // Stock intro coach (non-blocking, first view only)
   const existing = getState().coachMessages.some(m => m.eventType === "STOCK_INTRO" && m.triggerSymbol === symbol);
   if (!existing) {
