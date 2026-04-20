@@ -12,6 +12,7 @@ import { candleChart, lineChart, stockChart, attachStockChartHover } from "../co
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import {
   getState, subscribe, applyTrade, recordCoachMessage, genId, addToWatchlist, removeFromWatchlist,
+  getPortfolioValue,
 } from "../state.js";
 import { coach } from "../coach/orchestrator.js";
 import { detectPanicSell } from "../coach/biasDetectors.js";
@@ -549,6 +550,10 @@ function showConfirm(inst, symbol, curPrice, qty, biasResult) {
               </div>
             </div>
           </div>
+          <div id="trade-nudge-slot" class="trade-nudge-slot loading">
+            <span class="pf-digest-label">Saathi</span>
+            <span class="trade-nudge-body dim">looking at your portfolio…</span>
+          </div>
           <p class="text-xs dim" style="text-align: center;">Virtual money. Order executes at ${formatRupees(curPrice)}. Coach reflection follows.</p>
         </div>
         <div class="modal-foot">
@@ -568,6 +573,66 @@ function showConfirm(inst, symbol, curPrice, qty, biasResult) {
     executeTrade(inst, side, qty, curPrice, biasResult);
   });
   setTimeout(() => modalRoot.querySelector("#confirm-btn")?.focus(), 50);
+  // Fire the pre-trade AI nudge in parallel — doesn't block the confirm button.
+  fetchTradeNudge(modalRoot, inst, symbol, side, qty, curPrice).catch(() => {});
+}
+
+async function fetchTradeNudge(modalRoot, inst, symbol, side, qty, curPricePaise) {
+  const state = getState();
+  const portfolioPaise = getPortfolioValue ? getPortfolioValue(state) : 0;
+  const holding = state.holdings?.[symbol];
+  const existingAvgRupees = holding ? holding.avgCostPaise / 100 : null;
+  const existingPlPct = holding ? (curPricePaise - holding.avgCostPaise) / holding.avgCostPaise : null;
+  // Sector allocation
+  let sectorValue = 0;
+  if (inst?.sector) {
+    for (const [sym, h] of Object.entries(state.holdings || {})) {
+      const si = getInstrument(sym);
+      if (si?.sector === inst.sector) {
+        sectorValue += h.qty * (h.avgCostPaise || 0);
+      }
+    }
+  }
+  const totalTradeCountInSymbol = (state.transactions || []).filter(t => t.symbol === symbol).length;
+
+  try {
+    const res = await fetch("/api/trade-nudge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: side,
+        symbol,
+        name: inst?.name || "",
+        sector: inst?.sector || "",
+        qty,
+        priceRupees: curPricePaise / 100,
+        portfolio: {
+          totalRupees: portfolioPaise / 100,
+          cashRupees: state.portfolio.cashPaise / 100,
+          existingQty: holding?.qty || 0,
+          existingAvgRupees,
+          existingPlPct,
+          tradeCountInSymbol: totalTradeCountInSymbol,
+          totalTradeCount: (state.transactions || []).length,
+          sectorAllocPct: portfolioPaise ? (sectorValue / portfolioPaise) * 100 : 0,
+        },
+      }),
+    });
+    if (!res.ok) throw new Error("http_" + res.status);
+    const d = await res.json();
+    if (!d?.nudge) throw new Error("no_nudge");
+    const slot = modalRoot.querySelector("#trade-nudge-slot");
+    if (slot) {
+      slot.classList.remove("loading");
+      slot.classList.add(`sev-${d.severity || "neutral"}`);
+      slot.querySelector(".trade-nudge-body")?.classList?.remove("dim");
+      slot.querySelector(".trade-nudge-body").textContent = d.nudge;
+    }
+  } catch {
+    // Modal might already be closed; silently ignore.
+    const slot = modalRoot.querySelector("#trade-nudge-slot");
+    if (slot) slot.remove();
+  }
 }
 
 async function executeTrade(inst, side, qty, pricePaise, biasResult) {

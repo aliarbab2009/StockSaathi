@@ -579,6 +579,23 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* Pre-trade AI nudge slot inside the order-confirm modal */
+.trade-nudge-slot {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  border-radius: var(--r);
+  background: var(--bg-soft);
+  border-left: 3px solid var(--brand);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  align-items: flex-start;
+}
+.trade-nudge-slot.sev-warn { border-left-color: var(--warning, var(--negative)); background: var(--negative-soft); }
+.trade-nudge-slot.sev-note { border-left-color: var(--brand); }
+.trade-nudge-slot .trade-nudge-body { flex: 1; }
+
 /* Nav 'Ask' button that opens the Command-K palette */
 .nav-cmdk-btn {
   display: inline-flex;
