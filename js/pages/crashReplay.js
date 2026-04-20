@@ -4,12 +4,13 @@
 // animate. Coach narration card fades in at key frames. Offline-safe.
 // =============================================================================
 
-import { CRASHES, CRASH_BY_ID } from "../data/crashes.js";
+import { CRASHES, getCrashById, registerCustomCrash } from "../data/crashes.js";
 import { dualLineChart } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { coach } from "../coach/orchestrator.js";
 import { recordCoachMessage, setState, getState } from "../state.js";
 import { navigate } from "../router.js";
+import { generateCustomCrash } from "../features/customCrash.js";
 
 export function renderCrashReplay(main, params) {
   const scenarioId = params?.scenario;
@@ -18,7 +19,7 @@ export function renderCrashReplay(main, params) {
     renderSelector(main);
     return;
   }
-  const scenario = CRASH_BY_ID[scenarioId];
+  const scenario = getCrashById(scenarioId);
   if (!scenario) {
     main.innerHTML = `<div class="empty-state"><span class="emoji">🔍</span><h3>Scenario not found</h3><a href="#/crash-replay" class="btn btn-primary">Back</a></div>`;
     return;
@@ -34,11 +35,27 @@ function renderSelector(main) {
       </div>
       <h1 class="tight">Live through a real crash.<br />Without losing a rupee.</h1>
       <p class="muted" style="max-width: 640px; margin: 0 auto; font-size: var(--text-lg);">
-        Scrub through three real moments of Indian market panic.
+        Scrub through real moments of Indian market panic.
         Watch a ₹1,00,000 portfolio split: if you held, vs if you panic-sold on day 3.
       </p>
     </section>
 
+    <div class="card" id="custom-crash-card" style="margin-top: var(--sp-6); margin-bottom: var(--sp-6);">
+      <h3 style="margin-bottom: var(--sp-2);">✨ Ask about any Indian market event</h3>
+      <p class="muted" style="margin-bottom: var(--sp-3); font-size: var(--text-sm); line-height: 1.6;">
+        Harshad Mehta 1992. Satyam scandal. Adani short-seller report. YES Bank 2020. 1MDB-era crypto panic. Anything — specific, niche, white or black money. The coach pulls what it knows, builds a day-by-day replay, and drops you into it.
+      </p>
+      <div class="flex gap-3 wrap" style="align-items:flex-start;">
+        <input id="custom-crash-input" class="input" style="flex:1; min-width: 240px;" type="text" maxlength="200" placeholder="e.g. Harshad Mehta 1992 securities scam" />
+        <button id="custom-crash-btn" class="btn btn-primary">Generate replay</button>
+      </div>
+      <div id="custom-crash-status" class="muted text-xs" style="margin-top: var(--sp-2); min-height: 1.2em;"></div>
+    </div>
+
+    <div style="margin-bottom: var(--sp-3);">
+      <h3 style="margin: 0;">Curated replays</h3>
+      <p class="muted text-sm">Hand-tuned with real historical Nifty values.</p>
+    </div>
     <div class="crash-scenarios">
       ${CRASHES.map(c => `
         <button class="crash-scenario" data-id="${c.id}">
@@ -68,6 +85,37 @@ function renderSelector(main) {
       location.hash = "#/crash-replay/" + btn.dataset.id;
     });
   });
+
+  const input = main.querySelector("#custom-crash-input");
+  const button = main.querySelector("#custom-crash-btn");
+  const status = main.querySelector("#custom-crash-status");
+
+  async function trigger() {
+    const q = (input.value || "").trim();
+    if (!q) {
+      status.textContent = "Type a crash or event to replay.";
+      input.focus();
+      return;
+    }
+    button.disabled = true;
+    input.disabled = true;
+    button.textContent = "Generating…";
+    status.textContent = "Gathering historical context and synthesising the day-by-day trajectory. ~8–15 s.";
+    try {
+      const scenario = await generateCustomCrash(q);
+      registerCustomCrash(scenario);
+      status.textContent = `Ready — ${scenario.title}. Loading replay…`;
+      location.hash = "#/crash-replay/" + scenario.id;
+    } catch (e) {
+      status.innerHTML = `<span style="color:var(--negative);">Couldn't generate that one — ${escapeHtml(e.message || "unknown error")}. Try a different phrasing, or pick a curated replay below.</span>`;
+      button.disabled = false;
+      input.disabled = false;
+      button.textContent = "Generate replay";
+    }
+  }
+
+  button.addEventListener("click", trigger);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") trigger(); });
 }
 
 function renderReplay(main, scenario) {

@@ -200,3 +200,17 @@ const DEMO_2016 = {
 
 export const CRASHES = [COVID_2020, GFC_2008, DEMO_2016];
 export const CRASH_BY_ID = Object.fromEntries(CRASHES.map(c => [c.id, c]));
+
+// Custom scenarios generated at runtime from free-text user descriptions.
+// Stored in memory only (not persisted) so they don't outlive the session
+// — the replay UI looks them up via getCrashById() below.
+const CUSTOM_CRASHES = {};
+
+export function registerCustomCrash(scenario) {
+  if (!scenario?.id) return;
+  CUSTOM_CRASHES[scenario.id] = scenario;
+}
+
+export function getCrashById(id) {
+  return CRASH_BY_ID[id] || CUSTOM_CRASHES[id] || null;
+}
