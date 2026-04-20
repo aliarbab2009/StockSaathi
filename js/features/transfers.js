@@ -125,19 +125,25 @@ export async function sendTransfer({ recipientHandle, amountPaise, note = "" }) 
     }));
     throw new Error("Recipient hasn't signed in on this device yet. Ask them to open StockSaathi first, then retry.");
   }
-  recState.portfolio = {
-    ...recState.portfolio,
-    cashPaise: (recState.portfolio?.cashPaise || 0) + amount,
-  };
-  recState.transfers = [
-    ...(recState.transfers || []),
-    {
-      id: transferId + "_in", direction: "in",
-      counterpartyId: me.id, counterpartyHandle: me.username, counterpartyName: me.displayName,
-      amountPaise: amount, ts, note, status: "completed",
+  // Build a new state object rather than mutating the one we just read from
+  // localStorage — if a second tab reads the same key between our read and
+  // write, mutation could leak an intermediate view to that tab.
+  const nextRecState = {
+    ...recState,
+    portfolio: {
+      ...recState.portfolio,
+      cashPaise: (recState.portfolio?.cashPaise || 0) + amount,
     },
-  ];
-  writeOtherUserState(recipient.id, recState);
+    transfers: [
+      ...(recState.transfers || []),
+      {
+        id: transferId + "_in", direction: "in",
+        counterpartyId: me.id, counterpartyHandle: me.username, counterpartyName: me.displayName,
+        amountPaise: amount, ts, note, status: "completed",
+      },
+    ],
+  };
+  writeOtherUserState(recipient.id, nextRecState);
 
   return {
     ok: true,

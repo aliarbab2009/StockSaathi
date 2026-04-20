@@ -10,6 +10,8 @@ import { setNewPassword, validatePassword } from "../auth/accounts.js";
 import { switchUser } from "../state.js";
 import { navigate } from "../router.js";
 
+const RECOVERY_WAIT_MS = 5000;
+
 export function renderResetPassword(main) {
   main.innerHTML = `
     <div class="auth-wrap">
@@ -81,7 +83,7 @@ export function renderResetPassword(main) {
     });
     authUnsub = () => sub?.data?.subscription?.unsubscribe?.();
 
-    setTimeout(() => { if (!gotRecovery) showExpired(); }, 5000);
+    setTimeout(() => { if (!gotRecovery) showExpired(); }, RECOVERY_WAIT_MS);
   })();
 
   function showForm() {

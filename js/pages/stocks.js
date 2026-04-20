@@ -4,7 +4,7 @@
 
 import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS } from "../data/universe.js";
 import { getTodayChange, getCloses } from "../data/prices.js";
-import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes } from "../data/marketData.js";
+import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
@@ -26,27 +26,23 @@ export function renderStocks(main) {
   const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Two-wave fetch: top-20 lands fast (≤4s), then the rest in background.
-  const wave1 = STOCKS.slice(0, 20).map(s => s.symbol);
-  const wave2 = STOCKS.slice(20, 50).map(s => s.symbol);
+  // Cover EVERY equity in the universe — no more 50-stock cap. getQuoteBatch
+  // auto-chunks to stay under /api/live-quote's MAX_SYMBOLS=80, and the
+  // Supabase quote_cache (10s TTL, shared across users) means Yahoo only
+  // sees one hit per symbol per 10s regardless of how many users are
+  // polling. MFs have no real-time feed and go through synthMFQuote.
+  const allEquitySyms = STOCKS.map(s => s.symbol);
 
   (async () => {
     try {
-      const q1 = await getQuoteBatch(wave1);
+      const q = await getQuoteBatch(allEquitySyms);
       if (cancelled) return;
-      quoteCache = { ...quoteCache, ...q1 };
-      render();
-    } catch {}
-    try {
-      const q2 = await getQuoteBatch(wave2);
-      if (cancelled) return;
-      quoteCache = { ...quoteCache, ...q2 };
+      quoteCache = { ...quoteCache, ...q };
       render();
     } catch {}
   })();
 
-  // Then 10s polling over all top-50 to keep fresh
-  pollUnsub = subscribeToQuotes([...wave1, ...wave2], (quotes) => {
+  pollUnsub = subscribeToQuotes(allEquitySyms, (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
     render();
@@ -139,7 +135,9 @@ function applyFilters(all, f, state) {
 }
 
 function renderStockCard(inst, state) {
-  const closes = getCloses(inst.symbol, 40);
+  // Prefer the rolling intraday buffer built from live polls — falls back
+  // to the seeded 40-day walk on cold load before any poll has landed.
+  const closes = getIntradaySparkline(inst.symbol, getCloses(inst.symbol, 40));
   const quote = quoteCache[inst.symbol];
   // LIVE first, always. inst.price is a seeded reference only — used as an
   // initial skeleton placeholder before live data arrives. When the universe
@@ -151,9 +149,12 @@ function renderStockCard(inst, state) {
   const isWatched = state.watchlist.includes(inst.symbol);
   // Badge logic. LIVE = fresh real feed. DELAYED = feed value older than
   // expected during market hours. SYNCING = no live quote yet + we have
-  // only a static seed price. "—" price is shown if we have neither.
+  // only a static seed price. NAV = mutual fund, end-of-day only (no live
+  // feed exists for MF NAVs — showing LIVE would lie).
   let badge = "";
-  if (quote?.source) {
+  if (inst.kind === "MF") {
+    badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV — refreshed once per day after market close">NAV</span>`;
+  } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
     if (quote.stale) {
       const ageLabel = quote.staleAgeMinutes >= 60
         ? `${(quote.staleAgeMinutes / 60).toFixed(1)}h old`

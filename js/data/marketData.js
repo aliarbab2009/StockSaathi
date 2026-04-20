@@ -19,6 +19,10 @@ import { getState } from "../state.js";
 const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
+// Keep each upstream batch safely under /api/live-quote's MAX_SYMBOLS=80 and
+// /api/quotes's matching 60 cap. Callers can pass the entire universe and
+// getQuoteBatch auto-chunks so no page needs its own waving logic.
+const MAX_BATCH_SIZE = 60;
 // Bumped v2 → v3: v2 had pre-split Reliance etc cached for up to 14 days; we
 // evict the lot so nobody paints with 2024-era numbers after the SW refresh.
 const QUOTE_PERSIST_KEY = "ss.quotes.v3";
@@ -30,6 +34,13 @@ const PERSIST_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const _quoteCache = new Map();
 const _historyCache = new Map();
 const _fundamentalsCache = new Map();
+// Per-symbol rolling buffer of {t, price} points built from live quotes as
+// they arrive. Lets Markets-grid sparklines show the actual intraday move
+// instead of a seeded year-long walk. Capped so memory stays bounded during
+// long-lived sessions.
+const _intradayBuffer = new Map();
+const INTRADAY_BUFFER_MAX = 200;
+const INTRADAY_MIN_POINTS = 6;
 
 // ---------- localStorage cache so the page paints with REAL prices instantly
 function loadPersistedQuotes() {
@@ -99,9 +110,11 @@ function normalizeFromApi(payload, symbol) {
   const marketOpenNow = _isNseOpen(Date.now());
   const ageMinutes = (Date.now() - ts) / 60000;
   const stale = marketOpenNow && ageMinutes > 5;
+  const pricePaise = Math.round(payload.price * 100);
+  _appendIntraday(symbol, ts, pricePaise);
   return {
     symbol,
-    pricePaise: Math.round(payload.price * 100),
+    pricePaise,
     prevClosePaise: Math.round(payload.prev_close * 100),
     changePct: payload.change_pct ?? 0,
     high: Math.round(payload.day_high * 100),
@@ -113,6 +126,31 @@ function normalizeFromApi(payload, symbol) {
     staleAgeMinutes: stale ? Math.round(ageMinutes) : 0,
     source: payload.source || "yahoo",
   };
+}
+
+function _appendIntraday(symbol, ts, pricePaise) {
+  if (!Number.isFinite(pricePaise)) return;
+  let buf = _intradayBuffer.get(symbol);
+  if (!buf) {
+    buf = [];
+    _intradayBuffer.set(symbol, buf);
+  }
+  // De-dupe consecutive identical prices — no visual value in recording the
+  // same close twice, and Yahoo sometimes repeats between ticks.
+  const last = buf[buf.length - 1];
+  if (last && last.t === ts) return;
+  if (last && last.price === pricePaise && ts - last.t < 30_000) return;
+  buf.push({ t: ts, price: pricePaise });
+  if (buf.length > INTRADAY_BUFFER_MAX) buf.splice(0, buf.length - INTRADAY_BUFFER_MAX);
+}
+
+// Returns an array of close prices sourced from the live intraday buffer
+// if it has grown enough points, otherwise falls back to the seeded walk
+// so cold page loads still render. Used by the Markets grid sparklines.
+export function getIntradaySparkline(symbol, fallbackCloses) {
+  const buf = _intradayBuffer.get(symbol);
+  if (buf && buf.length >= INTRADAY_MIN_POINTS) return buf.map(p => p.price);
+  return fallbackCloses;
 }
 
 function _isNseOpen(nowMs) {
@@ -171,6 +209,21 @@ export async function getQuote(symbol) {
 export async function getQuoteBatch(symbols) {
   if (!symbols?.length) return {};
   const uniq = [...new Set(symbols)];
+
+  // Auto-chunk when callers pass more than one upstream's worth of symbols.
+  // Chunks fire in parallel — whichever lands first paints its cards first.
+  if (uniq.length > MAX_BATCH_SIZE) {
+    const chunks = [];
+    for (let i = 0; i < uniq.length; i += MAX_BATCH_SIZE) {
+      chunks.push(uniq.slice(i, i + MAX_BATCH_SIZE));
+    }
+    const results = await Promise.all(chunks.map(c => _getQuoteBatchInner(c)));
+    return Object.assign({}, ...results);
+  }
+  return _getQuoteBatchInner(uniq);
+}
+
+async function _getQuoteBatchInner(uniq) {
   const out = {};
 
   // Try the new cache-first /api/live-quote endpoint. Hundreds of users
@@ -313,17 +366,10 @@ const YAHOO_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 function yahooTicker(sym) { return sym.includes(".") ? sym : `${sym}.NS`; }
 
 async function fetchYahooUrl(yahooUrl) {
-  // Try legacy /api/yahoo/chart route
-  const m = yahooUrl.match(/\/v8\/finance\/chart\/(.+)$/);
-  if (m) {
-    const ourProxy = `/api/yahoo/chart/${m[1]}`;
-    const res = await fetchJsonWithTimeout(ourProxy);
-    if (res && !res.error) return res;
-  }
-  // Direct
+  // Direct first (works in some browsers / same-origin proxies)
   let res = await fetchJsonWithTimeout(yahooUrl);
   if (res) return res;
-  // Public proxies
+  // Public CORS proxies as last resort
   const p1 = `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`;
   res = await fetchJsonWithTimeout(p1);
   if (res) return res;

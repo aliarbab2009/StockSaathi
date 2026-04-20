@@ -9,6 +9,7 @@
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-5-20250929";  // stable alias; graceful fallback handled
+const LLM_TIMEOUT_MS = 8000;
 
 const SYSTEM_PROMPT = `You are a financial-behavior reflection companion for Indian students aged 13-18 using a virtual-money investment simulator. You are NOT a financial advisor. You NEVER recommend buying or selling. You observe patterns and ask Socratic questions.
 
@@ -45,7 +46,7 @@ export async function callClaude(apiKey, { event, tick, biases, analog, payload 
   ].filter(Boolean).join("\n\n");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
   try {
     const res = await fetch(ANTHROPIC_URL, {
