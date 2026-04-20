@@ -48,11 +48,20 @@ def fetch_one(symbol):
             price = meta.get("regularMarketPrice")
             if price is None:
                 continue
-            # See quote.py — regularMarketPreviousClose is yesterday's close
-            # (what "today's % change" should compare against). chartPreviousClose
-            # is the close before the chart range — 5 days ago for range=5d.
+            # Yahoo strips regularMarketPreviousClose + previousClose when
+            # rate-limiting. Parse closes[] to pull yesterday from the chart
+            # array directly — second-to-last non-null entry (closes[-1] is
+            # today's in-progress bar). See quote.py for the full rationale.
+            closes_arr = ((result[0].get("indicators", {}).get("quote") or [{}])[0]
+                          .get("close") or [])
+            prev_from_chart = None
+            for i in range(len(closes_arr) - 2, -1, -1):
+                if closes_arr[i] is not None:
+                    prev_from_chart = closes_arr[i]
+                    break
             prev = (meta.get("regularMarketPreviousClose")
                     or meta.get("previousClose")
+                    or prev_from_chart
                     or meta.get("chartPreviousClose")
                     or price)
             return {

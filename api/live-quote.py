@@ -214,12 +214,20 @@ def fetch_yahoo_one(symbol):
             price = meta.get("regularMarketPrice")
             if price is None:
                 continue
-            # regularMarketPreviousClose = yesterday's close (canonical for
-            # today's %-change calc). chartPreviousClose is the close before
-            # the chart range starts — 5 trading days ago when range=5d — so
-            # treating it as prev_close inflates/deflates today's % change.
+            # Yahoo strips regularMarketPreviousClose + previousClose when
+            # rate-limiting Vercel's IP pool. Fall back to the chart closes[]
+            # array — second-to-last non-null value is yesterday's close
+            # (last entry is today's in-progress bar).
+            closes_arr = ((result[0].get("indicators", {}).get("quote") or [{}])[0]
+                          .get("close") or [])
+            prev_from_chart = None
+            for i in range(len(closes_arr) - 2, -1, -1):
+                if closes_arr[i] is not None:
+                    prev_from_chart = closes_arr[i]
+                    break
             prev = (meta.get("regularMarketPreviousClose")
                     or meta.get("previousClose")
+                    or prev_from_chart
                     or meta.get("chartPreviousClose")
                     or price)
             ts_ms = int((meta.get("regularMarketTime") or 0)) * 1000 or int(time.time() * 1000)

@@ -48,13 +48,23 @@ def fetch_one(symbol):
             price = meta.get("regularMarketPrice")
             if price is None:
                 continue
-            # regularMarketPreviousClose = yesterday's close (what Google Finance
-            # shows as the "prev close" baseline for today's % change).
-            # chartPreviousClose = close just before the chart's range starts
-            # (5 trading days ago for range=5d) — WRONG for daily % change but
-            # kept as last-resort fallback in case the meta shape changes.
+            # Yahoo strips "premium" meta fields (regularMarketPreviousClose,
+            # previousClose) when rate-limiting our IPs — only chartPreviousClose
+            # survives, and that's the close from 5d ago for range=5d. Grab
+            # yesterday's close from the chart's closes[] array instead: the
+            # last non-null entry before closes[-1] (today) is yesterday.
+            closes_arr = ((result[0].get("indicators", {}).get("quote") or [{}])[0]
+                          .get("close") or [])
+            prev_from_chart = None
+            # Walk back from second-to-last — closes[-1] is today's running bar
+            for i in range(len(closes_arr) - 2, -1, -1):
+                c = closes_arr[i]
+                if c is not None:
+                    prev_from_chart = c
+                    break
             prev = (meta.get("regularMarketPreviousClose")
                     or meta.get("previousClose")
+                    or prev_from_chart
                     or meta.get("chartPreviousClose")
                     or price)
             return {
@@ -71,11 +81,6 @@ def fetch_one(symbol):
                 "exchange": meta.get("exchangeName") or "",
                 "source": "yahoo",
                 "host": base.split("//")[1].split("/")[0],
-                "_debug_prev_fields": {
-                    "regularMarketPreviousClose": meta.get("regularMarketPreviousClose"),
-                    "previousClose": meta.get("previousClose"),
-                    "chartPreviousClose": meta.get("chartPreviousClose"),
-                },
             }
         except Exception:
             continue
