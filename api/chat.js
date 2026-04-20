@@ -131,6 +131,11 @@ function providerDescriptors() {
 // descriptor whose env var is set gets the call. If it returns a 5xx or
 // 429, we drop to the next. Any 2xx or 4xx (non-throttle) returns to
 // the client as-is.
+//
+// Reasoning profile leads with Gemini Pro because it trades marginal IQ
+// for meaningfully faster streaming throughput vs GPT Pro — on a
+// user-facing chat, "smart in 1 s" beats "slightly smarter in 4 s".
+// GPT sits behind it as the escalation for anything Pro can't handle.
 function chainFor(profile) {
   switch (profile) {
     case "fast":
@@ -141,7 +146,7 @@ function chainFor(profile) {
       return ["openai", "gemini_pro", "gemini_fast", "groq"];
     case "reasoning":
     default:
-      return ["openai", "gemini_pro", "gemini_fast", "groq"];
+      return ["gemini_pro", "openai", "gemini_fast", "cerebras", "groq"];
   }
 }
 

@@ -44,14 +44,24 @@ Rules:
 - Include 4 to 7 keyMoments covering: start context, first panic, trough, any mid-course inflection, recovery or finish.
 - If you truly don't know the event, make your best reasoned estimate based on the described type of event — do NOT refuse. The user knows output is estimated.`;
 
-const TEMPS = [0.2, 0.45, 0.75];
 const MAX_DAYS = 140;
+
+// Each attempt tuple is [profile, temperature]. We try the fast lane twice
+// so most queries land in ~1 s flat; if Flash's JSON fails validation both
+// times (rare — mostly niche or badly-worded queries), we escalate to the
+// reasoning lane where GPT / Gemini Pro take over. Smart-as-fuck on the
+// rare miss, blazing on the common case.
+const ATTEMPTS = [
+  { profile: "fast",      temperature: 0.2  },
+  { profile: "fast",      temperature: 0.55 },
+  { profile: "reasoning", temperature: 0.3  },
+];
 
 export async function generateCustomCrash(description) {
   let lastErr = null;
-  for (let attempt = 0; attempt < TEMPS.length; attempt++) {
+  for (const { profile, temperature } of ATTEMPTS) {
     try {
-      const meta = await callLlmForMeta(description, TEMPS[attempt]);
+      const meta = await callLlmForMeta(description, temperature, profile);
       reshape(meta);
       const valid = validate(meta);
       if (!valid.ok) { lastErr = valid.error; continue; }
@@ -60,7 +70,7 @@ export async function generateCustomCrash(description) {
       lastErr = e?.message || String(e);
     }
   }
-  throw new Error(lastErr || "Could not generate scenario after 3 attempts.");
+  throw new Error(lastErr || "The coach couldn't build that one. Try rephrasing.");
 }
 
 // Mutate the raw LLM output into something the validator/builder can
@@ -86,7 +96,7 @@ function reshape(m) {
   }
 }
 
-async function callLlmForMeta(description, temperature) {
+async function callLlmForMeta(description, temperature, profile) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -98,9 +108,7 @@ async function callLlmForMeta(description, temperature) {
       temperature,
       max_tokens: 800,
       response_format: { type: "json_object" },
-      // Structured JSON about niche Indian events needs the strongest
-      // model available — GPT primary, Gemini Pro as peer fallback.
-      profile: "json",
+      profile,
     }),
   });
   if (!res.ok) {
