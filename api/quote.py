@@ -71,6 +71,11 @@ def fetch_one(symbol):
                 "exchange": meta.get("exchangeName") or "",
                 "source": "yahoo",
                 "host": base.split("//")[1].split("/")[0],
+                "_debug_prev_fields": {
+                    "regularMarketPreviousClose": meta.get("regularMarketPreviousClose"),
+                    "previousClose": meta.get("previousClose"),
+                    "chartPreviousClose": meta.get("chartPreviousClose"),
+                },
             }
         except Exception:
             continue
