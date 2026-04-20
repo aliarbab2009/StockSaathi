@@ -75,6 +75,17 @@ Project → **Settings → Environment Variables** — add/update these:
 # Supabase (required for cross-device accounts, leaderboard, friends, transfers)
 SUPABASE_URL=https://xxxxxxxx.supabase.co
 SUPABASE_ANON_KEY=eyJhbGc...
+# Service role key — server-only, never exposed to client. Enables the
+# /api/live-quote endpoint to upsert into quote_cache so all users share
+# one cached view of each stock. Get it from Project Settings → API →
+# "service_role" (reveal + copy). NEVER put this in frontend code.
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGc...
+
+# Optional — DhanHQ API for real-time NSE data (replaces Yahoo primary).
+# Free with a Dhan account (dhan.co). Once set, /api/live-quote tries Dhan
+# first, Yahoo as fallback. Without these vars the endpoint uses Yahoo only.
+# DHAN_ACCESS_TOKEN=eyJ...
+# DHAN_CLIENT_ID=1100XXXXXX
 
 # LLM — server-side Groq key, user never sees it (free tier, 500 tok/s)
 GROQ_API_KEY=gsk_xxxxxxxx

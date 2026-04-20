@@ -172,6 +172,35 @@ export async function getQuoteBatch(symbols) {
   if (!symbols?.length) return {};
   const uniq = [...new Set(symbols)];
   const out = {};
+
+  // Try the new cache-first /api/live-quote endpoint. Hundreds of users
+  // polling the same symbols share one upstream Yahoo/Dhan hit per 10s
+  // via Supabase quote_cache. Falls through to /api/quotes on failure so
+  // this is safe to ship before the quote_cache table is created.
+  const liveTargets = uniq.filter(s => {
+    const inst = getInstrument(s);
+    return inst && inst.kind !== "MF";
+  });
+  if (liveTargets.length) {
+    const liveUrl = `/api/live-quote?symbols=${encodeURIComponent(liveTargets.join(","))}`;
+    const live = await fetchJsonWithTimeout(liveUrl).catch(() => null);
+    if (live?.ok && live.quotes) {
+      let any = false;
+      for (const s of liveTargets) {
+        const q = live.quotes[s];
+        if (q) {
+          const norm = normalizeFromApi({ ok: true, ...q }, s);
+          if (norm) {
+            out[s] = norm;
+            _quoteCache.set(s, { data: norm, ts: Date.now() });
+            any = true;
+          }
+        }
+      }
+      if (any) persistSoon();
+    }
+  }
+
   const need = [];
 
   // Serve from cache first

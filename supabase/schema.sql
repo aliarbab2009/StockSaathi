@@ -887,6 +887,51 @@ alter table public.coach_messages enable row level security;
 alter table public.watchlist      enable row level security;
 alter table public.limit_orders   enable row level security;
 
+-- =============================================================================
+-- Live-quote cache. The /api/live-quote Vercel function maintains this
+-- table so all users share the same 10s-cached view of each symbol.
+-- Reads are public (anyone browsing the market listings needs them);
+-- writes are gated to the service-role key used by the serverless function.
+-- =============================================================================
+create table if not exists public.quote_cache (
+  symbol             text primary key,
+  price_paise        bigint not null,
+  prev_close_paise   bigint,
+  bid_paise          bigint,
+  ask_paise          bigint,
+  day_high_paise     bigint,
+  day_low_paise      bigint,
+  volume             bigint default 0,
+  change_pct         double precision default 0,
+  ts_ms              bigint not null,
+  source             text not null default 'yahoo',
+  updated_at         timestamptz not null default now()
+);
+create index if not exists idx_quote_cache_updated on public.quote_cache (updated_at desc);
+
+-- DhanHQ instrument master: NSE symbol → Dhan security_id mapping.
+-- Populated once from Dhan's api-scrip-master.csv when the user wires up
+-- their Dhan API key. Until then this table is empty and the quote
+-- endpoint transparently falls through to Yahoo.
+create table if not exists public.dhan_instruments (
+  symbol             text primary key,
+  security_id        int not null,
+  exchange_segment   text not null default 'NSE_EQ',
+  instrument_type    text,
+  lot_size           int,
+  updated_at         timestamptz not null default now()
+);
+
+alter table public.quote_cache       enable row level security;
+alter table public.dhan_instruments  enable row level security;
+
+-- Public-read for the cache (needed by the Markets page for everyone
+-- including anon visitors). Writes require the service role.
+drop policy if exists "quote_cache_read"       on public.quote_cache;
+drop policy if exists "dhan_instruments_read"  on public.dhan_instruments;
+create policy "quote_cache_read"      on public.quote_cache      for select using (true);
+create policy "dhan_instruments_read" on public.dhan_instruments for select using (true);
+
 -- Security fix: the old `profiles_read_all` exposed email + parent_email to
 -- every anon client. We now restrict the base table to self-reads only and
 -- route everyone else through the `public_profiles` view below, which omits
