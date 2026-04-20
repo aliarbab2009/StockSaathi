@@ -33,13 +33,14 @@ Ship to real users with a real Postgres backend, cross-device accounts, email fr
 
 7. **Authentication → URL Configuration**:
    - **Site URL**: `https://stocksaathi.co.in` (or your production domain).
-   - **Redirect URLs** (allowlist) — add every URL the app may redirect auth emails to:
+   - **Redirect URLs** (allowlist) — add every URL the app may redirect auth emails to. For production-only:
      ```
      https://stocksaathi.co.in/**
      https://*.vercel.app/**
-     http://localhost:7348/**
      ```
-   Without the `/#/reset-password` path in the allowlist, password-reset links will be rejected by Supabase with "redirect URL not allowed."
+     Add `http://localhost:7348/**` ONLY if you also run `run.sh` / `backend.py` locally for development — production users don't need it.
+
+   Without a matching allowlist entry, password-reset and confirm-signup links get rejected by Supabase with "redirect URL not allowed."
 
 8. **Authentication → Email Templates → Reset Password** — replace the body so users get a clear "set new password" email:
 

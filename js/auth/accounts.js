@@ -278,16 +278,21 @@ let _cachedUser = null;
 let _cachedAt = 0;
 
 export function currentUser() {
-  // In Supabase mode, the ONLY source of truth is _cachedUser (populated by
-  // refreshCurrentUser from the Supabase client). Previously we fell back to
-  // the legacy ss.session.v1 localStorage key, which meant a stale local
-  // session could impersonate an authed user through needsAuth guards and
-  // then hit "not logged in" on every Supabase RPC. Now: if Supabase is
-  // configured anywhere, the local fallback is dead — return null until the
-  // async refreshCurrentUser resolves.
+  // Fast path: async refreshCurrentUser already filled the cache.
   if (_cachedUser) return _cachedUser;
-  if (_supabaseConfiguredSync()) return null;
-  // Pure local mode (no Supabase env vars) — keep the legacy path.
+
+  // Supabase mode: try to reconstruct the user SYNCHRONOUSLY from the
+  // persisted session token. Without this, hard-reload kicks logged-in
+  // users to /login during the ~300ms window before the async
+  // refreshCurrentUser resolves — because the router calls currentUser()
+  // at render time and gets null.
+  if (_supabaseConfiguredSync()) {
+    const sync = _readSupabaseSessionSync();
+    if (sync) return sync;
+    return null;
+  }
+
+  // Pure local mode (no Supabase configured anywhere) — legacy path.
   const sess = readSession();
   if (!sess) return null;
   const accs = readLocalAccounts();
@@ -297,19 +302,56 @@ export function currentUser() {
   return safe;
 }
 
-// Synchronous "is Supabase configured?" check. We stash a flag on window
-// during the first refreshCurrentUser run — avoids a second async trip.
+// Reads ss.sb.session.v1 synchronously and returns a minimal user object
+// good enough for router guards. refreshCurrentUser() replaces this with
+// the full profile (school, classCode, age, riskProfile, onboarded) as
+// soon as the DB call resolves.
+function _readSupabaseSessionSync() {
+  try {
+    const raw = localStorage.getItem("ss.sb.session.v1");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Supabase-js stores in two possible shapes depending on version.
+    const sess = parsed?.currentSession || parsed;
+    const u = sess?.user || parsed?.user;
+    if (!u?.id) return null;
+    // Also check the access_token hasn't already expired (unix seconds).
+    const expSec = sess?.expires_at;
+    if (expSec && Number.isFinite(expSec) && Date.now() / 1000 > expSec) return null;
+    const meta = u.user_metadata || {};
+    return {
+      id: u.id,
+      email: u.email,
+      username: meta.username || (u.email?.split("@")[0] || "user"),
+      displayName: meta.display_name || meta.username || "User",
+      avatarColor: meta.avatar_color || "green",
+      // Unknown until refreshCurrentUser fetches profile — assume true so
+      // the user doesn't get bounced to /onboarding on every reload. The
+      // async refresh will correct this within a few hundred ms.
+      onboarded: true,
+      _pendingRefresh: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Synchronous "is Supabase configured?" check. Critical for the first call
+// to currentUser() before refreshCurrentUser has run — otherwise we'd fall
+// through to legacy local mode and the router would route authed users
+// based on a missing local session → /login on every hard-reload.
 let _supabaseConfiguredCache = null;
 function _supabaseConfiguredSync() {
   if (_supabaseConfiguredCache != null) return _supabaseConfiguredCache;
-  // Heuristic: presence of our persist key OR a cached config object means
-  // Supabase was at least attempted. Also check if window._supabaseReady
-  // flag was set by refreshCurrentUser below.
   try {
     if (typeof window !== "undefined" && window._ss_supabaseConfigured != null) {
       _supabaseConfiguredCache = !!window._ss_supabaseConfigured;
       return _supabaseConfiguredCache;
     }
+    // Strong sync signal: a persisted Supabase session means the user has
+    // logged in via Supabase at least once, so Supabase mode is definitely
+    // live. Don't cache yet — let refreshCurrentUser make it authoritative.
+    if (localStorage.getItem("ss.sb.session.v1")) return true;
   } catch {}
   return false;
 }
