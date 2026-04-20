@@ -8,7 +8,7 @@ import { getQuote, getHistory, subscribeToQuotes, quoteAge, getFundamentals } fr
 import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange } from "../data/prices.js";
-import { candleChart, lineChart } from "../components/charts.js";
+import { candleChart, lineChart, stockChart, attachStockChartHover } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import {
   getState, subscribe, applyTrade, recordCoachMessage, genId, addToWatchlist, removeFromWatchlist,
@@ -20,9 +20,24 @@ import { showInterventionModal } from "../components/interventionModal.js";
 import { mountQuantitySelector } from "../components/quantitySelector.js";
 import { toast } from "../components/toast.js";
 
-const TF_MAP = { "1W": { range: "5d", interval: "1d", days: 5 }, "1M": { range: "1mo", interval: "1d", days: 22 }, "3M": { range: "3mo", interval: "1d", days: 66 }, "6M": { range: "6mo", interval: "1d", days: 130 }, "1Y": { range: "1y", interval: "1d", days: 260 } };
+// Timeframe → Yahoo range/interval. 1D uses 5m intraday so the chart looks
+// like Groww's (dense 1-min-ish bars), not a sparse 5-daily-candle bar.
+const TF_MAP = {
+  "1D": { range: "1d",  interval: "5m",  days: 1   },
+  "1W": { range: "5d",  interval: "30m", days: 5   },
+  "1M": { range: "1mo", interval: "1d",  days: 22  },
+  "3M": { range: "3mo", interval: "1d",  days: 66  },
+  "6M": { range: "6mo", interval: "1d",  days: 130 },
+  "1Y": { range: "1y",  interval: "1d",  days: 260 },
+};
+const TF_ORDER = ["1D", "1W", "1M", "3M", "6M", "1Y"];
 
-let ui = { side: "BUY", qty: 1, timeframe: "1M", orderType: "MARKET", limitPrice: 0 };
+let ui = {
+  side: "BUY", qty: 1,
+  timeframe: "1M",
+  chartMode: "candle",   // "candle" | "area"
+  orderType: "MARKET", limitPrice: 0,
+};
 let liveQuote = null;
 let liveHistory = null;
 let liveFundamentals = null;
@@ -42,7 +57,13 @@ export function renderStockDetail(main, params) {
   _cancelToken = { cancelled: false };
   const myToken = _cancelToken;
 
-  ui = { side: "BUY", qty: inst.kind === "MF" ? 0.5 : 1, timeframe: "1M", orderType: "MARKET", limitPrice: 0 };
+  ui = {
+    side: "BUY",
+    qty: inst.kind === "MF" ? 0.5 : 1,
+    timeframe: "1M",
+    chartMode: "candle",
+    orderType: "MARKET", limitPrice: 0,
+  };
   liveQuote = null;
   liveHistory = null;
   liveFundamentals = null;
@@ -152,14 +173,28 @@ function render(inst, symbol) {
           </div>
         </div>
 
-        <div class="tf-buttons">
-          ${["1W","1M","3M","6M","1Y"].map(tf => `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${tf}</button>`).join("")}
+        <div class="tf-buttons" style="display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap;">
+          <div style="display:flex; gap:4px;">
+            ${TF_ORDER.map(tf => `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${tf}</button>`).join("")}
+          </div>
+          ${inst.kind !== "MF" ? `
+            <div class="chart-mode-toggle" style="margin-left:auto; display:flex; gap:2px; background:var(--bg-soft); border:1px solid var(--border); border-radius:var(--r-sm); padding:2px;">
+              <button class="chart-mode-btn ${ui.chartMode === "candle" ? "active" : ""}" data-mode="candle" aria-label="Candlestick" title="Candlestick view" style="border:0; background:${ui.chartMode === "candle" ? "var(--surface)" : "transparent"}; color:${ui.chartMode === "candle" ? "var(--text-strong)" : "var(--text-muted)"}; padding:4px 10px; border-radius:calc(var(--r-sm) - 2px); cursor:pointer; font-size:var(--text-xs); display:flex; align-items:center; gap:4px;">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="3" y="3" width="2" height="8" fill="currentColor" opacity="0.9"/><line x1="4" y1="1" x2="4" y2="13" stroke="currentColor" stroke-width="1"/><rect x="9" y="5" width="2" height="5" fill="currentColor" opacity="0.9"/><line x1="10" y1="3" x2="10" y2="12" stroke="currentColor" stroke-width="1"/></svg>
+                Candle
+              </button>
+              <button class="chart-mode-btn ${ui.chartMode === "area" ? "active" : ""}" data-mode="area" aria-label="Area line" title="Area / line view" style="border:0; background:${ui.chartMode === "area" ? "var(--surface)" : "transparent"}; color:${ui.chartMode === "area" ? "var(--text-strong)" : "var(--text-muted)"}; padding:4px 10px; border-radius:calc(var(--r-sm) - 2px); cursor:pointer; font-size:var(--text-xs); display:flex; align-items:center; gap:4px;">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 10 L4 6 L7 8 L10 3 L13 5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+                Line
+              </button>
+            </div>
+          ` : ""}
         </div>
 
         <div class="card" style="padding: var(--sp-3);">
           ${inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
-            : `<div style="height: 340px;">${candleChart(history, { height: 340 })}</div>`}
+            : `<div id="stock-chart-host" style="height: 360px; width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode })}</div>`}
         </div>
 
         ${inst.kind !== "MF" ? renderOrderBook(symbol, curPrice) : ""}
@@ -261,6 +296,27 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
       reloadHistory(inst, symbol);
     });
   });
+  // Candle/Line mode toggle — no refetch, just re-render with other mode.
+  main.querySelectorAll(".chart-mode-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      ui.chartMode = btn.dataset.mode;
+      render(inst, symbol);
+    });
+  });
+  // Attach hover crosshair + tooltip (re-called on every render). Skip for
+  // MFs which use the simpler lineChart (no OHLC data available).
+  if (inst.kind !== "MF") {
+    const host = main.querySelector("#stock-chart-host");
+    // Use whatever history the render just painted; if it's empty, skip.
+    // We re-read from the live/synth chain here to keep hover + chart in sync.
+    const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
+    const hist = liveHistory?.ohlc?.length
+      ? liveHistory.ohlc
+      : getSeries(symbol).slice(-tf.days);
+    if (host && hist?.length) {
+      attachStockChartHover(host, hist, { mode: ui.chartMode });
+    }
+  }
 
   main.querySelectorAll("[data-side]").forEach(btn => {
     btn.addEventListener("click", () => {

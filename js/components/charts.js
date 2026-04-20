@@ -194,66 +194,236 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
   `;
 }
 
-// ---- CANDLE CHART -------------------------------------------------------
-export function candleChart(ohlc, { width = 800, height = 340, max: maxArg = null, min: minArg = null } = {}) {
+// ---- STOCK CHART (candle / area modes, X-axis, hover crosshair) ---------
+//
+// Usage:
+//   container.innerHTML = stockChart(ohlc, { mode: "candle" | "area" });
+//   attachStockChartHover(container, ohlc, { mode });
+//
+// The chart emits a live-price overlay (last close dashed line + rightmost
+// label) and leaves two empty <g> slots (#chart-crosshair, #chart-tooltip)
+// that attachStockChartHover populates on mousemove. No external deps;
+// still all SVG so it works offline + in the SW cache.
+// =========================================================================
+
+export function stockChart(ohlc, {
+  width = 800, height = 360,
+  mode = "candle",          // "candle" | "area"
+  max: maxArg = null, min: minArg = null,
+  showVolume = false,       // reserved for later
+} = {}) {
   if (!ohlc.length) return "";
-  const allHighs = ohlc.map(k => k.h);
-  const allLows = ohlc.map(k => k.l);
-  const { min: dataMin, max: dataMax } = (() => {
-    const hi = Math.max(...allHighs);
-    const lo = Math.min(...allLows);
-    return { min: lo, max: hi };
-  })();
-  const pad = (dataMax - dataMin) * 0.08;
+  const allHighs = ohlc.map(k => k.h ?? k.c);
+  const allLows  = ohlc.map(k => k.l ?? k.c);
+  const dataMax = Math.max(...allHighs);
+  const dataMin = Math.min(...allLows);
+  const pad = (dataMax - dataMin) * 0.08 || dataMax * 0.01;
   const min = minArg != null ? minArg : dataMin - pad;
   const max = maxArg != null ? maxArg : dataMax + pad;
 
-  const paddingLeft = 60, paddingRight = 20, paddingTop = 20, paddingBottom = 28;
+  const paddingLeft = 60, paddingRight = 56, paddingTop = 16, paddingBottom = 30;
   const plotW = width - paddingLeft - paddingRight;
   const plotH = height - paddingTop - paddingBottom;
   const toX = (i) => paddingLeft + (ohlc.length > 1 ? (i / (ohlc.length - 1)) * plotW : 0);
   const toY = (v) => paddingTop + plotH - ((v - min) / (max - min)) * plotH;
 
-  const candleW = Math.max(1.5, plotW / ohlc.length * 0.6);
-
-  let grid = "";
-  for (let i = 0; i <= 4; i++) {
-    const y = paddingTop + (i / 4) * plotH;
-    grid += `<line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${y}" y2="${y}" />`;
-  }
-
-  let yLabels = "";
+  // Y gridlines + labels
+  let grid = "", yLabels = "";
   for (let i = 0; i <= 4; i++) {
     const y = paddingTop + (i / 4) * plotH;
     const v = max - (i / 4) * (max - min);
+    grid += `<line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${y}" y2="${y}" />`;
     yLabels += `<text class="chart-axis-label" x="${paddingLeft - 8}" y="${y + 4}" text-anchor="end">₹${formatAxisNumber(v / 100)}</text>`;
   }
 
-  let candles = "";
-  for (let i = 0; i < ohlc.length; i++) {
-    const k = ohlc[i];
-    const x = toX(i);
-    const up = k.c >= k.o;
-    const cls = up ? "chart-candle-up" : "chart-candle-down";
-    const yH = toY(k.h);
-    const yL = toY(k.l);
-    const yO = toY(k.o);
-    const yC = toY(k.c);
-    const bodyY = Math.min(yO, yC);
-    const bodyH = Math.max(1, Math.abs(yO - yC));
-    candles += `
-      <line class="${cls}" x1="${x}" x2="${x}" y1="${yH}" y2="${yL}" stroke-width="1" />
-      <rect class="${cls}" x="${x - candleW / 2}" y="${bodyY}" width="${candleW}" height="${bodyH}" />
-    `;
+  // X-axis ticks: 5 evenly-spaced labels from first to last candle.
+  // Format depends on how tightly the data is packed in time.
+  let xLabels = "";
+  const nTicks = Math.min(5, ohlc.length);
+  const spanMs = ohlc[ohlc.length - 1].t - ohlc[0].t;
+  const isIntraday = spanMs > 0 && spanMs < 3 * 86400000;  // <3 days
+  const fmtT = (tms) => {
+    const d = new Date(tms);
+    if (isIntraday) {
+      return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+    }
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" });
+  };
+  for (let i = 0; i < nTicks; i++) {
+    const idx = Math.round(i * (ohlc.length - 1) / (nTicks - 1 || 1));
+    const x = toX(idx);
+    const k = ohlc[idx];
+    xLabels += `<text class="chart-axis-label" x="${x}" y="${height - 10}" text-anchor="middle">${fmtT(k.t)}</text>`;
   }
 
+  // Body
+  let body = "";
+  if (mode === "area") {
+    // Build path from close prices
+    let d = "";
+    for (let i = 0; i < ohlc.length; i++) {
+      d += (i === 0 ? "M" : "L") + toX(i).toFixed(2) + "," + toY(ohlc[i].c).toFixed(2) + " ";
+    }
+    const areaD = d + ` L${toX(ohlc.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z`;
+    const firstClose = ohlc[0].c;
+    const lastClose = ohlc[ohlc.length - 1].c;
+    const up = lastClose >= firstClose;
+    const color = up ? "var(--positive)" : "var(--negative)";
+    body = `
+      <path d="${areaD}" fill="${color}" opacity="0.12" />
+      <path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+    `;
+  } else {
+    // Candles
+    const candleW = Math.max(1.5, plotW / ohlc.length * 0.6);
+    for (let i = 0; i < ohlc.length; i++) {
+      const k = ohlc[i];
+      const x = toX(i);
+      const up = k.c >= k.o;
+      const cls = up ? "chart-candle-up" : "chart-candle-down";
+      const yH = toY(k.h), yL = toY(k.l), yO = toY(k.o), yC = toY(k.c);
+      const bodyY = Math.min(yO, yC);
+      const bodyH = Math.max(1, Math.abs(yO - yC));
+      body += `
+        <line class="${cls}" x1="${x}" x2="${x}" y1="${yH}" y2="${yL}" stroke-width="1" />
+        <rect class="${cls}" x="${x - candleW / 2}" y="${bodyY}" width="${candleW}" height="${bodyH}" />
+      `;
+    }
+  }
+
+  // Previous-close baseline (first candle's open as anchor)
+  const baseY = toY(ohlc[0].o ?? ohlc[0].c);
+  const baseline = `<line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${baseY}" y2="${baseY}" stroke="var(--text-dim, #878E9C)" stroke-width="1" stroke-dasharray="3,4" opacity="0.4" />`;
+
+  // Last-price label on right edge
+  const lastY = toY(ohlc[ohlc.length - 1].c);
+  const lastLabel = `
+    <g transform="translate(${width - paddingRight + 2}, ${lastY})">
+      <rect x="0" y="-10" width="52" height="20" rx="4" fill="var(--brand, #00B386)" />
+      <text x="26" y="4" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="var(--font-mono, monospace)">₹${(ohlc[ohlc.length - 1].c / 100).toFixed(2)}</text>
+    </g>`;
+
   return `
-    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" aria-hidden="true" preserveAspectRatio="none">
-      <g class="chart-grid">${grid}</g>
-      ${candles}
-      ${yLabels}
-    </svg>
+    <div class="stock-chart" style="position:relative;">
+      <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
+           data-w="${width}" data-h="${height}"
+           data-pl="${paddingLeft}" data-pr="${paddingRight}"
+           data-pt="${paddingTop}" data-pb="${paddingBottom}"
+           data-min="${min}" data-max="${max}" data-n="${ohlc.length}">
+        <g class="chart-grid">${grid}</g>
+        ${baseline}
+        ${body}
+        ${yLabels}
+        ${xLabels}
+        ${lastLabel}
+        <g class="chart-crosshair" style="display:none;">
+          <line class="chart-crosshair-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
+                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" />
+          <line class="chart-crosshair-y" x1="${paddingLeft}" x2="${width - paddingRight}" y1="0" y2="0"
+                stroke="var(--text-muted, #5C6473)" stroke-width="1" stroke-dasharray="3,3" />
+        </g>
+      </svg>
+      <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:nowrap; z-index:2;"></div>
+    </div>
   `;
+}
+
+// Back-compat aliases — existing callers of candleChart() still work.
+export function candleChart(ohlc, opts = {}) { return stockChart(ohlc, { ...opts, mode: "candle" }); }
+
+// ---- HOVER INTERACTION --------------------------------------------------
+// Call AFTER the chart HTML has been inserted into `container`.
+// Re-call on every re-render. Cleans up automatically when container empties.
+export function attachStockChartHover(container, ohlc, { mode = "candle" } = {}) {
+  if (!container || !ohlc?.length) return () => {};
+  const svg = container.querySelector(".chart-svg");
+  const tooltip = container.querySelector(".chart-tooltip");
+  const cross = container.querySelector(".chart-crosshair");
+  const crossX = container.querySelector(".chart-crosshair-x");
+  const crossY = container.querySelector(".chart-crosshair-y");
+  if (!svg || !tooltip || !cross) return () => {};
+
+  const W = +svg.dataset.w, H = +svg.dataset.h;
+  const PL = +svg.dataset.pl, PR = +svg.dataset.pr;
+  const PT = +svg.dataset.pt, PB = +svg.dataset.pb;
+  const MIN = +svg.dataset.min, MAX = +svg.dataset.max;
+  const N = +svg.dataset.n;
+  const plotW = W - PL - PR;
+  const plotH = H - PT - PB;
+  const toX = (i) => PL + (N > 1 ? (i / (N - 1)) * plotW : 0);
+
+  function onMove(e) {
+    const rect = svg.getBoundingClientRect();
+    // map client coords → viewBox coords (chart uses preserveAspectRatio="none")
+    const px = ((e.clientX - rect.left) / rect.width) * W;
+    const py = ((e.clientY - rect.top) / rect.height) * H;
+    if (px < PL || px > W - PR || py < PT || py > H - PB) {
+      hide();
+      return;
+    }
+    // Find nearest candle index
+    const rel = (px - PL) / plotW;
+    const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
+    const k = ohlc[idx];
+    const cx = toX(idx);
+    crossX.setAttribute("x1", cx);
+    crossX.setAttribute("x2", cx);
+    crossY.setAttribute("y1", py);
+    crossY.setAttribute("y2", py);
+    cross.style.display = "";
+
+    const d = new Date(k.t);
+    const dateStr = d.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+    const fmt = (p) => "₹" + (p / 100).toFixed(2);
+    const tipLines = mode === "area"
+      ? [
+          `<span style="color:var(--text-dim)">${dateStr}</span>`,
+          `<strong style="font-size:13px;">${fmt(k.c)}</strong>`,
+        ]
+      : [
+          `<span style="color:var(--text-dim)">${dateStr}</span>`,
+          `<span>O <strong>${fmt(k.o)}</strong>  H <strong style="color:var(--positive)">${fmt(k.h)}</strong></span>`,
+          `<span>L <strong style="color:var(--negative)">${fmt(k.l)}</strong>  C <strong>${fmt(k.c)}</strong></span>`,
+          k.v ? `<span style="color:var(--text-dim)">Vol ${k.v.toLocaleString("en-IN")}</span>` : "",
+        ].filter(Boolean);
+
+    tooltip.innerHTML = tipLines.join("<br>");
+    tooltip.style.display = "";
+    // Position the tooltip: convert chart-space cx back to container px
+    const containerRect = container.getBoundingClientRect();
+    const cxPx = (cx / W) * rect.width;
+    const tipW = tooltip.offsetWidth || 160;
+    const tipH = tooltip.offsetHeight || 60;
+    let leftPx = cxPx + 12;
+    if (leftPx + tipW > rect.width) leftPx = cxPx - tipW - 12;
+    let topPx = (e.clientY - containerRect.top) - tipH - 10;
+    if (topPx < 0) topPx = (e.clientY - containerRect.top) + 16;
+    tooltip.style.left = leftPx + "px";
+    tooltip.style.top = topPx + "px";
+  }
+
+  function hide() {
+    cross.style.display = "none";
+    tooltip.style.display = "none";
+  }
+
+  container.addEventListener("mousemove", onMove);
+  container.addEventListener("mouseleave", hide);
+  // Basic touch support (tap to pin)
+  container.addEventListener("touchmove", (e) => {
+    const t = e.touches[0];
+    if (t) onMove({ clientX: t.clientX, clientY: t.clientY });
+  }, { passive: true });
+  container.addEventListener("touchend", hide);
+
+  return () => {
+    container.removeEventListener("mousemove", onMove);
+    container.removeEventListener("mouseleave", hide);
+  };
 }
 
 // ---- AREA CHART (portfolio over time) -----------------------------------

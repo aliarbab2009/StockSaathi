@@ -248,9 +248,21 @@ export async function getHistory(symbol, range = "1y", interval = "1d") {
   const inst = getInstrument(symbol);
   if (!inst) return { ohlc: [], source: "none" };
 
-  let h;
+  let h = null;
   if (inst.kind === "EQUITY" || inst.kind === "ETF") {
-    h = await fetchYahooHistory(symbol, range, interval).catch(() => null);
+    // Preferred: dedicated /api/history endpoint (reliable, returns paise).
+    // Falls through to legacy fetchYahooHistory → synthHistory on failure.
+    try {
+      const res = await fetchJsonWithTimeout(
+        `/api/history?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`
+      );
+      if (res?.ok && Array.isArray(res.ohlc) && res.ohlc.length) {
+        h = { ohlc: res.ohlc, source: "yahoo", host: res.host };
+      }
+    } catch {}
+    if (!h) {
+      h = await fetchYahooHistory(symbol, range, interval).catch(() => null);
+    }
   }
   if (!h) h = synthHistory(symbol);
   _historyCache.set(key, { data: h, ts: Date.now() });
