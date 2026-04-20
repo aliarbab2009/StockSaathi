@@ -13,6 +13,8 @@ import { renderOnboarding } from "./pages/onboarding.js";
 import { renderSettings } from "./pages/settings.js";
 import { renderLogin } from "./pages/login.js";
 import { renderRegister } from "./pages/register.js";
+import { renderResetPasswordRequest } from "./pages/resetPasswordRequest.js";
+import { renderResetPassword } from "./pages/resetPassword.js";
 import { renderFriends } from "./pages/friends.js";
 import { renderNews } from "./pages/news.js";
 import { renderChat } from "./pages/chat.js";
@@ -23,6 +25,8 @@ const ROUTES = [
   { name: "home",          match: /^$|^\/$/,                              render: renderLanding, public: true },
   { name: "login",         match: /^\/login\/?$/,                          render: renderLogin, public: true },
   { name: "register",      match: /^\/register\/?$/,                       render: renderRegister, public: true },
+  { name: "reset-req",     match: /^\/reset-password-request\/?$/,         render: renderResetPasswordRequest, public: true },
+  { name: "reset-password", match: /^\/reset-password\/?$/,                render: renderResetPassword, public: true },
   { name: "onboarding",    match: /^\/onboarding\/?$/,                     render: renderOnboarding, needsAuth: true },
   { name: "portfolio",     match: /^\/portfolio\/?$/,                      render: renderPortfolio, needsAuth: true, needsOnboarded: true },
   { name: "stocks",        match: /^\/stocks\/?$/,                         render: renderStocks, needsAuth: true, needsOnboarded: true },

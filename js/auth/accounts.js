@@ -185,6 +185,50 @@ export async function resendSignupOtp(email) {
   return { ok: true };
 }
 
+/**
+ * Send a password-reset email. The link in the email brings the user back
+ * to /#/reset-password with a recovery session embedded in the URL hash;
+ * Supabase-js's detectSessionInUrl picks it up so setNewPassword() can
+ * call auth.updateUser({ password }) without a separate verify step.
+ */
+export async function requestPasswordReset(email) {
+  const client = await sb();
+  if (!client) throw new Error("Backend not configured.");
+  const emailN = String(email || "").trim().toLowerCase();
+  if (!_EMAIL_RE().test(emailN)) throw new Error("Enter a valid email address.");
+  const redirectBase = (typeof location !== "undefined" && location.origin)
+    ? location.origin : "https://stocksaathi.co.in";
+  const { error } = await client.auth.resetPasswordForEmail(emailN, {
+    redirectTo: `${redirectBase}/#/reset-password`,
+  });
+  if (error) throw new Error(prettifySbError(error.message));
+  // Supabase silently no-ops for non-existent emails (same enumeration
+  // defence as signup). That's fine — UI should claim success regardless
+  // so attackers can't probe valid addresses.
+  return { ok: true };
+}
+
+/**
+ * After the recovery link opens the app, Supabase-js parses the hash and
+ * establishes a PASSWORD_RECOVERY session. Calling updateUser here
+ * replaces the password and keeps the session — no re-login needed.
+ */
+export async function setNewPassword(newPassword) {
+  const client = await sb();
+  if (!client) throw new Error("Backend not configured.");
+  const perr = validatePassword(newPassword);
+  if (perr) throw new Error(perr);
+  const { data: s } = await client.auth.getSession();
+  if (!s?.session?.access_token) {
+    throw new Error("Reset link has expired. Request a new one from the login page.");
+  }
+  const { error } = await client.auth.updateUser({ password: newPassword });
+  if (error) throw new Error(prettifySbError(error.message));
+  return { ok: true };
+}
+
+function _EMAIL_RE() { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/; }
+
 export async function loginAccount({ emailOrUsername, password }) {
   const q = String(emailOrUsername || "").trim().replace(/^@/, "").toLowerCase();
   if (!q) throw new Error("Enter your email or username.");

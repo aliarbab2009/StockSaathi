@@ -25,7 +25,10 @@ export function renderLogin(main) {
             <input class="input" id="l-handle" name="username" type="text" required autocomplete="username" placeholder="you@example.com or yourname" value="${escapeAttr(prefilledEmail)}" />
           </div>
           <div class="field">
-            <label class="label" for="l-pw">Password</label>
+            <label class="label" for="l-pw" style="display:flex; justify-content:space-between; align-items:baseline;">
+              <span>Password</span>
+              <a href="#/reset-password-request" class="dim text-xs" style="font-weight:500;">Forgot password?</a>
+            </label>
             <input class="input" id="l-pw" name="password" type="password" required autocomplete="current-password" placeholder="At least 8 characters" />
           </div>
           <div id="login-error" role="alert"></div>

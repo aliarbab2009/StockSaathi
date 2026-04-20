@@ -31,7 +31,36 @@ Ship to real users with a real Postgres backend, cross-device accounts, email fr
 
    The key variable is `{{ .Token }}` — it's what turns Supabase's default link-only template into a code-bearing email. The app's signup screen shows the 6-digit input as the primary field; the link still works as a fallback if the user prefers to click.
 
-7. **Project Settings → API** → copy two values:
+7. **Authentication → URL Configuration**:
+   - **Site URL**: `https://stocksaathi.co.in` (or your production domain).
+   - **Redirect URLs** (allowlist) — add every URL the app may redirect auth emails to:
+     ```
+     https://stocksaathi.co.in/**
+     https://*.vercel.app/**
+     http://localhost:7348/**
+     ```
+   Without the `/#/reset-password` path in the allowlist, password-reset links will be rejected by Supabase with "redirect URL not allowed."
+
+8. **Authentication → Email Templates → Reset Password** — replace the body so users get a clear "set new password" email:
+
+   ```html
+   <h2>Reset your StockSaathi password</h2>
+   <p>Click the button below to set a new password. The link expires in 60 minutes.</p>
+   <p>
+     <a href="{{ .ConfirmationURL }}" style="display:inline-block; padding: 14px 28px; background:#00B386; color:#fff; border-radius:10px; font-weight:700; text-decoration:none;">
+       Set new password
+     </a>
+   </p>
+   <p style="color:#6B7280; font-size:13px;">
+     If the button doesn't work, copy and paste this URL into your browser:<br>
+     <code>{{ .ConfirmationURL }}</code>
+   </p>
+   <p style="color:#6B7280; font-size:13px;">
+     Didn't request this? Ignore this email — your password stays the same.
+   </p>
+   ```
+
+9. **Project Settings → API** → copy two values:
    - `Project URL` (looks like `https://xxxxxxxx.supabase.co`)
    - `anon public` key (long JWT, safe to expose — RLS is what protects data)
 
