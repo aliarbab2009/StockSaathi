@@ -317,11 +317,14 @@ export function stockChart(ohlc, {
         ${xLabels}
         ${lastLabel}
         <g class="chart-cursor" style="display:none;">
-          <!-- Single solid vertical line tracking the cursor — no horizontal
-               crosshair, no pulsing dot. Keeps the eye on the price line
-               itself; tooltip next to the cursor shows the exact value. -->
+          <!-- Single solid vertical line tracks the cursor (no horizontal
+               line). The breathing dot rides the price curve at that X,
+               colour-flipping green/red vs the first bar so the mark feels
+               alive. Tooltip sits next to the cursor. -->
           <line class="chart-cursor-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
                 stroke="var(--text, #E2E5EC)" stroke-width="1.5" opacity="0.7" />
+          <circle class="chart-dot-halo" cx="0" cy="0" r="10" fill="currentColor" opacity="0.18" />
+          <circle class="chart-dot-core" cx="0" cy="0" r="4.5" fill="currentColor" stroke="var(--surface, #13161E)" stroke-width="2" />
         </g>
       </svg>
       <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:nowrap; z-index:2;"></div>
@@ -341,13 +344,18 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   const tooltip = container.querySelector(".chart-tooltip");
   const cursor = container.querySelector(".chart-cursor");
   const cursorX = container.querySelector(".chart-cursor-x");
+  const dotHalo = container.querySelector(".chart-dot-halo");
+  const dotCore = container.querySelector(".chart-dot-core");
   if (!svg || !tooltip || !cursor || !cursorX) return () => {};
 
   const W = +svg.dataset.w, H = +svg.dataset.h;
   const PL = +svg.dataset.pl, PR = +svg.dataset.pr;
   const PT = +svg.dataset.pt, PB = +svg.dataset.pb;
+  const MIN = +svg.dataset.min, MAX = +svg.dataset.max;
   const N = +svg.dataset.n;
   const plotW = W - PL - PR;
+  const plotH = H - PT - PB;
+  const toY = (v) => PT + plotH - ((v - MIN) / (MAX - MIN)) * plotH;
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -358,15 +366,36 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hide();
       return;
     }
+    // Continuous position along the price line. exactPos isn't rounded so
+    // the dot slides sub-pixel with the cursor instead of hard-jumping to
+    // the nearest bar. Y is linearly interpolated between adjacent closes.
+    const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
+    const exactPos = rel * (N - 1);
+    const i0 = Math.floor(exactPos);
+    const i1 = Math.min(N - 1, i0 + 1);
+    const t = exactPos - i0;
+    const interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * t;
     // Tooltip uses the NEAREST bar so OHLC stays meaningful — you can't
     // interpolate open/high/low across candles, only close is continuous.
-    const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
-    const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
+    const idx = Math.max(0, Math.min(N - 1, Math.round(exactPos)));
     const k = ohlc[idx];
 
     // Single vertical cursor line at the raw cursor X (smooth, sub-pixel).
     cursorX.setAttribute("x1", px);
     cursorX.setAttribute("x2", px);
+    // Breathing dot rides the price line continuously. Colour flips green/
+    // red based on interpolated close vs the range's first close.
+    const bx = px;
+    const by = toY(interpClose);
+    const up = interpClose >= ohlc[0].c;
+    const dotColor = up ? "var(--positive, #00B386)" : "var(--negative, #EB5757)";
+    for (const d of [dotHalo, dotCore]) {
+      if (!d) continue;
+      d.setAttribute("cx", bx);
+      d.setAttribute("cy", by);
+      d.setAttribute("fill", dotColor);
+      d.classList.add("breathing");
+    }
     cursor.style.display = "";
 
     const d = new Date(k.t);

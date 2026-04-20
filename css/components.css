@@ -558,10 +558,36 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
-/* Hover cursor line — single vertical guide, no horizontal crosshair, no
-   pulsing dot. Reading the price is done via the tooltip that follows the
-   cursor, so the eye never has to leave the line being traced. */
+/* Hover cursor: single vertical guide line + breathing price-dot. The line
+   tracks cursor X; the dot rides the interpolated close along that X and
+   colour-flips green/red vs the range's first close. Halo pulses slow +
+   wide so the eye registers it as "live"; core stays sharp so the exact
+   data point remains clear. Colour is set inline from JS. NO transition
+   on cx/cy — we update every mousemove; a transition would introduce
+   lag/teleport feel. */
 .chart-cursor-x { pointer-events: none; }
+.chart-dot-halo, .chart-dot-core { pointer-events: none; }
+.chart-dot-halo.breathing {
+  animation: chart-dot-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+.chart-dot-core.breathing {
+  animation: chart-dot-shimmer 1.6s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+@keyframes chart-dot-pulse {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(1.35); }
+}
+@keyframes chart-dot-shimmer {
+  0%, 100% { opacity: 0.95; }
+  50%      { opacity: 0.70; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart-dot-halo.breathing, .chart-dot-core.breathing { animation: none; }
+}
 
 /* ============================== LANDING / HERO ====================== */
 .hero {
