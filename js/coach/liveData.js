@@ -67,7 +67,7 @@ const STOCK_ALIASES_BASE = {
   divis: "DIVISLAB", "divi's": "DIVISLAB",
   ultratech: "ULTRACEMCO", ultracemco: "ULTRACEMCO",
   grasim: "GRASIM",
-  zomato: "ZOMATO",
+  zomato: "ETERNAL", eternal: "ETERNAL",
   paytm: "PAYTM",
   nykaa: "NYKAA",
   policybazaar: "POLICYBZR",

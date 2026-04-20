@@ -82,7 +82,7 @@ const SYMBOL_HINTS = {
   ULTRACEMCO: ["ultratech"],
   ADANIENT: ["adani enterprises"],
   ADANIPORTS: ["adani ports"],
-  ZOMATO: ["zomato"],
+  ETERNAL: ["eternal", "zomato"],
   PAYTM: ["paytm"],
   NYKAA: ["nykaa"],
   DMART: ["dmart", "avenue supermarts"],

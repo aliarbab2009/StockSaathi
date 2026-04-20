@@ -71,7 +71,7 @@ export const STOCKS = [
   { symbol: "GRASIM",     name: "Grasim Industries",         sector: "Conglomerate",  marketCap: "1.7L Cr",  price: 254000, pe: 29.8, pb: 1.9, divYield: 0.40, beta: 1.07, risk: "med",  logo: "GRA" },
 
   // New age / disruptors
-  { symbol: "ZOMATO",     name: "Zomato",                    sector: "Internet",      marketCap: "2.1L Cr",  price:  23800, pe: 280,  pb: 9.1, divYield: 0.00, beta: 1.38, risk: "high", logo: "ZOM" },
+  { symbol: "ETERNAL",    name: "Eternal (Zomato)",          sector: "Internet",      marketCap: "2.4L Cr",  price:  25488, pe: 280,  pb: 9.1, divYield: 0.00, beta: 1.38, risk: "high", logo: "ETR" },
   { symbol: "PAYTM",      name: "One97 / Paytm",             sector: "Fintech",       marketCap: "0.6L Cr",  price:  116135, pe: null, pb: 4.2, divYield: 0.00, beta: 1.62, risk: "high", logo: "PYT" },
   { symbol: "NYKAA",      name: "FSN E-Commerce / Nykaa",    sector: "Internet",      marketCap: "0.6L Cr",  price:  26455, pe: 730,  pb: 18.5, divYield: 0.00, beta: 1.41, risk: "high", logo: "NYK" },
   { symbol: "POLICYBZR",  name: "PB Fintech / Policybazaar", sector: "Fintech",       marketCap: "0.8L Cr",  price: 185000, pe: null, pb: 12.1, divYield: 0.00, beta: 1.55, risk: "high", logo: "PBZ" },
@@ -150,7 +150,7 @@ export const STOCKS = [
   { symbol: "UPL",        name: "UPL",                       sector: "Chemicals",     marketCap: "0.4L Cr",  price:  65665, pe: 92.5, pb: 2.2, divYield: 1.82, beta: 1.28, risk: "high", logo: "UPL" },
 
   { symbol: "TATACONSUM", name: "Tata Consumer Products",    sector: "FMCG",          marketCap: "1.0L Cr",  price: 108000, pe: 85.8, pb: 5.1, divYield: 0.80, beta: 0.75, risk: "low",  logo: "TCP" },
-  { symbol: "MCDOWELL-N", name: "United Spirits",            sector: "FMCG",          marketCap: "1.0L Cr",  price: 135000, pe: 65.2, pb: 10.2, divYield: 0.25, beta: 0.92, risk: "med",  logo: "USP" },
+  { symbol: "UNITDSPR",   name: "United Spirits",            sector: "FMCG",          marketCap: "1.0L Cr",  price: 130770, pe: 65.2, pb: 10.2, divYield: 0.25, beta: 0.92, risk: "med",  logo: "USP" },
   { symbol: "VBL",        name: "Varun Beverages",           sector: "FMCG",          marketCap: "2.0L Cr",  price:  46655, pe: 62.5, pb: 14.5, divYield: 0.10, beta: 1.10, risk: "med",  logo: "VBL" },
 
   { symbol: "PERSISTENT", name: "Persistent Systems",        sector: "IT Services",   marketCap: "0.9L Cr",  price: 580000, pe: 55.2, pb: 14.2, divYield: 0.65, beta: 0.92, risk: "med",  logo: "PER" },
@@ -231,7 +231,7 @@ export const ONBOARDING_PORTFOLIOS = {
   ],
   bold: [
     { symbol: "TATAMOTORS",  qty: 20 },
-    { symbol: "ZOMATO",      qty: 100 },
+    { symbol: "ETERNAL",     qty: 100 },
     { symbol: "ADANIENT",    qty: 5 },
     { symbol: "RELIANCE",    qty: 5 },
     { symbol: "BAJFINANCE",  qty: 2 },
