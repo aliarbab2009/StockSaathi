@@ -317,14 +317,18 @@ export function stockChart(ohlc, {
         ${xLabels}
         ${lastLabel}
         <g class="chart-cursor" style="display:none;">
-          <!-- Single solid vertical line tracks the cursor (no horizontal
-               line). The breathing dot rides the price curve at that X,
-               colour-flipping green/red vs the first bar so the mark feels
-               alive. Tooltip sits next to the cursor. -->
+          <!-- Single vertical line tracks the cursor X. The dot sits on the
+               NEAREST bar's close (same data the tooltip reports — so the
+               mark is never "off" relative to the numbers next to it), with
+               a soft breathing halo + a punch-out surface ring on the core
+               for contrast against any chart colour. Halo pulses by
+               animating r directly (not transform:scale) — scale-on-SVG is
+               inconsistent across browsers and caused the drift the user
+               saw. -->
           <line class="chart-cursor-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
                 stroke="var(--text, #E2E5EC)" stroke-width="1.5" opacity="0.7" />
-          <circle class="chart-dot-halo" cx="0" cy="0" r="10" fill="currentColor" opacity="0.18" />
-          <circle class="chart-dot-core" cx="0" cy="0" r="4.5" fill="currentColor" stroke="var(--surface, #13161E)" stroke-width="2" />
+          <circle class="chart-dot-halo breathing" cx="-50" cy="-50" r="10" fill="currentColor" />
+          <circle class="chart-dot-core breathing" cx="-50" cy="-50" r="4.5" fill="currentColor" stroke="var(--surface, #13161E)" stroke-width="2" />
         </g>
       </svg>
       <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:nowrap; z-index:2;"></div>
@@ -355,7 +359,9 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   const N = +svg.dataset.n;
   const plotW = W - PL - PR;
   const plotH = H - PT - PB;
+  const toX = (i) => PL + (N > 1 ? (i / (N - 1)) * plotW : 0);
   const toY = (v) => PT + plotH - ((v - MIN) / (MAX - MIN)) * plotH;
+  let lastIdx = -1, lastColor = "";
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -366,35 +372,39 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hide();
       return;
     }
-    // Continuous position along the price line. exactPos isn't rounded so
-    // the dot slides sub-pixel with the cursor instead of hard-jumping to
-    // the nearest bar. Y is linearly interpolated between adjacent closes.
+    // Snap to the nearest bar. Dot sits on that bar's close so the mark,
+    // the vertical line's implied candle, and the tooltip all describe
+    // the same data point — no mismatch between what you see and what
+    // the tooltip says.
     const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
-    const exactPos = rel * (N - 1);
-    const i0 = Math.floor(exactPos);
-    const i1 = Math.min(N - 1, i0 + 1);
-    const t = exactPos - i0;
-    const interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * t;
-    // Tooltip uses the NEAREST bar so OHLC stays meaningful — you can't
-    // interpolate open/high/low across candles, only close is continuous.
-    const idx = Math.max(0, Math.min(N - 1, Math.round(exactPos)));
+    const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
     const k = ohlc[idx];
 
-    // Single vertical cursor line at the raw cursor X (smooth, sub-pixel).
+    // Vertical cursor line follows the raw cursor X (smooth, sub-pixel) so
+    // the guide still feels analog even though the dot is bar-snapped.
     cursorX.setAttribute("x1", px);
     cursorX.setAttribute("x2", px);
-    // Breathing dot rides the price line continuously. Colour flips green/
-    // red based on interpolated close vs the range's first close.
-    const bx = px;
-    const by = toY(interpClose);
-    const up = interpClose >= ohlc[0].c;
-    const dotColor = up ? "var(--positive, #00B386)" : "var(--negative, #EB5757)";
-    for (const d of [dotHalo, dotCore]) {
-      if (!d) continue;
-      d.setAttribute("cx", bx);
-      d.setAttribute("cy", by);
-      d.setAttribute("fill", dotColor);
-      d.classList.add("breathing");
+
+    // Dot position: bar-snapped. Only re-apply attrs when the bar actually
+    // changes — avoids layout thrash when the cursor moves inside one bar.
+    if (idx !== lastIdx) {
+      lastIdx = idx;
+      const bx = toX(idx);
+      const by = toY(k.c);
+      if (dotHalo) { dotHalo.setAttribute("cx", bx); dotHalo.setAttribute("cy", by); }
+      if (dotCore) { dotCore.setAttribute("cx", bx); dotCore.setAttribute("cy", by); }
+    }
+
+    // Price-responding colour: green if this bar's close is above the
+    // range's first close, red if below. Only write fill when it actually
+    // flips so we don't churn the DOM every frame.
+    const dotColor = k.c >= ohlc[0].c
+      ? "var(--positive, #00B386)"
+      : "var(--negative, #EB5757)";
+    if (dotColor !== lastColor) {
+      lastColor = dotColor;
+      if (dotHalo) dotHalo.setAttribute("fill", dotColor);
+      if (dotCore) dotCore.setAttribute("fill", dotColor);
     }
     cursor.style.display = "";
 
@@ -443,6 +453,8 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   function hide() {
     cursor.style.display = "none";
     tooltip.style.display = "none";
+    lastIdx = -1;
+    lastColor = "";
   }
 
   container.addEventListener("mousemove", onMove);

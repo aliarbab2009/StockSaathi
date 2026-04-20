@@ -558,35 +558,36 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
-/* Hover cursor: single vertical guide line + breathing price-dot. The line
-   tracks cursor X; the dot rides the interpolated close along that X and
-   colour-flips green/red vs the range's first close. Halo pulses slow +
-   wide so the eye registers it as "live"; core stays sharp so the exact
-   data point remains clear. Colour is set inline from JS. NO transition
-   on cx/cy — we update every mousemove; a transition would introduce
-   lag/teleport feel. */
+/* Hover cursor: single vertical guide line + breathing price-dot. The
+   line tracks cursor X; the dot bar-snaps to the nearest candle's close
+   (matches the numbers in the tooltip) and colour-flips green/red vs the
+   range's first close.
+   Animation technique: animate SVG `r` + `opacity` DIRECTLY, never
+   `transform: scale()` with transform-box:fill-box — that combo was what
+   made the halo "drift" during mousemove on some browsers (the fill-box
+   origin doesn't always resolve consistently during attribute updates,
+   so the scale centre decoupled from the moving cx/cy and you saw
+   jitter). Animating r is a pure radial expand from the true centre
+   defined by cx/cy, immune to that issue. */
 .chart-cursor-x { pointer-events: none; }
 .chart-dot-halo, .chart-dot-core { pointer-events: none; }
 .chart-dot-halo.breathing {
-  animation: chart-dot-pulse 1.6s ease-in-out infinite;
-  transform-origin: center;
-  transform-box: fill-box;
+  animation: chart-dot-pulse 1.8s ease-in-out infinite;
 }
 .chart-dot-core.breathing {
-  animation: chart-dot-shimmer 1.6s ease-in-out infinite;
-  transform-origin: center;
-  transform-box: fill-box;
+  animation: chart-dot-shimmer 1.8s ease-in-out infinite;
 }
 @keyframes chart-dot-pulse {
-  0%, 100% { opacity: 0.15; transform: scale(1); }
-  50%      { opacity: 0.45; transform: scale(1.35); }
+  0%, 100% { r: 8;  opacity: 0.18; }
+  50%      { r: 12; opacity: 0.38; }
 }
 @keyframes chart-dot-shimmer {
-  0%, 100% { opacity: 0.95; }
-  50%      { opacity: 0.70; }
+  0%, 100% { r: 4.5; opacity: 1;    }
+  50%      { r: 5;   opacity: 0.92; }
 }
 @media (prefers-reduced-motion: reduce) {
   .chart-dot-halo.breathing, .chart-dot-core.breathing { animation: none; }
+  .chart-dot-halo { opacity: 0.22; }
 }
 
 /* ============================== LANDING / HERO ====================== */
