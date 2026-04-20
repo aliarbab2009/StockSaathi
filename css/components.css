@@ -579,6 +579,22 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .chart-candle-up { fill: var(--positive); stroke: var(--positive); }
 .chart-candle-down { fill: var(--negative); stroke: var(--negative); }
 
+/* Stock "Why is this moving?" AI card on the detail page */
+.stock-why-card {
+  border-left: 3px solid var(--brand);
+}
+.stock-why-card .card-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+}
+#stock-why-body {
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--text-strong);
+}
+
 /* Portfolio daily digest card — one-paragraph AI take at the top of
    /#/portfolio, tinted subtly by day mood. Loads async then fades in. */
 .pf-digest-card {

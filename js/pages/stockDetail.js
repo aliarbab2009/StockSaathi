@@ -44,10 +44,17 @@ let liveHistory = null;
 let liveFundamentals = null;
 let qtySelectorHandle = null;
 let _cancelToken = { cancelled: false };    // shared per-mount token
+let _stockWhyKey = null;                     // "SYMBOL_day" — prevents refire on live-quote refresh
+let _stockWhyLast = null;                    // last explanation rendered for this mount
 
 export function renderStockDetail(main, params) {
   const symbol = params.symbol;
   const inst = getInstrument(symbol);
+  // Reset the per-mount AI-why memo whenever the viewed symbol changes.
+  if (_stockWhyKey && !_stockWhyKey.startsWith(symbol + "_")) {
+    _stockWhyKey = null;
+    _stockWhyLast = null;
+  }
   if (!inst) {
     main.innerHTML = `<div class="empty-state"><span class="emoji">🔍</span><h3>Instrument not found</h3><p>Symbol "${symbol}" isn't in the universe.</p><a href="#/stocks" class="btn btn-primary">Back</a></div>`;
     return;
@@ -198,6 +205,13 @@ function render(inst, symbol) {
             : `<div id="stock-chart-host" style="height: 360px; width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode })}</div>`}
         </div>
 
+        <div class="card stock-why-card" id="stock-why-card" style="margin-top: var(--sp-4);">
+          <div class="card-head">
+            <h3><span class="pf-digest-label">Saathi</span> Why is this moving today?</h3>
+          </div>
+          <div id="stock-why-body" class="muted">Reading today's news + price action…</div>
+        </div>
+
         ${inst.kind !== "MF" ? renderOrderBook(symbol, curPrice) : ""}
 
         <div class="card" style="margin-top: var(--sp-4);">
@@ -266,6 +280,23 @@ function render(inst, symbol) {
     </div>
   `;
 
+  // Paint the cached Saathi take if we already generated one this mount
+  const whyBody = main.querySelector("#stock-why-body");
+  if (whyBody) {
+    if (_stockWhyLast) {
+      whyBody.classList.remove("muted");
+      whyBody.textContent = _stockWhyLast;
+    } else {
+      // Fire once per (symbol, day) at module scope
+      const dk = nowIstDayKey();
+      const key = `${symbol}_${dk}`;
+      if (_stockWhyKey !== key) {
+        _stockWhyKey = key;
+        fetchStockWhy(main, symbol, inst, curPrice, liveQuote?.changePct ?? 0);
+      }
+    }
+  }
+
   // Mount quantity selector
   const qtyContainer = main.querySelector("#qty-container");
   if (qtyContainer) {
@@ -288,6 +319,57 @@ function render(inst, symbol) {
   }
 
   attachListeners(main, inst, symbol, curPrice, holding);
+}
+
+function nowIstDayKey() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
+  try {
+    // Pull a few recent news items for this symbol to give the model
+    // real grounding instead of speculation.
+    const { getNews } = await import("../data/news.js");
+    let newsItems = [];
+    try {
+      newsItems = await getNews({ limit: 10, filterSymbols: [symbol] });
+    } catch {}
+    if (!newsItems || newsItems.length === 0) {
+      try { newsItems = await getNews({ limit: 6 }); } catch {}
+    }
+    const payload = {
+      symbol,
+      name: inst?.name || symbol,
+      sector: inst?.sector || "",
+      pricePaise: curPricePaise,
+      changePct: (changePct || 0) * 100,
+      newsItems: (newsItems || []).slice(0, 8).map(n => ({ headline: n.headline, source: n.source })),
+    };
+    const r = await fetch("/api/stock-why", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`http_${r.status}`);
+    const d = await r.json();
+    if (!d?.explanation) throw new Error("no_explanation");
+    _stockWhyLast = d.explanation;
+    const el = main?.querySelector("#stock-why-body");
+    if (el) {
+      el.classList.remove("muted");
+      el.textContent = d.explanation;
+    }
+  } catch (e) {
+    _stockWhyLast = null;
+    const el = main?.querySelector("#stock-why-body");
+    if (el) {
+      el.classList.add("dim");
+      el.textContent = "Couldn't read today's drivers right now. Refresh the page in a bit to retry.";
+    }
+  }
 }
 
 function attachListeners(main, inst, symbol, curPrice, holding) {
