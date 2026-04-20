@@ -52,6 +52,14 @@ export function renderStocks(main) {
     const state = getState();
     const list = applyFilters(INSTRUMENTS, filter, state);
     const src = getDataSource();
+    // Preserve focus + caret on the search input across the re-render — every
+    // keystroke triggers this render and the 10s live-quote poll does too, so
+    // without this the user can't type more than one character at a time.
+    const active = document.activeElement;
+    const restore = active && active.id === "stocks-search" ? {
+      start: active.selectionStart,
+      end: active.selectionEnd,
+    } : null;
     main.innerHTML = `
       <div class="flex items-start justify-between wrap gap-3" style="margin-bottom: var(--sp-4);">
         <div>
@@ -90,7 +98,12 @@ export function renderStocks(main) {
         : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state)).join("")}</div>`}
     `;
 
-    main.querySelector("#stocks-search").addEventListener("input", e => { filter.q = e.target.value; render(); });
+    const searchEl = main.querySelector("#stocks-search");
+    if (restore) {
+      searchEl.focus();
+      try { searchEl.setSelectionRange(restore.start, restore.end); } catch {}
+    }
+    searchEl.addEventListener("input", e => { filter.q = e.target.value; render(); });
     main.querySelector("#stocks-sort").addEventListener("change", e => { filter.sort = e.target.value; render(); });
     main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; render(); }));
     main.querySelectorAll("[data-kind]").forEach(btn => btn.addEventListener("click", () => { filter.kind = btn.dataset.kind; render(); }));
