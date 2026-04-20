@@ -560,9 +560,9 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 
 /* Breathing price-dot on the chart crosshair. Halo pulses slow + wide so the
    eye registers it as "live"; core stays sharp so the exact data point
-   remains clear. Color is set inline from JS (up=green, down=red). */
-.chart-dot-halo { transition: cx 120ms linear, cy 120ms linear; }
-.chart-dot-core { transition: cx 120ms linear, cy 120ms linear; }
+   remains clear. Color is set inline from JS (up=green, down=red).
+   NO transition on cx/cy — we update every mousemove; a transition would
+   introduce lag/teleport feel. */
 .chart-dot-halo.breathing {
   animation: chart-dot-pulse 1.6s ease-in-out infinite;
   transform-origin: center;

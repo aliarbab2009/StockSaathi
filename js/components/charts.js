@@ -368,24 +368,34 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       hide();
       return;
     }
-    // Find nearest candle index (for the snapped dot + tooltip data)
-    const rel = (px - PL) / plotW;
-    const idx = Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
+    // Continuous position along the price line. exactPos isn't rounded so
+    // the dot slides sub-pixel with the cursor instead of hard-jumping to
+    // the nearest bar. Y is linearly interpolated between adjacent closes.
+    const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
+    const exactPos = rel * (N - 1);
+    const i0 = Math.floor(exactPos);
+    const i1 = Math.min(N - 1, i0 + 1);
+    const t = exactPos - i0;
+    const c0 = ohlc[i0].c;
+    const c1 = ohlc[i1].c;
+    const interpClose = c0 + (c1 - c0) * t;
+    // Dot X = cursor X (keeps dot on crosshair); Y = close at that X.
+    const bx = px;
+    const by = toY(interpClose);
+    // Tooltip uses the NEAREST bar so OHLC stays meaningful (you can't
+    // interpolate open/high/low across candles — only close is continuous).
+    const idx = Math.max(0, Math.min(N - 1, Math.round(exactPos)));
     const k = ohlc[idx];
-    const bx = toX(idx);
-    const by = toY(k.c);
 
-    // Crosshair LINES follow the raw cursor — smooth, sub-pixel, no teleport.
-    // Only the DOT snaps to the data point.
+    // Crosshair LINES follow the raw cursor (smooth, sub-pixel).
     crossX.setAttribute("x1", px);
     crossX.setAttribute("x2", px);
     crossY.setAttribute("y1", py);
     crossY.setAttribute("y2", py);
-    // Breathing dot: position snapped to (barX, barClose). Colour reflects
-    // whether the hovered bar's close is up or down vs the range's first
-    // close — mirrors the area-chart colour convention.
+    // Breathing dot: rides the price line continuously. Colour flips on the
+    // fly based on interpolated close vs the range's first close.
     const baseClose = ohlc[0].c;
-    const up = k.c >= baseClose;
+    const up = interpClose >= baseClose;
     const dotColor = up ? "var(--positive, #00B386)" : "var(--negative, #EB5757)";
     for (const d of [dotHalo, dotCore]) {
       if (!d) continue;

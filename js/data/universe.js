@@ -21,7 +21,7 @@ export const STOCKS = [
   { symbol: "BHARTIARTL", name: "Bharti Airtel",             sector: "Telecom",       marketCap: "8.8L Cr",  price: 184610, pe: 80.5, pb: 9.8, divYield: 0.55, beta: 0.79, risk: "med",  logo: "AIR" },
   { symbol: "SBIN",       name: "State Bank of India",       sector: "Banking",       marketCap: "7.4L Cr",  price:  110785, pe: 11.1, pb: 1.7, divYield: 1.55, beta: 1.12, risk: "med",  logo: "SBI" },
   { symbol: "ITC",        name: "ITC Limited",               sector: "FMCG",          marketCap: "5.5L Cr",  price:  30500, pe: 27.9, pb: 7.5, divYield: 3.35, beta: 0.72, risk: "low",  logo: "ITC" },
-  { symbol: "LT",         name: "Larsen & Toubro",           sector: "Construction",  marketCap: "5.1L Cr",  price: 374200, pe: 36.8, pb: 5.4, divYield: 0.80, beta: 1.08, risk: "med",  logo: "L&T" },
+  { symbol: "LT",         name: "Larsen & Toubro",           sector: "Construction",  marketCap: "5.57L Cr", price: 405100, pe: 34.19, pb: 5.4, divYield: 0.84, beta: 1.08, risk: "med",  logo: "L&T" },
   { symbol: "HINDUNILVR", name: "Hindustan Unilever",        sector: "FMCG",          marketCap: "5.9L Cr",  price: 250500, pe: 55.1, pb: 9.7, divYield: 1.85, beta: 0.60, risk: "low",  logo: "HUL" },
 
   // Bank & financial
