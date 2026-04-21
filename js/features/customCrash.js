@@ -14,15 +14,16 @@
 // returned JSON through a shape validator before accepting.
 // =============================================================================
 
-const SYSTEM_PROMPT = `You are a financial-history data extractor. Given a description of a DOWNWARD market event (crash, correction, scam, regulatory shock, panic — specifically anything where Indian equities FELL), return a single JSON object.
+const SYSTEM_PROMPT = `You are a financial-history reconstructor for Indian markets. Given ANY description — specific, vague, mis-spelt, niche, obscure, or approximate — your job is to figure out what Indian event the user probably means and build a crash-style day-by-day replay for it.
 
-IMPORTANT — REJECT non-crashes:
-If the user described a BULL RUN, RALLY, SURGE, BOOM, IPO pop, positive news, or any event where the market went UP, return:
-  { "error": "not_a_crash", "message": "<one short sentence explaining that the replay tool is for drops, and suggesting a comparable crash: e.g. 'Diwali 2008 correction' instead of 'Diwali rally'>" }
+YOUR DEFAULT IS TO BUILD, NOT REFUSE.
+- If the query is a real crash/correction/scandal/panic: reconstruct it from memory, including Nifty/Sensex levels and dates. Approximations are fine — the user knows the numbers are estimates.
+- If the query is a real event but not obviously a crash (e.g. "Pani Puri vendor GST notice", "Adani board reshuffle", "SEBI circular on f&o"): think about how that event REVERBERATED through listed stocks — did FMCG dip, did a related sector sell off, did mid-caps wobble on sentiment? Build the replay around the PROXY market reaction, describing it honestly.
+- If the query is mis-spelt or vague ("the one waterballl golgappa thingy"): figure out what the user probably means (the viral 2023 pani puri vendor GST-notice story) and build a replay of the consumer-stock / FMCG / mid-cap sentiment wobble around that news cycle. Even if the actual index move was small, construct a believable scaled replay.
+- If the query is clearly an UP event (bull run, IPO pop, positive earnings blowout) and the user explicitly called it a rally/boom/surge: return { "error": "not_a_crash", "message": "<one sentence suggesting a related DOWN event they could try instead>" }. Otherwise, try to build it.
+- ONLY refuse with "not_a_crash" if the query is so totally unrelated to Indian markets that no construction is possible (e.g. "my dog's birthday", "recipe for biryani"). In that case, suggest they try something like "Harshad Mehta 1992" or "Adani Hindenburg 2023".
 
-Also return the same error for events with drops smaller than 3% (too small to be instructive).
-
-If it IS a genuine crash/drop, return a JSON object with this EXACT shape:
+If you're building a scenario, return a JSON object with this EXACT shape:
 
 {
   "title": "<short event name, ≤ 50 chars>",
@@ -49,8 +50,10 @@ Rules:
 - troughDay MUST be between 1 and totalDays-1.
 - startIndex and endIndex must be positive.
 - troughIndex must be lower than startIndex.
+- indexDrop MUST be negative, at least -3 (i.e. a ≥3% drop — if the real event was smaller, scale it proportionally so the replay is still instructive; make this clear in the description).
 - Include 4 to 7 keyMoments covering: start context, first panic, trough, any mid-course inflection, recovery or finish.
-- If you truly don't know the event, make your best reasoned estimate based on the described type of event — do NOT refuse. The user knows output is estimated.`;
+- If you're uncertain about exact numbers, APPROXIMATE confidently. The description can note "approximate reconstruction" but the numbers must still be filled in.
+- REFUSE ONLY for clearly non-market topics (sports, recipes, weather, personal life). Mis-spelt queries, vague references, and niche business/regulatory events are ALL in scope — build a plausible replay for them.`;
 
 const MAX_DAYS = 140;
 
@@ -152,25 +155,19 @@ export async function generateCustomCrash(description) {
   }
 
   // 2. Supabase cross-user cache. First user generates + pays; everyone else
-  //    pulls for free. Also caches the "not_a_crash" refusals so repeat bad
-  //    queries don't re-bill the LLM either.
+  //    pulls for free. We DO NOT cache refusals — a refusal is often a
+  //    model-mood mistake (overzealous not_a_crash), and re-querying should
+  //    be free to produce a real replay. Only successful scenarios are cached.
   const cached = await cacheReplayGet(hash);
-  if (cached) {
-    if (cached.error === "not_a_crash") {
-      const err = new Error(cached.message || "That event was a rally, not a crash.");
-      err.kind = "not_a_crash";
-      throw err;
-    }
-    if (cached.id) {
-      // Hydrate localStorage so subsequent loads hit the local path first.
-      try {
-        const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
-        all[cached.id] = cached;
-        localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
-      } catch {}
-      rememberQuery(queryKey(description), cached.id);
-      return cached;
-    }
+  if (cached && cached.id && !cached.error) {
+    // Hydrate localStorage so subsequent loads hit the local path first.
+    try {
+      const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
+      all[cached.id] = cached;
+      localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
+    } catch {}
+    rememberQuery(queryKey(description), cached.id);
+    return cached;
   }
 
   // 3. Cache miss → call the LLM (and write back on success).
@@ -183,7 +180,9 @@ export async function generateCustomCrash(description) {
         const msg = typeof meta.message === "string" && meta.message.trim()
           ? meta.message.trim()
           : "That event was a rally, not a crash. The time-travel replay is built for market drops — try something like 'Diwali 2008 correction' instead.";
-        cacheReplayPut(hash, description, { error: "not_a_crash", message: msg });
+        // Do NOT cache — refusals are often wrong on niche or vague queries.
+        // Next retry (possibly with Gemini active, or just a different mood)
+        // should be free to produce a real replay.
         const err = new Error(msg);
         err.kind = "not_a_crash";
         throw err;
