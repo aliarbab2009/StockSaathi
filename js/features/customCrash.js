@@ -98,8 +98,51 @@ export function existingScenarioForQuery(description) {
   } catch { return null; }
 }
 
+// Stable SHA-256 of a normalised description. Used as the cross-user cache
+// key AND as the deterministic suffix for the scenario id so the generated
+// URL is stable for a given prompt — shareable, and identical across users.
+async function queryHash(desc) {
+  const normalised = String(desc || "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 400);
+  const bytes = new TextEncoder().encode(normalised);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Cross-user cache via /api/ai?op=cache-get|cache-put (Supabase-backed).
+// Popular prompts get generated once, ever — the first user pays the LLM
+// cost, everyone after that gets an instant hit on the same scenario, same
+// stable URL. Fire-and-forget write — the UI never blocks on cache I/O.
+async function cacheReplayGet(hash) {
+  try {
+    const res = await fetch(`/api/ai?op=cache-get&bucket=crash_replay&key=${encodeURIComponent(hash)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.hit ? data.payload : null;
+  } catch { return null; }
+}
+function cacheReplayPut(hash, description, payload) {
+  try {
+    fetch("/api/ai?op=cache-put", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bucket: "crash_replay",
+        key: hash,
+        display: String(description || "").slice(0, 200),
+        payload,
+      }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
+
 export async function generateCustomCrash(description) {
-  // Dedup: already generated? Reuse.
+  // Stable hash of the prompt — serves as both the cross-user cache key and
+  // the suffix of the scenario id, so the same prompt always yields the same
+  // URL regardless of browser/device/user.
+  const hash = await queryHash(description);
+
+  // 1. Local dedup (same-browser instant reuse, survives cache-miss too).
   const cachedId = existingScenarioForQuery(description);
   if (cachedId) {
     try {
@@ -108,6 +151,29 @@ export async function generateCustomCrash(description) {
     } catch {}
   }
 
+  // 2. Supabase cross-user cache. First user generates + pays; everyone else
+  //    pulls for free. Also caches the "not_a_crash" refusals so repeat bad
+  //    queries don't re-bill the LLM either.
+  const cached = await cacheReplayGet(hash);
+  if (cached) {
+    if (cached.error === "not_a_crash") {
+      const err = new Error(cached.message || "That event was a rally, not a crash.");
+      err.kind = "not_a_crash";
+      throw err;
+    }
+    if (cached.id) {
+      // Hydrate localStorage so subsequent loads hit the local path first.
+      try {
+        const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
+        all[cached.id] = cached;
+        localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
+      } catch {}
+      rememberQuery(queryKey(description), cached.id);
+      return cached;
+    }
+  }
+
+  // 3. Cache miss → call the LLM (and write back on success).
   let lastErr = null;
   for (const { profile, temperature } of ATTEMPTS) {
     try {
@@ -117,6 +183,7 @@ export async function generateCustomCrash(description) {
         const msg = typeof meta.message === "string" && meta.message.trim()
           ? meta.message.trim()
           : "That event was a rally, not a crash. The time-travel replay is built for market drops — try something like 'Diwali 2008 correction' instead.";
+        cacheReplayPut(hash, description, { error: "not_a_crash", message: msg });
         const err = new Error(msg);
         err.kind = "not_a_crash";
         throw err;
@@ -124,8 +191,9 @@ export async function generateCustomCrash(description) {
       reshape(meta);
       const valid = validate(meta);
       if (!valid.ok) { lastErr = valid.error; continue; }
-      const scenario = buildScenario(meta);
+      const scenario = buildScenario(meta, hash);
       rememberQuery(queryKey(description), scenario.id);
+      cacheReplayPut(hash, description, scenario);
       return scenario;
     } catch (e) {
       if (e?.kind === "not_a_crash") throw e;   // don't retry on a deliberate refusal
@@ -226,7 +294,7 @@ function validate(m) {
 
 // Convert validated metadata into a scenario that matches the shape the
 // replay UI already expects (same as entries in data/crashes.js).
-function buildScenario(m) {
+function buildScenario(m, hash) {
   const panicDay = Math.max(1, Math.min(Math.floor(m.panicDay ?? 3), m.totalDays - 1));
   const frames = [];
   const narrations = {};
@@ -268,7 +336,11 @@ function buildScenario(m) {
   const endPanic = frames[frames.length - 1].panic;
   const finalDelta = ((endHeld - endPanic) / endPanic) * 100;
 
-  const id = "CUSTOM_" + slugify(m.title) + "_" + Date.now().toString(36);
+  // Deterministic id — same prompt → same hash → same id → same shareable URL.
+  // Falls back to a timestamp only if hash wasn't supplied (shouldn't happen in
+  // the real flow; defensive default to preserve old callers).
+  const idSuffix = hash ? hash.slice(0, 12) : Date.now().toString(36);
+  const id = "CUSTOM_" + slugify(m.title) + "_" + idSuffix;
   return {
     id,
     title: String(m.title).slice(0, 80),
