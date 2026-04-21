@@ -1506,6 +1506,10 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .positive { color: var(--positive); }
 .negative { color: var(--negative); }
 
+.active-btn { background: color-mix(in srgb, var(--brand) 10%, transparent) !important; border-color: var(--brand) !important; color: var(--brand) !important; }
+.db-sql-warn { background: color-mix(in srgb, var(--warning, #F5A623) 15%, transparent); color: var(--text-strong); padding: 10px 12px; border-radius: var(--r); margin-bottom: var(--sp-3); font-size: var(--text-sm); border-left: 3px solid var(--warning, #F5A623); }
+.db-sql-input { font-family: var(--font-mono, monospace); font-size: var(--text-sm); min-height: 150px; }
+
 /* ================== ADMIN PANEL ================================== */
 .admin-stats {
   display: grid;

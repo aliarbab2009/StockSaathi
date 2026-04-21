@@ -231,8 +231,8 @@ function renderTabBody(main) {
     case "overview": return renderOverview(host, main);
     case "users":    return renderUsersTab(host, main);
     case "activity": return renderActivityTab(host, main);
-    case "database": return renderPlaceholder(host, "Database", "Coming in next commit.");
-    case "auth":     return renderPlaceholder(host, "Auth", "Coming in next commit.");
+    case "database": return renderDatabaseTab(host, main);
+    case "auth":     return renderAuthTab(host, main);
     case "markets":  return renderPlaceholder(host, "Markets / AI cache", "Coming in next commit.");
     case "deploy":   return renderPlaceholder(host, "Deploy (Vercel)", "Coming in next commit.");
     case "repo":     return renderPlaceholder(host, "Repo (GitHub)", "Coming in next commit.");
@@ -908,6 +908,359 @@ function updateTailBadge(main) {
   const btn = main.querySelector("#tail-toggle");
   if (el) { el.className = `tail-indicator ${state.tailConnected ? "live" : "off"}`; el.textContent = state.tailConnected ? "● LIVE" : "○ paused"; }
   if (btn) btn.textContent = state.tailConnected ? "Pause tail" : "Live tail";
+}
+
+// -----------------------------------------------------------------------------
+// Database tab — SQL editor, table browser, RPC runner, schema, stats
+// -----------------------------------------------------------------------------
+const dbState = {
+  tables: null, schema: null, stats: null,
+  browseTable: null, browseRows: [], browseTotal: 0, browseOffset: 0, browseLimit: 50, browseOrderBy: "", browseOrderDir: "desc", browseFilter: "",
+  sqlInput: "select * from profiles limit 10;",
+  sqlResult: null, sqlRunning: false,
+  rpcName: "", rpcParams: "{}", rpcResult: null,
+  view: "browser",  // browser | sql | rpc | schema | stats
+};
+function renderDatabaseTab(host, main) {
+  host.innerHTML = `
+    <div class="card" style="margin-bottom: var(--sp-3);">
+      <div class="card-head">
+        <h3>Supabase god mode</h3>
+        <div class="flex gap-2">
+          ${["browser","sql","rpc","schema","stats"].map(v => `<button class="btn btn-ghost btn-sm ${dbState.view === v ? "active-btn" : ""}" data-db-view="${v}">${v}</button>`).join("")}
+        </div>
+      </div>
+      <div id="db-view-body"></div>
+    </div>`;
+  host.querySelectorAll("[data-db-view]").forEach(b => b.addEventListener("click", () => {
+    dbState.view = b.dataset.dbView;
+    renderDatabaseTab(host, main);
+  }));
+  renderDbView(host);
+}
+async function renderDbView(host) {
+  const body = host.querySelector("#db-view-body");
+  if (!body) return;
+  if (dbState.view === "browser") return renderDbBrowser(body);
+  if (dbState.view === "sql") return renderDbSql(body);
+  if (dbState.view === "rpc") return renderDbRpc(body);
+  if (dbState.view === "schema") return renderDbSchema(body);
+  if (dbState.view === "stats") return renderDbStats(body);
+}
+
+async function renderDbBrowser(body) {
+  body.innerHTML = `<div class="muted">Loading table list…</div>`;
+  if (!dbState.tables) {
+    try { dbState.tables = (await adminGet("/api/ai?op=admin-db-tables")).tables || []; }
+    catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  }
+  const t = dbState.browseTable;
+  body.innerHTML = `
+    <div class="flex gap-2 wrap" style="margin-bottom: var(--sp-3);">
+      <select class="select" id="db-table-picker" style="max-width: 280px;">
+        <option value="">-- pick a table --</option>
+        ${dbState.tables.map(x => `<option value="${escapeAttr(x.table_name)}" ${t === x.table_name ? "selected" : ""}>${escapeHtml(x.table_name)} (${x.approx_row_count} rows · ${x.total_size})</option>`).join("")}
+      </select>
+      ${t ? `
+        <input class="input" id="db-order" placeholder="order by col" value="${escapeAttr(dbState.browseOrderBy)}" style="max-width: 140px;" />
+        <select class="select" id="db-order-dir" style="max-width: 80px;">
+          <option value="desc" ${dbState.browseOrderDir === "desc" ? "selected" : ""}>desc</option>
+          <option value="asc" ${dbState.browseOrderDir === "asc" ? "selected" : ""}>asc</option>
+        </select>
+        <input class="input" id="db-filter" placeholder="filter (e.g. age=gte.13)" value="${escapeAttr(dbState.browseFilter)}" style="flex:1;" />
+        <button class="btn btn-primary btn-sm" id="db-browse-go">Apply</button>
+      ` : ""}
+    </div>
+    <div id="db-browse-result"></div>`;
+  body.querySelector("#db-table-picker").addEventListener("change", (e) => {
+    dbState.browseTable = e.target.value || null;
+    dbState.browseOffset = 0;
+    renderDbBrowser(body);
+    if (dbState.browseTable) fetchBrowserRows(body);
+  });
+  body.querySelector("#db-order")?.addEventListener("change", e => { dbState.browseOrderBy = e.target.value; });
+  body.querySelector("#db-order-dir")?.addEventListener("change", e => { dbState.browseOrderDir = e.target.value; });
+  body.querySelector("#db-filter")?.addEventListener("change", e => { dbState.browseFilter = e.target.value; });
+  body.querySelector("#db-browse-go")?.addEventListener("click", () => fetchBrowserRows(body));
+  if (t && dbState.browseRows.length === 0) fetchBrowserRows(body);
+  else if (t) paintBrowserRows(body);
+}
+async function fetchBrowserRows(body) {
+  const resultHost = body.querySelector("#db-browse-result");
+  resultHost.innerHTML = `<div class="muted">Loading rows…</div>`;
+  try {
+    const q = new URLSearchParams({
+      op: "admin-db-browse",
+      table: dbState.browseTable,
+      limit: dbState.browseLimit,
+      offset: dbState.browseOffset,
+    });
+    if (dbState.browseOrderBy) { q.set("orderBy", dbState.browseOrderBy); q.set("orderDir", dbState.browseOrderDir); }
+    if (dbState.browseFilter) q.set("filter", dbState.browseFilter);
+    const r = await adminGet("/api/ai?" + q);
+    dbState.browseRows = r.rows || [];
+    dbState.browseTotal = r.total || 0;
+    paintBrowserRows(body);
+  } catch (e) {
+    resultHost.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`;
+  }
+}
+function paintBrowserRows(body) {
+  const host = body.querySelector("#db-browse-result");
+  if (!host) return;
+  if (!dbState.browseRows.length) {
+    host.innerHTML = `<div class="muted text-sm">Empty result.</div>`; return;
+  }
+  const cols = Object.keys(dbState.browseRows[0]);
+  host.innerHTML = `
+    <div class="dim text-xs" style="margin-bottom: 6px;">
+      Showing ${dbState.browseOffset + 1}–${dbState.browseOffset + dbState.browseRows.length} of ${dbState.browseTotal}
+      <button class="btn btn-ghost btn-sm" data-browse-prev ${dbState.browseOffset === 0 ? "disabled" : ""}>← prev</button>
+      <button class="btn btn-ghost btn-sm" data-browse-next ${dbState.browseOffset + dbState.browseLimit >= dbState.browseTotal ? "disabled" : ""}>next →</button>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join("")}<th></th></tr></thead>
+        <tbody>
+          ${dbState.browseRows.map((row, i) => `<tr>
+            ${cols.map(c => `<td class="dim text-xs" style="max-width: 240px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(typeof row[c] === "object" ? JSON.stringify(row[c]).slice(0, 80) : String(row[c] ?? ""))}</td>`).join("")}
+            <td><button class="btn btn-ghost btn-sm" data-edit-row="${i}">edit</button>
+                <button class="btn btn-ghost btn-sm" data-delete-row="${i}" style="color:var(--negative);">del</button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  host.querySelector("[data-browse-prev]")?.addEventListener("click", () => {
+    dbState.browseOffset = Math.max(0, dbState.browseOffset - dbState.browseLimit);
+    fetchBrowserRows(body);
+  });
+  host.querySelector("[data-browse-next]")?.addEventListener("click", () => {
+    dbState.browseOffset = dbState.browseOffset + dbState.browseLimit;
+    fetchBrowserRows(body);
+  });
+  host.querySelectorAll("[data-edit-row]").forEach(b => b.addEventListener("click", async () => {
+    const idx = parseInt(b.dataset.editRow, 10);
+    const row = dbState.browseRows[idx];
+    const pkCol = row.id ? "id" : Object.keys(row)[0];
+    const pkVal = row[pkCol];
+    const col = prompt("Column to edit:");
+    if (!col) return;
+    const newVal = prompt(`New value for ${col} (current: ${row[col]}):`);
+    if (newVal == null) return;
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try {
+      await adminPost("/api/ai?op=admin-db-row-patch", {
+        table: dbState.browseTable, filter: `${pkCol}=eq.${encodeURIComponent(pkVal)}`, patch: { [col]: newVal }, reason,
+      });
+      toast({ kind: "success", message: "Row updated." });
+      fetchBrowserRows(body);
+    } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-delete-row]").forEach(b => b.addEventListener("click", async () => {
+    const idx = parseInt(b.dataset.deleteRow, 10);
+    const row = dbState.browseRows[idx];
+    const pkCol = row.id ? "id" : Object.keys(row)[0];
+    const pkVal = row[pkCol];
+    if (!confirm(`Delete row where ${pkCol}=${pkVal}?`)) return;
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try {
+      await adminPost("/api/ai?op=admin-db-row-delete", {
+        table: dbState.browseTable, filter: `${pkCol}=eq.${encodeURIComponent(pkVal)}`, reason,
+      });
+      toast({ kind: "success", message: "Row deleted." });
+      fetchBrowserRows(body);
+    } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+}
+
+function renderDbSql(body) {
+  body.innerHTML = `
+    <div class="db-sql-warn">⚠ Raw SQL via admin_exec_sql RPC. Mutations are audited. Triple-check before running DDL.</div>
+    <textarea class="input db-sql-input" id="db-sql-input" rows="8">${escapeHtml(dbState.sqlInput)}</textarea>
+    <div class="flex gap-2" style="margin: var(--sp-3) 0;">
+      <button class="btn btn-primary" id="db-sql-run">Execute</button>
+      <input class="input" id="db-sql-reason" placeholder="Reason (≥ 8 chars, audit-logged)" style="flex:1;" />
+    </div>
+    <div id="db-sql-result"></div>`;
+  body.querySelector("#db-sql-input").addEventListener("input", e => { dbState.sqlInput = e.target.value; });
+  body.querySelector("#db-sql-run").addEventListener("click", async () => {
+    const sql = dbState.sqlInput.trim();
+    const reason = body.querySelector("#db-sql-reason").value.trim();
+    if (!sql) return;
+    if (reason.length < 8) { toast({ kind: "error", message: "Reason must be ≥ 8 chars." }); return; }
+    // DDL confirmation
+    const isDDL = /^\s*(drop|alter|create|truncate|grant|revoke)\s/i.test(sql);
+    if (isDDL) {
+      const ok = prompt("This looks like DDL. Type 'I understand RLS' to proceed:");
+      if (ok !== "I understand RLS") return;
+    }
+    dbState.sqlRunning = true;
+    body.querySelector("#db-sql-result").innerHTML = `<div class="muted">Running…</div>`;
+    try {
+      const r = await adminPost("/api/ai?op=admin-db-sql", { sql, reason });
+      dbState.sqlResult = r;
+      paintSqlResult(body);
+    } catch (e) {
+      body.querySelector("#db-sql-result").innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`;
+    } finally { dbState.sqlRunning = false; }
+  });
+  if (dbState.sqlResult) paintSqlResult(body);
+}
+function paintSqlResult(body) {
+  const host = body.querySelector("#db-sql-result");
+  if (!host || !dbState.sqlResult) return;
+  const r = dbState.sqlResult;
+  if (r.error) { host.innerHTML = `<div style="color:var(--negative);">Error: ${escapeHtml(r.error)} ${r.sqlstate ? `(${r.sqlstate})` : ""}</div>`; return; }
+  const rows = r.rows || [];
+  if (!rows.length) { host.innerHTML = `<div class="muted">0 rows.</div>`; return; }
+  const cols = Object.keys(rows[0]);
+  host.innerHTML = `
+    <div class="dim text-xs">${rows.length} rows</div>
+    <div class="admin-table-wrap">
+      <table class="admin-table"><thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(row => `<tr>${cols.map(c => `<td class="dim text-xs">${escapeHtml(typeof row[c] === "object" ? JSON.stringify(row[c]).slice(0, 100) : String(row[c] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>
+    </div>`;
+}
+
+function renderDbRpc(body) {
+  body.innerHTML = `
+    <div style="margin-bottom: var(--sp-3);">
+      <input class="input" id="rpc-name" placeholder="RPC name (e.g. leaderboard)" value="${escapeAttr(dbState.rpcName)}" style="width: 300px;" />
+      <textarea class="input" id="rpc-params" placeholder='{ "p_limit": 10 }' rows="4" style="width: 100%; margin-top: 8px;">${escapeHtml(dbState.rpcParams)}</textarea>
+      <input class="input" id="rpc-reason" placeholder="Reason (≥ 8 chars)" style="margin-top: 8px;" />
+      <button class="btn btn-primary" id="rpc-run" style="margin-top: 8px;">Invoke</button>
+    </div>
+    <div id="rpc-result"></div>`;
+  body.querySelector("#rpc-run").addEventListener("click", async () => {
+    const rpcName = body.querySelector("#rpc-name").value.trim();
+    const params = body.querySelector("#rpc-params").value.trim();
+    const reason = body.querySelector("#rpc-reason").value.trim();
+    if (!rpcName) return;
+    if (reason.length < 8) { toast({ kind: "error", message: "Reason ≥ 8 chars." }); return; }
+    let parsedParams = {};
+    try { parsedParams = params ? JSON.parse(params) : {}; } catch { toast({ kind: "error", message: "Params must be valid JSON." }); return; }
+    try {
+      const r = await adminPost("/api/ai?op=admin-db-rpc", { rpcName, params: parsedParams, reason });
+      dbState.rpcResult = r;
+      body.querySelector("#rpc-result").innerHTML = `<pre class="admin-coach-payload">${escapeHtml(JSON.stringify(r.result, null, 2))}</pre>`;
+    } catch (e) {
+      body.querySelector("#rpc-result").innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`;
+    }
+  });
+}
+
+async function renderDbSchema(body) {
+  body.innerHTML = `<div class="muted">Loading schema…</div>`;
+  try { dbState.schema = dbState.schema || await adminGet("/api/ai?op=admin-db-schema"); }
+  catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  const s = dbState.schema;
+  body.innerHTML = `
+    <div class="admin-user-grid">
+      <div>
+        <div class="admin-user-section-label">Columns (${s.columns.length})</div>
+        ${renderList(s.columns, c => `<div class="dim text-xs"><strong>${escapeHtml(c.table_name)}.${escapeHtml(c.column_name)}</strong> · ${escapeHtml(c.data_type)} ${c.is_nullable === "YES" ? "·null ok" : ""}</div>`)}
+      </div>
+      <div>
+        <div class="admin-user-section-label">Policies (${s.policies.length})</div>
+        ${renderList(s.policies, p => `<div class="dim text-xs"><strong>${escapeHtml(p.tablename)}.${escapeHtml(p.policyname)}</strong> · ${escapeHtml(p.cmd)}</div>`)}
+      </div>
+      <div>
+        <div class="admin-user-section-label">Indexes (${s.indexes.length})</div>
+        ${renderList(s.indexes, i => `<div class="dim text-xs"><strong>${escapeHtml(i.indexname)}</strong> on ${escapeHtml(i.tablename)}</div>`)}
+      </div>
+      <div>
+        <div class="admin-user-section-label">Functions (${s.functions.length})</div>
+        ${renderList(s.functions, f => `<div class="dim text-xs"><strong>${escapeHtml(f.routine_name)}</strong> → ${escapeHtml(f.return_type)}</div>`)}
+      </div>
+    </div>`;
+}
+function renderList(items, fmt) { return items.length ? `<div class="flex-col gap-1" style="max-height: 300px; overflow: auto; padding: 8px; background: var(--bg-soft); border-radius: 4px;">${items.map(fmt).join("")}</div>` : `<div class="muted text-sm">None.</div>`; }
+
+async function renderDbStats(body) {
+  body.innerHTML = `<div class="muted">Loading DB stats…</div>`;
+  try { dbState.stats = dbState.stats || await adminGet("/api/ai?op=admin-db-stats"); }
+  catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  const s = dbState.stats;
+  body.innerHTML = `
+    <div class="admin-user-grid">
+      <div>
+        <div class="admin-user-section-label">Database size</div>
+        <div class="admin-kv"><span>Size</span><span>${escapeHtml(s.size?.size || "—")}</span></div>
+        <div class="admin-kv"><span>Bytes</span><span class="tabular">${s.size?.bytes ?? "—"}</span></div>
+      </div>
+      <div>
+        <div class="admin-user-section-label">Connections by state</div>
+        ${s.connections.map(c => `<div class="admin-kv"><span>${escapeHtml(c.state || "idle")}</span><span class="tabular">${c.count}</span></div>`).join("") || `<div class="muted text-sm">None.</div>`}
+      </div>
+      <div>
+        <div class="admin-user-section-label">Cache hit ratio</div>
+        <div class="admin-kv"><span>Hit ratio</span><span>${s.cacheHitRatio?.hit_ratio ? (s.cacheHitRatio.hit_ratio * 100).toFixed(2) + "%" : "—"}</span></div>
+        <div class="admin-kv"><span>Hits</span><span class="tabular">${s.cacheHitRatio?.hits ?? "—"}</span></div>
+        <div class="admin-kv"><span>Reads</span><span class="tabular">${s.cacheHitRatio?.reads ?? "—"}</span></div>
+      </div>
+    </div>`;
+}
+
+// -----------------------------------------------------------------------------
+// Auth tab — Supabase Auth users admin
+// -----------------------------------------------------------------------------
+const authState = { users: null, loading: false };
+async function renderAuthTab(host, main) {
+  if (!authState.users && !authState.loading) {
+    authState.loading = true;
+    try { authState.users = (await adminGet("/api/ai?op=admin-auth-users&perPage=500")).users || []; }
+    catch (e) { host.innerHTML = `<div class="card"><div style="color:var(--negative);">${escapeHtml(e.message)}</div></div>`; return; }
+    finally { authState.loading = false; }
+  }
+  host.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h3>Supabase Auth users (${authState.users?.length || 0})</h3>
+        <button class="btn btn-ghost btn-sm" id="auth-refresh">↻ Refresh</button>
+      </div>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Email</th><th>Last sign-in</th><th>Confirmed</th><th>Banned</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${(authState.users || []).slice(0, 500).map(u => `<tr>
+              <td><div class="font-semi">${escapeHtml(u.email || "—")}</div>
+                  <div class="dim text-xs">${escapeHtml((u.id || "").slice(0, 8))}</div></td>
+              <td class="dim text-xs">${u.lastSignInAt ? formatDateShort(u.lastSignInAt) : "—"}</td>
+              <td>${u.emailConfirmedAt ? '<span class="pill pill-green" style="font-size:10px;">yes</span>' : '<span class="pill" style="font-size:10px;background:var(--bg-subtle);color:var(--text-dim);">no</span>'}</td>
+              <td>${u.bannedUntil ? '<span class="pill pill-red" style="font-size:10px;">banned</span>' : "—"}</td>
+              <td class="dim text-xs">${formatDateShort(u.createdAt)}</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" data-auth-reset-email="${escapeAttr(u.email)}">reset pw</button>
+                <button class="btn btn-ghost btn-sm" data-auth-magic-email="${escapeAttr(u.email)}">magic</button>
+                ${!u.emailConfirmedAt ? `<button class="btn btn-ghost btn-sm" data-force-confirm="${escapeAttr(u.id)}">confirm</button>` : ""}
+                ${u.bannedUntil ? `<button class="btn btn-ghost btn-sm" data-unban-user="${escapeAttr(u.id)}">unban</button>` : `<button class="btn btn-ghost btn-sm" data-ban-user="${escapeAttr(u.id)}" style="color:var(--negative);">ban</button>`}
+              </td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  host.querySelector("#auth-refresh").addEventListener("click", () => { authState.users = null; renderTabBody(main); });
+  host.querySelectorAll("[data-auth-reset-email]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-auth-reset", { email: b.dataset.authResetEmail, reason }); toast({ kind: "success", message: "Sent." }); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-auth-magic-email]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { const r = await adminPost("/api/ai?op=admin-auth-magiclink", { email: b.dataset.authMagicEmail, reason }); toast({ kind: "success", message: "Link: " + (r.link || "sent.") }); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-force-confirm]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-auth-force-confirm", { userId: b.dataset.forceConfirm, reason }); toast({ kind: "success", message: "Confirmed." }); authState.users = null; renderTabBody(main); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-ban-user]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-user-ban", { userId: b.dataset.banUser, reason }); toast({ kind: "success", message: "Banned." }); authState.users = null; renderTabBody(main); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-unban-user]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-user-unban", { userId: b.dataset.unbanUser, reason }); toast({ kind: "success", message: "Unbanned." }); authState.users = null; renderTabBody(main); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
 }
 
 // -----------------------------------------------------------------------------
