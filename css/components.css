@@ -1263,6 +1263,72 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .market-status .dot.preopen { background: var(--warning, #F5A623); }
 .market-status .dot.closed  { background: var(--text-faint); }
 
+/* Rich hover popover for the NSE market status badge. Uses the same
+   subtle card style as the AI term tooltip. Anchored to the parent
+   via position:relative on the badge. */
+.market-status { position: relative; cursor: help; }
+.market-status-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 260px;
+  max-width: 320px;
+  background: var(--surface-elev, var(--surface));
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--r);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  box-shadow: var(--sh-lg, 0 12px 40px rgba(0,0,0,0.35));
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 140ms, transform 140ms, visibility 140ms;
+  z-index: 100;
+  pointer-events: none;
+}
+.market-status:hover .market-status-pop,
+.market-status:focus-visible .market-status-pop,
+.market-status:focus-within .market-status-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.ms-pop-head { margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.ms-pop-label {
+  font-size: var(--text-10);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--brand);
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+.ms-pop-dim { color: var(--text-muted); font-size: var(--text-xs); }
+.ms-pop-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  color: var(--text-strong);
+}
+.ms-pop-key {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.ms-pop-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--divider);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
 /* ============================== STOCK DETAIL ======================== */
 .stock-detail-grid {
   display: grid;

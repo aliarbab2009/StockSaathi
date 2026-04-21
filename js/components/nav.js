@@ -85,10 +85,25 @@ export function mountNav() {
           </button>
           ${themeToggleHtml(state.settings.theme)}
           ${state.isAuthed ? `
-            <div class="market-status" title="NSE · ${escapeHtml(ms.istDate)} · ${escapeHtml(ms.istTime)}${ms.isHoliday ? " · Holiday" : ""}${ms.state === "closed" && ms.nextOpenLabel ? " · " + escapeHtml(ms.nextOpenLabel) : ""}">
+            <div class="market-status" tabindex="0" aria-label="NSE market status" data-ms-state="${ms.state}">
               <span class="dot ${ms.open ? "" : ms.state === "pre-open" ? "preopen" : "closed"}"></span>
               <span class="muted">NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}</span>
               <span class="dim text-xs" style="margin-left: 6px;">${escapeHtml(ms.istTime)}</span>
+              <div class="market-status-pop" role="tooltip">
+                <div class="ms-pop-head">
+                  <span class="ms-pop-label">NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}</span>
+                  ${ms.degraded ? '<span class="ms-pop-dim">~</span>' : ""}
+                </div>
+                <div class="ms-pop-row"><span class="ms-pop-key">Now</span><span>${escapeHtml(ms.istDate)} · ${escapeHtml(ms.istTime)}</span></div>
+                ${ms.state === "open"
+                  ? `<div class="ms-pop-row"><span class="ms-pop-key">Closes</span><span>3:30 PM IST today</span></div>`
+                  : `<div class="ms-pop-row"><span class="ms-pop-key">${ms.state === "pre-open" ? "Opens" : "Last close"}</span><span>${ms.state === "pre-open" ? "9:15 AM IST today" : escapeHtml(ms.lastCloseLabel || "—")}</span></div>`
+                }
+                ${ms.state !== "open" && ms.nextOpenLabel ? `<div class="ms-pop-row"><span class="ms-pop-key">Next open</span><span>${escapeHtml(ms.nextOpenLabel)}</span></div>` : ""}
+                ${ms.isHoliday ? `<div class="ms-pop-row"><span class="ms-pop-key">Holiday</span><span>Yes</span></div>` : ""}
+                <div class="ms-pop-row"><span class="ms-pop-key">Hours</span><span>Mon–Fri · 9:15 AM – 3:30 PM IST</span></div>
+                <div class="ms-pop-foot">Clock is server-trusted. Changing your system time won't move it.</div>
+              </div>
             </div>
             <div class="nav-cash" aria-label="Portfolio value">
               <span class="label">Portfolio</span>

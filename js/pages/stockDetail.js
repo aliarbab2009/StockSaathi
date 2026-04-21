@@ -169,9 +169,23 @@ function render(inst, symbol) {
               <h1 style="font-size: var(--text-2xl); margin-bottom: 2px;">${escapeHtml(inst.name)}</h1>
               <div class="dim text-xs">
                 ${symbol} · ${inst.kind === "MF" ? "Mutual Fund" : "NSE"} · ${escapeHtml(inst.sector)}
-                <span class="data-badge ${ms.state}" style="margin-left: 8px;" title="${escapeAttr("NSE · " + ms.istDate + " · " + ms.istTime + (ms.state !== "open" && ms.nextOpenLabel ? " · " + ms.nextOpenLabel : "") + (ms.isHoliday ? " · Holiday" : ""))}">
+                <span class="data-badge market-status" tabindex="0" style="margin-left: 8px; position: relative;" data-ms-state="${ms.state}">
                   <span class="dot ${ms.open ? "" : ms.state === "pre-open" ? "preopen" : "closed"}"></span>
                   NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}${ms.state !== "open" ? " · " + escapeHtml(ms.istTime) : ""}
+                  <div class="market-status-pop" role="tooltip">
+                    <div class="ms-pop-head">
+                      <span class="ms-pop-label">NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}</span>
+                    </div>
+                    <div class="ms-pop-row"><span class="ms-pop-key">Now</span><span>${escapeHtml(ms.istDate)} · ${escapeHtml(ms.istTime)}</span></div>
+                    ${ms.state === "open"
+                      ? `<div class="ms-pop-row"><span class="ms-pop-key">Closes</span><span>3:30 PM IST today</span></div>`
+                      : `<div class="ms-pop-row"><span class="ms-pop-key">${ms.state === "pre-open" ? "Opens" : "Last close"}</span><span>${ms.state === "pre-open" ? "9:15 AM IST today" : escapeHtml(ms.lastCloseLabel || "—")}</span></div>`
+                    }
+                    ${ms.state !== "open" && ms.nextOpenLabel ? `<div class="ms-pop-row"><span class="ms-pop-key">Next open</span><span>${escapeHtml(ms.nextOpenLabel)}</span></div>` : ""}
+                    ${ms.isHoliday ? `<div class="ms-pop-row"><span class="ms-pop-key">Holiday</span><span>Yes</span></div>` : ""}
+                    <div class="ms-pop-row"><span class="ms-pop-key">Hours</span><span>Mon–Fri · 9:15 AM – 3:30 PM IST</span></div>
+                    <div class="ms-pop-foot">Clock is server-trusted. Changing your system time won't move it.</div>
+                  </div>
                 </span>
               </div>
             </div>
@@ -801,3 +815,4 @@ function renderOrderBook(symbol, curPrice) {
   `;
 }
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
+function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }

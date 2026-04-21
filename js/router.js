@@ -32,7 +32,7 @@ const ROUTES = [
   { name: "stocks",        match: /^\/stocks\/?$/,                         render: renderStocks, needsAuth: true, needsOnboarded: true },
   { name: "stock-detail",  match: /^\/stocks\/([A-Za-z0-9&\-_.]+)\/?$/,    render: renderStockDetail, param: "symbol", needsAuth: true, needsOnboarded: true },
   { name: "crash-replay",  match: /^\/crash-replay\/?$/,                   render: renderCrashReplay, public: true },
-  { name: "crash-replay-scenario", match: /^\/crash-replay\/([A-Z_0-9]+)\/?$/, render: renderCrashReplay, param: "scenario", public: true },
+  { name: "crash-replay-scenario", match: /^\/crash-replay\/([A-Za-z0-9_]+)\/?$/, render: renderCrashReplay, param: "scenario", public: true },
   { name: "leaderboard",   match: /^\/leaderboard\/?$/,                    render: renderLeaderboard, needsAuth: true, needsOnboarded: true },
   { name: "report-card",   match: /^\/report-card\/?$/,                    render: renderReportCard, needsAuth: true, needsOnboarded: true },
   { name: "friends",       match: /^\/friends\/?$/,                        render: renderFriends, needsAuth: true, needsOnboarded: true },

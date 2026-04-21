@@ -583,6 +583,7 @@ export default async function handler(req) {
       case "crash-suggestions":   return await opCrashSuggestions(req, origin);
       case "command":             if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opCommand(req, origin);
       case "time":                return opTime(req, origin);
+      case "signup-count":        return await opSignupCount(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -597,4 +598,50 @@ export default async function handler(req) {
 // -----------------------------------------------------------------------------
 function opTime(req, origin) {
   return j(200, { ms: Date.now() }, origin);
+}
+
+// -----------------------------------------------------------------------------
+// op: signup-count — how many new profiles landed today (IST), this week, all-time.
+// Uses SUPABASE_SERVICE_ROLE_KEY to bypass RLS on profiles. Public-read
+// numeric count only — no PII leaked.
+// -----------------------------------------------------------------------------
+async function opSignupCount(req, origin) {
+  const env = globalThis.process?.env || {};
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    return j(501, { error: "supabase_not_configured" }, origin);
+  }
+  // IST day-start for "today" in UTC
+  const nowIst = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
+  const istDayStartIso = `${nowIst.year}-${nowIst.month}-${nowIst.day}T00:00:00+05:30`;
+  const weekAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  async function count(filter) {
+    const url = `${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/profiles?select=id${filter ? "&" + filter : ""}`;
+    const r = await fetch(url, {
+      headers: {
+        "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Prefer": "count=exact",
+        "Range-Unit": "items",
+        "Range": "0-0",
+      },
+    });
+    // Content-Range: items 0-0/N
+    const cr = r.headers.get("content-range") || "";
+    const m = cr.match(/\/(\d+)$/);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+
+  try {
+    const [today, week, total] = await Promise.all([
+      count(`created_at=gte.${encodeURIComponent(istDayStartIso)}`),
+      count(`created_at=gte.${encodeURIComponent(weekAgoIso)}`),
+      count(""),
+    ]);
+    return j(200, { today, week, total, asOf: new Date().toISOString() }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 100) }, origin);
+  }
 }
