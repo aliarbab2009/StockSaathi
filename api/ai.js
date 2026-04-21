@@ -141,11 +141,17 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
     try {
       const body = { model: p.model, messages, temperature, max_tokens };
       if (response_format) body.response_format = response_format;
+      // Vertex AI OpenAI-compat uses x-goog-api-key for API-key auth.
+      // Everything else (OpenAI/Groq/AI Studio/Cerebras) takes Bearer.
+      const isVertex = /-aiplatform\.googleapis\.com/.test(p.url);
+      const authHeaders = isVertex
+        ? { "x-goog-api-key": p.key }
+        : { "Authorization": `Bearer ${p.key}` };
       const res = await fetch(p.url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${p.key}`,
+          ...authHeaders,
           "User-Agent": "StockSaathi-Edge/1.0",
         },
         body: JSON.stringify(body),

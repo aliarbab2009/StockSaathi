@@ -162,13 +162,20 @@ function chainFor(profile) {
 }
 
 async function callUpstream(desc, payload) {
+  // Vertex AI's OpenAI-compat endpoint uses x-goog-api-key for API-key auth,
+  // NOT Authorization: Bearer (which is reserved for OAuth access tokens on
+  // that endpoint). Every other upstream (OpenAI, Groq, Cerebras, AI Studio
+  // via generativelanguage.googleapis.com) takes Bearer just fine.
+  const isVertex = /-aiplatform\.googleapis\.com/.test(desc.url);
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "StockSaathi-Edge/1.0",
+  };
+  if (isVertex) headers["x-goog-api-key"] = desc.key;
+  else headers["Authorization"] = `Bearer ${desc.key}`;
   const res = await fetch(desc.url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${desc.key}`,
-      "User-Agent": "StockSaathi-Edge/1.0",
-    },
+    headers,
     body: JSON.stringify({ ...payload, model: desc.model }),
   });
   const text = await res.text();
