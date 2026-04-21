@@ -14,8 +14,14 @@ import { getState, getPortfolioValue } from "../state.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const BACKEND_URL = "/api/chat";
+// MODEL here is a client-side hint only — /api/chat overrides it with the
+// actual Gemini model based on the profile. Kept short so it still works
+// if someone sets their own Groq key (legacy "bring your own key" path).
 const MODEL = "llama-3.3-70b-versatile";
-const MAX_TOKENS = 1024;
+// Keep responses tight — Gemini thinking models spend tokens on internal
+// reasoning, so a smaller budget = less thinking = faster UX without losing
+// response quality (the visible reply is usually 200–400 tokens anyway).
+const MAX_TOKENS = 512;
 const MAX_TOOL_LOOPS = 5;
 
 // -----------------------------------------------------------------------------
@@ -330,7 +336,7 @@ function resolveCryptoId(q) {
 // -----------------------------------------------------------------------------
 // Transport — client-direct OR via backend proxy
 // -----------------------------------------------------------------------------
-async function callLLM({ apiKey, system, messages, tools }) {
+async function callLLM({ apiKey, system, messages, tools, profile = "fast" }) {
   // Convert chat history (role/content string) to OpenAI format
   const openaiMessages = [
     { role: "system", content: system },
@@ -343,12 +349,12 @@ async function callLLM({ apiKey, system, messages, tools }) {
     messages: openaiMessages,
     tools,
     tool_choice: "auto",
-    // Tells /api/chat which upstream lane to use. Coach chat wants
-    // reasoning + warmth, not raw speed — GPT primary, Gemini Pro
-    // fallback, Groq/Llama as final floor. Server ignores unknown
-    // fields so this is harmless on providers that don't understand
-    // profiles.
-    profile: "reasoning",
+    // Default profile is "fast" (Gemini Flash). Flash is ~3× faster than
+    // Pro on conversational chat because it doesn't run deep chain-of-thought
+    // on every message — and for a "hi, what's TCS at?" interaction Flash
+    // is more than smart enough. Callers that need deep reasoning (deep
+    // analysis, crash replay JSON) pass profile:"reasoning" explicitly.
+    profile,
   };
 
   // If user has their own Groq key → direct call (fastest path)
@@ -395,13 +401,13 @@ async function callLLM({ apiKey, system, messages, tools }) {
 // -----------------------------------------------------------------------------
 // Main agent loop (OpenAI-style tool_calls)
 // -----------------------------------------------------------------------------
-export async function runAgent({ apiKey, system, messages, onStep }) {
+export async function runAgent({ apiKey, system, messages, onStep, profile = "fast" }) {
   let loops = 0;
   const conv = messages.map(m => ({ ...m }));
 
   while (loops < MAX_TOOL_LOOPS) {
     loops++;
-    const resp = await callLLM({ apiKey, system, messages: conv, tools: TOOLS });
+    const resp = await callLLM({ apiKey, system, messages: conv, tools: TOOLS, profile });
     if (!resp) {
       console.warn("LLM unreachable (attempt", loops, ")");
       return null;

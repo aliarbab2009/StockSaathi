@@ -76,18 +76,21 @@ function summarisePortfolio(state) {
 }
 
 async function callLlmAgent(apiKey, history, state) {
-  const lastUser = [...history].reverse().find(m => m.role === "user")?.text || "";
-  if (isOffTopic(lastUser)) return offTopicRedirect(lastUser);
-
+  // No client-side off-topic pre-filter. Let the LLM decide how to handle
+  // off-topic questions per the system prompt — previously we'd intercept
+  // "hello" and return a canned redirect before the model ever saw it,
+  // which made the coach feel like a decision tree instead of a coach.
   const portfolioSummary = summarisePortfolio(state);
   const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
-  const system = `${SAATHI_SYSTEM}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}`;
+  const system = `${SAATHI_SYSTEM}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}\n\n# TONE\nKeep replies short by default (1–3 sentences). Go longer only when asked for depth.`;
 
   const messages = history.slice(-12).map(m => ({
     role: m.role === "user" ? "user" : "assistant",
     content: m.text,
   }));
-  return await runAgent({ apiKey, system, messages });
+  // profile:"fast" uses Gemini Flash — ~3× faster than Pro on conversational
+  // chat with plenty of IQ for finance Q&A. Tool-use still works.
+  return await runAgent({ apiKey, system, messages, profile: "fast" });
 }
 
 // -----------------------------------------------------------------------------
@@ -192,8 +195,12 @@ function render() {
     let reply = null;
     try {
       reply = await callLlmAgent(s.settings.llmApiKey || null, chatHistory, s);
-    } catch (e) { console.warn("agent:", e); }
-    if (!reply) reply = smartTemplateReply(text, s);
+    } catch (e) { console.warn("coach panel error:", e); }
+    // No template fallback — surface an honest error if the LLM didn't answer.
+    // Templates were hijacking simple greetings and making the coach feel dumb.
+    if (!reply || !reply.trim()) {
+      reply = "Couldn't reach Saathi right now. Try again in a moment.";
+    }
 
     chatHistory.push({ role: "assistant", text: reply, ts: Date.now() });
     saveChat();

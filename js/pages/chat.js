@@ -37,14 +37,18 @@ export function renderChat(main) {
 
   function render() {
     const state = getState();
-    const usingLLM = !!state.settings.llmApiKey;
+    const userOwnKey = !!state.settings.llmApiKey;
+    // The server always has Gemini configured now. Template mode no longer
+    // exists as a runtime state — the old badge was lying. Show the actual
+    // source of the LLM instead so the user has a clear mental model.
+    const badgeText = userOwnKey ? "Your key · finance only" : "Gemini · finance only";
 
     main.innerHTML = `
       <div style="max-width: 760px; margin: 0 auto;">
         <div style="margin-bottom: var(--sp-4);">
           <div class="flex items-center gap-3">
             <h1>Saathi</h1>
-            <span class="data-badge"><span class="dot ${usingLLM ? "" : "offline"}"></span> ${usingLLM ? "LLM · finance only" : "Template mode · finance only"}</span>
+            <span class="data-badge"><span class="dot"></span> ${badgeText}</span>
           </div>
           <p class="muted">I'm Saathi — your finance coach. Ask anything about money, investing, Indian markets, taxes, behavioral econ, or how a past crash played out. Out of scope: everything else.</p>
         </div>
@@ -173,7 +177,7 @@ function pushAssistant(text) {
 
 async function sendAndReply(userText) {
   m_pending = true;
-  // Re-render to show typing
+  // Re-render to show typing indicator.
   const main = document.getElementById("main");
   const mEl = main?.querySelector("#chat-messages");
   if (mEl) {
@@ -183,30 +187,41 @@ async function sendAndReply(userText) {
 
   const state = getState();
 
-  if (isOffTopic(userText)) {
-    m_pending = false;
-    pushAssistant(offTopicRedirect(userText));
-    return;
-  }
-
+  // New chat path: always call Gemini. No template fallback, no off-topic
+  // pre-filter — if the user asks something off-topic Gemini politely
+  // declines per the system prompt. Templates used to intercept "hello",
+  // "are you gemini" etc. before the LLM ever saw them, which made the
+  // bot feel dumb. Let the LLM handle ALL replies.
   let replyText = null;
+  let errorText = null;
   try {
     const messages = chatLog.slice(-12).map(m => ({
       role: m.role === "user" ? "user" : "assistant",
       content: m.text,
     }));
-    const system = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.`;
+    const system = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
     replyText = await runAgent({
       apiKey: state.settings.llmApiKey || null,
       system,
       messages,
+      // "fast" profile = Gemini Flash. ~3× faster than Pro on chit-chat,
+      // plenty smart for finance Q&A. Crash-replay generation and other
+      // heavy JSON tasks still use profile:"reasoning" via /api/ai.
+      profile: "fast",
     });
-  } catch (e) { console.warn("agent:", e); }
-
-  if (!replyText) replyText = replyFor(userText);
+  } catch (e) {
+    console.warn("coach chat error:", e);
+    errorText = "Couldn't reach Saathi right now. Try again in a moment.";
+  }
 
   m_pending = false;
-  pushAssistant(replyText);
+  if (replyText && replyText.trim()) {
+    pushAssistant(replyText);
+  } else {
+    // No reply + no exception = upstream returned empty. Surface an honest
+    // error instead of falling back to a canned template.
+    pushAssistant(errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
+  }
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
