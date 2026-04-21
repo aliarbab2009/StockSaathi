@@ -166,11 +166,9 @@ function parseJsonLoose(text) {
   }
 }
 
-function istDayKey() {
-  const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" })
-    .formatToParts(new Date()).reduce((a, x) => (a[x.type] = x.value, a), {});
-  return `${p.year}-${p.month}-${p.day}`;
-}
+// (istDayKey defined later in the file with a default-parameter overload;
+// see line ~735. The earlier duplicate was deleted to fix a Vercel esbuild
+// "symbol already declared" failure.)
 function weekKey() {
   const d = new Date();
   const jan1 = Date.UTC(d.getUTCFullYear(), 0, 1);
@@ -731,8 +729,10 @@ async function auditWrap(req, spec, fn) {
   return result;
 }
 
-// IST day-bucketer — reused for every time-bucket chart.
-function istDayKey(date) {
+// IST day-bucketer — reused for every time-bucket chart. Default arg
+// keeps the zero-arg callers (op=crash-suggestions, op=market-mood,
+// op=stock-why, op=market-search) working without modification.
+function istDayKey(date = new Date()) {
   const p = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(date).reduce((a, pp) => (a[pp.type] = pp.value, a), {});
