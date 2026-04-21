@@ -233,10 +233,10 @@ function renderTabBody(main) {
     case "activity": return renderActivityTab(host, main);
     case "database": return renderDatabaseTab(host, main);
     case "auth":     return renderAuthTab(host, main);
-    case "markets":  return renderPlaceholder(host, "Markets / AI cache", "Coming in next commit.");
+    case "markets":  return renderMarketsTab(host, main);
     case "deploy":   return renderDeployTab(host, main);
     case "repo":     return renderRepoTab(host, main);
-    case "audit":    return renderPlaceholder(host, "Audit log", "Coming in next commit.");
+    case "audit":    return renderAuditTab(host, main);
     default:         return renderOverview(host, main);
   }
 }
@@ -1485,6 +1485,205 @@ async function renderRepoTab(host, main) {
       body.innerHTML = `<ol class="admin-lb">${cs.map(c => `<li><a href="${escapeAttr(c.html_url)}" target="_blank">@${escapeHtml(c.login)}</a><span class="tabular">${c.contributions}</span></li>`).join("")}</ol>`;
     }
   } catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div><div class="muted text-sm" style="margin-top:8px;">Add <code>GITHUB_TOKEN</code> + <code>GITHUB_REPO</code> to Vercel env vars to enable this tab.</div>`; }
+}
+
+// -----------------------------------------------------------------------------
+// Markets / AI cache tab
+// -----------------------------------------------------------------------------
+const marketsState = { aiCache: null, aiBucket: "", quoteCache: null, dhan: null, view: "ai-cache" };
+async function renderMarketsTab(host, main) {
+  host.innerHTML = `
+    <div class="card" style="margin-bottom: var(--sp-3);">
+      <div class="card-head">
+        <h3>Markets &amp; AI cache</h3>
+        <div class="flex gap-2">
+          ${["ai-cache","quote-cache","dhan"].map(v => `<button class="btn btn-ghost btn-sm ${marketsState.view === v ? "active-btn" : ""}" data-mkt-view="${v}">${v}</button>`).join("")}
+        </div>
+      </div>
+      <div id="mkt-body"></div>
+    </div>`;
+  host.querySelectorAll("[data-mkt-view]").forEach(b => b.addEventListener("click", () => { marketsState.view = b.dataset.mktView; renderMarketsTab(host, main); }));
+  const body = host.querySelector("#mkt-body");
+  if (marketsState.view === "ai-cache") return renderAiCacheView(body);
+  if (marketsState.view === "quote-cache") return renderQuoteCacheView(body);
+  if (marketsState.view === "dhan") return renderDhanView(body);
+}
+async function renderAiCacheView(body) {
+  body.innerHTML = `<div class="muted">Loading AI cache…</div>`;
+  try {
+    const url = `/api/ai?op=admin-ai-cache&limit=500${marketsState.aiBucket ? `&bucket=${encodeURIComponent(marketsState.aiBucket)}` : ""}`;
+    marketsState.aiCache = await adminGet(url);
+  } catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  const { rows, bucketStats } = marketsState.aiCache;
+  const buckets = Object.keys(bucketStats).sort();
+  body.innerHTML = `
+    <div class="flex gap-2 wrap" style="margin-bottom: var(--sp-3);">
+      <select class="select" id="mkt-bucket">
+        <option value="">All buckets</option>
+        ${buckets.map(b => `<option value="${escapeAttr(b)}" ${marketsState.aiBucket === b ? "selected" : ""}>${escapeHtml(b)} (${bucketStats[b].count} rows, ${bucketStats[b].totalHits} hits)</option>`).join("")}
+      </select>
+      <button class="btn btn-ghost btn-sm" id="mkt-purge-bucket" ${marketsState.aiBucket ? "" : "disabled"}>Purge bucket</button>
+    </div>
+    <div class="flex-col gap-2">
+      ${rows.slice(0, 100).map(r => `
+        <details class="admin-coach-row">
+          <summary>
+            <strong>${escapeHtml(r.bucket)}</strong> · <span class="dim text-xs">${escapeHtml(r.display_key || r.cache_key)}</span>
+            <span class="dim text-xs" style="float:right;">${r.hit_count} hits · ${formatDateShort(r.created_at)}
+              <button class="btn btn-ghost btn-sm" data-cache-del="ai_response_cache" data-bucket="${escapeAttr(r.bucket)}" data-key="${escapeAttr(r.cache_key)}">del</button>
+            </span>
+          </summary>
+          <pre class="admin-coach-payload">${escapeHtml(JSON.stringify(r.payload, null, 2))}</pre>
+        </details>
+      `).join("")}
+    </div>
+    ${rows.length === 0 ? '<div class="muted text-sm">No cache entries yet.</div>' : ""}`;
+  body.querySelector("#mkt-bucket").addEventListener("change", e => { marketsState.aiBucket = e.target.value; marketsState.aiCache = null; renderAiCacheView(body); });
+  body.querySelector("#mkt-purge-bucket")?.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    const confirm = prompt(`Type bucket name (${marketsState.aiBucket}) to purge all rows:`); if (confirm !== marketsState.aiBucket) return;
+    try { await adminPost("/api/ai?op=admin-cache-invalidate", { table: "ai_response_cache", bucket: marketsState.aiBucket, confirm, reason }); toast({ kind: "success", message: "Purged." }); marketsState.aiCache = null; renderAiCacheView(body); }
+    catch (e) { toast({ kind: "error", message: e.message }); }
+  });
+  body.querySelectorAll("[data-cache-del]").forEach(b => b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-cache-invalidate", { table: "ai_response_cache", bucket: b.dataset.bucket, key: b.dataset.key, reason }); toast({ kind: "success", message: "Deleted." }); marketsState.aiCache = null; renderAiCacheView(body); }
+    catch (err) { toast({ kind: "error", message: err.message }); }
+  }));
+}
+async function renderQuoteCacheView(body) {
+  body.innerHTML = `<div class="muted">Loading quote cache…</div>`;
+  try { marketsState.quoteCache = marketsState.quoteCache || await adminGet("/api/ai?op=admin-quote-cache"); }
+  catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  const rows = marketsState.quoteCache.rows || [];
+  body.innerHTML = `
+    <div class="dim text-xs" style="margin-bottom: 6px;">${rows.length} symbols cached</div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead><tr><th>Symbol</th><th>Price</th><th>Change %</th><th>Day H/L</th><th>Volume</th><th>Source</th><th>Age</th><th>Act</th></tr></thead>
+        <tbody>
+          ${rows.slice(0, 500).map(r => `<tr>
+            <td class="font-semi">${escapeHtml(r.symbol)}</td>
+            <td class="tabular">${formatRupees(r.price_paise || 0)}</td>
+            <td class="tabular ${(r.change_pct || 0) >= 0 ? "positive" : "negative"}">${(r.change_pct || 0).toFixed(2)}%</td>
+            <td class="dim text-xs">${formatRupees(r.day_high_paise || 0, { compact: true })} / ${formatRupees(r.day_low_paise || 0, { compact: true })}</td>
+            <td class="tabular">${(r.volume || 0).toLocaleString("en-IN")}</td>
+            <td class="dim text-xs">${escapeHtml(r.source || "—")}</td>
+            <td class="dim text-xs">${r.staleMs != null ? Math.floor(r.staleMs / 1000) + "s" : "—"}</td>
+            <td><button class="btn btn-ghost btn-sm" data-quote-invalidate="${escapeAttr(r.symbol)}">reset</button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  body.querySelectorAll("[data-quote-invalidate]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-cache-invalidate", { table: "quote_cache", symbol: b.dataset.quoteInvalidate, reason }); toast({ kind: "success", message: "Invalidated." }); marketsState.quoteCache = null; renderQuoteCacheView(body); }
+    catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+}
+async function renderDhanView(body) {
+  body.innerHTML = `<div class="muted">Loading Dhan coverage…</div>`;
+  try { marketsState.dhan = marketsState.dhan || await adminGet("/api/ai?op=admin-dhan-coverage"); }
+  catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  const rows = marketsState.dhan.rows || [];
+  body.innerHTML = `
+    <div class="dim text-xs" style="margin-bottom: 6px;">${rows.length} symbols mapped to Dhan security IDs</div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead><tr><th>Symbol</th><th>Security ID</th><th>Segment</th><th>Type</th><th>Lot size</th><th>Updated</th></tr></thead>
+        <tbody>${rows.slice(0, 500).map(r => `<tr>
+          <td class="font-semi">${escapeHtml(r.symbol)}</td>
+          <td class="tabular">${r.security_id}</td>
+          <td class="dim text-xs">${escapeHtml(r.exchange_segment || "—")}</td>
+          <td class="dim text-xs">${escapeHtml(r.instrument_type || "—")}</td>
+          <td class="tabular">${r.lot_size}</td>
+          <td class="dim text-xs">${formatDateShort(r.updated_at)}</td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+// -----------------------------------------------------------------------------
+// Audit + System tab
+// -----------------------------------------------------------------------------
+const auditState = { rows: null, view: "log" };
+async function renderAuditTab(host, main) {
+  host.innerHTML = `
+    <div class="card" style="margin-bottom: var(--sp-3);">
+      <div class="card-head">
+        <h3>Audit &amp; System</h3>
+        <div class="flex gap-2">
+          ${["log","system"].map(v => `<button class="btn btn-ghost btn-sm ${auditState.view === v ? "active-btn" : ""}" data-audit-view="${v}">${v}</button>`).join("")}
+        </div>
+      </div>
+      <div id="audit-body"></div>
+    </div>`;
+  host.querySelectorAll("[data-audit-view]").forEach(b => b.addEventListener("click", () => { auditState.view = b.dataset.auditView; renderAuditTab(host, main); }));
+  const body = host.querySelector("#audit-body");
+  if (auditState.view === "log") return renderAuditLog(body);
+  if (auditState.view === "system") return renderSystem(body);
+}
+async function renderAuditLog(body) {
+  body.innerHTML = `<div class="muted">Loading audit log…</div>`;
+  try { auditState.rows = auditState.rows || (await adminGet("/api/ai?op=admin-audit-log&limit=500")).rows || []; }
+  catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; return; }
+  const rows = auditState.rows;
+  if (!rows.length) { body.innerHTML = `<div class="muted text-sm">Audit log is empty. Every future admin write will leave a row.</div>`; return; }
+  body.innerHTML = `
+    <div class="dim text-xs" style="margin-bottom: 6px;">${rows.length} admin actions</div>
+    <div class="flex-col gap-2">
+      ${rows.slice(0, 200).map(r => `
+        <details class="admin-coach-row">
+          <summary>
+            <strong>${escapeHtml(r.action)}</strong> · <span class="dim">${escapeHtml(r.target_kind || "—")} ${escapeHtml((r.target_id || "").slice(0, 16))}</span>
+            <span class="dim text-xs" style="float:right;">${formatDateShort(r.ts)} · ${escapeHtml(r.actor_ip || "?")}</span>
+          </summary>
+          <div class="admin-kv"><span>Reason</span><span>${escapeHtml(r.reason || "—")}</span></div>
+          ${r.note ? `<div class="admin-kv"><span>Note</span><span>${escapeHtml(r.note)}</span></div>` : ""}
+          ${r.target_user_id ? `<div class="admin-kv"><span>Target user</span><span>${escapeHtml(r.target_user_id)}</span></div>` : ""}
+          <details><summary class="dim text-xs">Before state</summary><pre class="admin-coach-payload">${escapeHtml(JSON.stringify(r.before_state, null, 2))}</pre></details>
+          <details><summary class="dim text-xs">After state</summary><pre class="admin-coach-payload">${escapeHtml(JSON.stringify(r.after_state, null, 2))}</pre></details>
+        </details>`).join("")}
+    </div>`;
+}
+function renderSystem(body) {
+  body.innerHTML = `
+    <div class="admin-user-grid">
+      <div class="card">
+        <div class="card-head"><h3>Token</h3></div>
+        <p class="muted text-sm" style="line-height: 1.6;">Admin token stays in Vercel env (<code>ADMIN_TOKEN</code>). Rotate there + paste new value into this browser's localStorage.</p>
+        <button class="btn btn-ghost btn-sm" id="sys-clear-token">Clear local token (force re-auth)</button>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Portfolio history backfill</h3></div>
+        <p class="muted text-sm" style="line-height: 1.6;">Reseed portfolio_history for every user from their transactions + current holdings. Run once on first deploy; daily snapshot fires automatically from transaction triggers + Vercel cron.</p>
+        <div class="flex gap-2">
+          <button class="btn btn-ghost btn-sm" id="sys-backfill-today">Today only</button>
+          <button class="btn btn-primary btn-sm" id="sys-backfill-full">Full backfill</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Live tail health</h3></div>
+        <div class="admin-kv"><span>Connected</span><span>${state.tailConnected ? "✓ yes" : "✗ no"}</span></div>
+        <div class="admin-kv"><span>Buffered events</span><span class="tabular">${state.activity.length}</span></div>
+      </div>
+    </div>`;
+  body.querySelector("#sys-clear-token").addEventListener("click", () => {
+    setToken("");
+    closeTail();
+    toast({ kind: "success", message: "Token cleared. Reload to re-auth." });
+  });
+  const doBackfill = async (todayOnly) => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { const r = await adminPost("/api/ai?op=admin-backfill-history", { todayOnly, reason }); toast({ kind: "success", message: `Backfill complete: ${r.result?.rows_inserted || 0} rows for ${r.result?.users || 0} users.` }); }
+    catch (e) { toast({ kind: "error", message: e.message }); }
+  };
+  body.querySelector("#sys-backfill-today").addEventListener("click", () => doBackfill(true));
+  body.querySelector("#sys-backfill-full").addEventListener("click", async () => {
+    if (!confirm("Full backfill will delete + re-insert every source='backfill' row. Continue?")) return;
+    doBackfill(false);
+  });
 }
 
 // -----------------------------------------------------------------------------
