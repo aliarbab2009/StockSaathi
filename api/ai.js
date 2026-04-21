@@ -587,6 +587,11 @@ export default async function handler(req) {
       case "admin-path-check":    return opAdminPathCheck(req, origin, url);
       case "admin-overview":      return await opAdminOverview(req, origin);
       case "admin-user":          return await opAdminUser(req, origin, url);
+      case "admin-activity-feed": return await opAdminActivityFeed(req, origin, url);
+      case "admin-ai-cache":      return await opAdminAiCache(req, origin, url);
+      case "admin-quote-cache":   return await opAdminQuoteCache(req, origin);
+      case "admin-dhan-coverage": return await opAdminDhanCoverage(req, origin);
+      case "admin-audit-log":     return await opAdminAuditLog(req, origin, url);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -651,56 +656,160 @@ async function sbAdminFetch(path, opts = {}) {
   });
 }
 
+// -----------------------------------------------------------------------------
+// auditWrap(req, spec, fn)
+//
+// Wrap every admin WRITE op with a before/after capture so admin_audit_log
+// accumulates a tamper-evident history. `fn` returns { beforeState, afterState
+// }; we insert a single row with action, target, actor_ip, reason, and the
+// two state snapshots.
+// -----------------------------------------------------------------------------
+async function auditWrap(req, spec, fn) {
+  const actorIp = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || null;
+  const result = await fn();
+  try {
+    await sbAdminFetch(`/rest/v1/admin_audit_log`, {
+      method: "POST",
+      headers: { "Prefer": "return=minimal" },
+      body: JSON.stringify({
+        action: spec.action,
+        target_user_id: spec.targetUserId || null,
+        target_kind: spec.targetKind || null,
+        target_id: spec.targetId ? String(spec.targetId) : null,
+        actor_ip: actorIp,
+        before_state: result.beforeState || null,
+        after_state: result.afterState || null,
+        reason: spec.reason || null,
+        note: spec.note || null,
+      }),
+    });
+  } catch { /* never let audit-log failure block the op */ }
+  return result;
+}
+
+// IST day-bucketer — reused for every time-bucket chart.
+function istDayKey(date) {
+  const p = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date).reduce((a, pp) => (a[pp.type] = pp.value, a), {});
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// Count-only fetch via Prefer:count=exact — returns { count: N }.
+async function sbCount(path) {
+  try {
+    const r = await sbAdminFetch(path, {
+      headers: { "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0" },
+    });
+    const cr = r.headers.get("content-range") || "";
+    const m = cr.match(/\/(\d+)$/);
+    return m ? parseInt(m[1], 10) : 0;
+  } catch { return 0; }
+}
+
 async function opAdminOverview(req, origin) {
   const gate = checkAdmin(req);
   if (!gate.ok) return j(401, { error: gate.reason }, origin);
 
-  // IST day-buckets for 30-day chart
+  // IST day-buckets for 30-day signup chart
   const days = 30;
   const buckets = {};
   for (let i = 0; i < days; i++) {
-    const d = new Date(Date.now() - i * 86400000);
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
-    }).formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
-    buckets[`${parts.year}-${parts.month}-${parts.day}`] = 0;
+    buckets[istDayKey(new Date(Date.now() - i * 86400000))] = 0;
   }
 
   try {
-    const [profilesRes, portsRes, txsRes, coachRes] = await Promise.all([
-      sbAdminFetch(`/rest/v1/profiles?select=id,username,display_name,email,age,school,city,risk_profile,onboarded,parent_consent_at,created_at&order=created_at.desc&limit=500`),
-      sbAdminFetch(`/rest/v1/portfolios?select=user_id,cash_paise,starting_cash_paise,updated_at&limit=2000`),
-      sbAdminFetch(`/rest/v1/transactions?select=user_id,symbol,side,qty,price_paise,ts&order=ts.desc&limit=5000`),
-      sbAdminFetch(`/rest/v1/coach_messages?select=user_id&limit=10000`),
+    // Parallel fan-out across every relevant table.
+    // Raised caps: users 500→5000, trades 5000→50000, coach 10000→50000.
+    const [
+      profilesRes, portsRes, txsRes, coachRes,
+      holdRes, friendRes, xferRes, wlRes, orderRes,
+      aiCacheCountRes, quoteCacheCountRes, dhanCountRes, auditCountRes,
+      histCountRes,
+    ] = await Promise.all([
+      sbAdminFetch(`/rest/v1/profiles?select=id,username,display_name,email,age,school,city,risk_profile,onboarded,parent_consent_at,created_at,updated_at,avatar_color,class_code,parent_email&order=created_at.desc&limit=5000`),
+      sbAdminFetch(`/rest/v1/portfolios?select=user_id,cash_paise,starting_cash_paise,updated_at&limit=5000`),
+      sbAdminFetch(`/rest/v1/transactions?select=id,user_id,symbol,side,qty,price_paise,value_paise,bias_flags,created_at&order=created_at.desc&limit=50000`),
+      sbAdminFetch(`/rest/v1/coach_messages?select=id,user_id,event_type,trigger_symbol,model,created_at&limit=50000`),
+      sbAdminFetch(`/rest/v1/holdings?select=user_id,symbol,qty,avg_cost_paise&limit=20000`),
+      sbAdminFetch(`/rest/v1/friends?select=user_id,friend_id,created_at&limit=20000`),
+      sbAdminFetch(`/rest/v1/transfers?select=id,sender_id,recipient_id,amount_paise,status,created_at&limit=20000`),
+      sbAdminFetch(`/rest/v1/watchlist?select=user_id,symbol,added_at&limit=20000`),
+      sbAdminFetch(`/rest/v1/limit_orders?select=id,user_id,status,created_at&limit=20000`),
+      // Count-only probes for big / rarely-inspected tables
+      sbCount(`/rest/v1/ai_response_cache?select=bucket`),
+      sbCount(`/rest/v1/quote_cache?select=symbol`),
+      sbCount(`/rest/v1/dhan_instruments?select=symbol`),
+      sbCount(`/rest/v1/admin_audit_log?select=id`),
+      sbCount(`/rest/v1/portfolio_history?select=id`),
     ]);
+
     const profiles = profilesRes.ok ? await profilesRes.json() : [];
     const ports = portsRes.ok ? await portsRes.json() : [];
     const txs = txsRes.ok ? await txsRes.json() : [];
     const coachMessages = coachRes.ok ? await coachRes.json() : [];
+    const holdings = holdRes.ok ? await holdRes.json() : [];
+    const friends = friendRes.ok ? await friendRes.json() : [];
+    const transfers = xferRes.ok ? await xferRes.json() : [];
+    const watchlist = wlRes.ok ? await wlRes.json() : [];
+    const orders = orderRes.ok ? await orderRes.json() : [];
 
+    // Per-user enrichment maps
     const portByUser = {};
     for (const p of ports) portByUser[p.user_id] = p;
+
     const tradeCountByUser = {};
     const lastTradeByUser = {};
+    const totalTradedValueByUser = {};
+    const biasFlagCountByUser = {};
     for (const t of txs) {
       tradeCountByUser[t.user_id] = (tradeCountByUser[t.user_id] || 0) + 1;
-      if (!lastTradeByUser[t.user_id]) lastTradeByUser[t.user_id] = t.ts;
+      if (!lastTradeByUser[t.user_id]) lastTradeByUser[t.user_id] = t.created_at;
+      totalTradedValueByUser[t.user_id] = (totalTradedValueByUser[t.user_id] || 0) + (Number(t.value_paise) || 0);
+      const flags = Array.isArray(t.bias_flags) ? t.bias_flags.length : 0;
+      biasFlagCountByUser[t.user_id] = (biasFlagCountByUser[t.user_id] || 0) + flags;
     }
     const coachCountByUser = {};
     for (const m of coachMessages) coachCountByUser[m.user_id] = (coachCountByUser[m.user_id] || 0) + 1;
+    const holdingCountByUser = {};
+    const unrealizedByUser = {};
+    for (const h of holdings) {
+      holdingCountByUser[h.user_id] = (holdingCountByUser[h.user_id] || 0) + 1;
+      // unrealized uses cost-basis sum as a proxy; actual mark-to-market needs live prices
+      unrealizedByUser[h.user_id] = (unrealizedByUser[h.user_id] || 0) + (Number(h.qty) * Number(h.avg_cost_paise) || 0);
+    }
+    const friendCountByUser = {};
+    for (const f of friends) friendCountByUser[f.user_id] = (friendCountByUser[f.user_id] || 0) + 1;
+    const transferInByUser = {};
+    const transferOutByUser = {};
+    for (const tf of transfers) {
+      if (tf.recipient_id) transferInByUser[tf.recipient_id] = (transferInByUser[tf.recipient_id] || 0) + 1;
+      if (tf.sender_id) transferOutByUser[tf.sender_id] = (transferOutByUser[tf.sender_id] || 0) + 1;
+    }
+    const watchlistCountByUser = {};
+    for (const w of watchlist) watchlistCountByUser[w.user_id] = (watchlistCountByUser[w.user_id] || 0) + 1;
+    const orderCountByUser = {};
+    for (const o of orders) orderCountByUser[o.user_id] = (orderCountByUser[o.user_id] || 0) + 1;
 
-    // Populate 30-day sign-up chart
+    // Populate the 30-day sign-up chart
     for (const p of profiles) {
-      const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
-      }).formatToParts(new Date(p.created_at)).reduce((a, pp) => (a[pp.type] = pp.value, a), {});
-      const k = `${parts.year}-${parts.month}-${parts.day}`;
+      const k = istDayKey(new Date(p.created_at));
       if (k in buckets) buckets[k]++;
     }
     const byDay = Object.entries(buckets).sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([day, count]) => ({ day, count }));
 
+    // Per-user enriched row — 27 axes available to the UI for sorting/filtering
     const users = profiles.map(p => {
       const port = portByUser[p.id];
+      const cashRupees = port ? Math.round((port.cash_paise || 0) / 100) : null;
+      const holdingsValueRupees = unrealizedByUser[p.id] ? Math.round(unrealizedByUser[p.id] / 100) : 0;
+      const totalPortfolioRupees = (cashRupees || 0) + holdingsValueRupees;
+      const startingRupees = port ? Math.round((port.starting_cash_paise || 10000000) / 100) : 100000;
+      const unrealizedPLPct = startingRupees ? ((totalPortfolioRupees - startingRupees) / startingRupees) * 100 : 0;
+      const lastTrade = lastTradeByUser[p.id];
+      const daysSinceLastTrade = lastTrade
+        ? Math.floor((Date.now() - new Date(lastTrade).getTime()) / 86400000)
+        : null;
       return {
         id: p.id,
         username: p.username,
@@ -708,23 +817,54 @@ async function opAdminOverview(req, origin) {
         email: p.email,
         age: p.age,
         school: p.school,
+        classCode: p.class_code,
         city: p.city,
         riskProfile: p.risk_profile,
+        avatarColor: p.avatar_color,
+        parentEmail: p.parent_email,
         onboarded: p.onboarded,
         parentConsented: !!p.parent_consent_at,
+        parentConsentAt: p.parent_consent_at,
         createdAt: p.created_at,
-        cashRupees: port ? Math.round((port.cash_paise || 0) / 100) : null,
-        startingCashRupees: port ? Math.round((port.starting_cash_paise || 10000000) / 100) : 100000,
+        updatedAt: p.updated_at,
+        cashRupees,
+        startingCashRupees: startingRupees,
+        holdingsValueRupees,
+        totalPortfolioRupees,
+        unrealizedPLPct: Math.round(unrealizedPLPct * 100) / 100,
         lastActive: port?.updated_at || p.created_at,
         tradeCount: tradeCountByUser[p.id] || 0,
+        totalTradedValueRupees: Math.round((totalTradedValueByUser[p.id] || 0) / 100),
         coachMsgCount: coachCountByUser[p.id] || 0,
-        lastTradeAt: lastTradeByUser[p.id] || null,
+        holdingCount: holdingCountByUser[p.id] || 0,
+        friendCount: friendCountByUser[p.id] || 0,
+        transferInCount: transferInByUser[p.id] || 0,
+        transferOutCount: transferOutByUser[p.id] || 0,
+        watchlistCount: watchlistCountByUser[p.id] || 0,
+        limitOrderCount: orderCountByUser[p.id] || 0,
+        biasFlagCount: biasFlagCountByUser[p.id] || 0,
+        lastTradeAt: lastTrade || null,
+        daysSinceLastTrade,
       };
     });
 
-    const totalCash = users.reduce((a, u) => a + (u.cashRupees || 0), 0);
+    // Aggregates
+    const totalCashRupees = users.reduce((a, u) => a + (u.cashRupees || 0), 0);
+    const totalHoldingsValueRupees = users.reduce((a, u) => a + (u.holdingsValueRupees || 0), 0);
     const onboardedCount = users.filter(u => u.onboarded).length;
     const activeCount = users.filter(u => u.tradeCount > 0).length;
+    const consentedCount = users.filter(u => u.parentConsented).length;
+
+    // Top-10 leaderboards
+    const top = {
+      biggestPortfolios: [...users].sort((a, b) => b.totalPortfolioRupees - a.totalPortfolioRupees).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.totalPortfolioRupees })),
+      mostActive:        [...users].sort((a, b) => b.tradeCount - a.tradeCount).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.tradeCount })),
+      mostCoached:       [...users].sort((a, b) => b.coachMsgCount - a.coachMsgCount).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.coachMsgCount })),
+      biggestLosers:     [...users].filter(u => u.unrealizedPLPct < 0).sort((a, b) => a.unrealizedPLPct - b.unrealizedPLPct).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.unrealizedPLPct })),
+      biggestGainers:    [...users].filter(u => u.unrealizedPLPct > 0).sort((a, b) => b.unrealizedPLPct - a.unrealizedPLPct).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.unrealizedPLPct })),
+      mostSocial:        [...users].sort((a, b) => b.friendCount - a.friendCount).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.friendCount })),
+      mostBiased:        [...users].sort((a, b) => b.biasFlagCount - a.biasFlagCount).slice(0, 10).map(u => ({ id: u.id, username: u.username, value: u.biasFlagCount })),
+    };
 
     return j(200, {
       aggregates: {
@@ -732,10 +872,36 @@ async function opAdminOverview(req, origin) {
         onboarded: onboardedCount,
         onboardedPct: users.length ? Math.round((onboardedCount / users.length) * 100) : 0,
         active: activeCount,
-        totalCashRupees: totalCash,
+        activePct: users.length ? Math.round((activeCount / users.length) * 100) : 0,
+        consented: consentedCount,
+        totalCashRupees,
+        totalHoldingsValueRupees,
+        totalPortfolioRupees: totalCashRupees + totalHoldingsValueRupees,
         totalTrades: txs.length,
         totalCoachMessages: coachMessages.length,
+        totalHoldings: holdings.length,
+        totalFriendships: friends.length,
+        totalTransfers: transfers.length,
+        totalWatchlistEntries: watchlist.length,
+        totalLimitOrders: orders.length,
       },
+      rowCounts: {
+        profiles: profiles.length,
+        portfolios: ports.length,
+        transactions: txs.length,
+        coach_messages: coachMessages.length,
+        holdings: holdings.length,
+        friends: friends.length,
+        transfers: transfers.length,
+        watchlist: watchlist.length,
+        limit_orders: orders.length,
+        ai_response_cache: aiCacheCountRes,
+        quote_cache: quoteCacheCountRes,
+        dhan_instruments: dhanCountRes,
+        admin_audit_log: auditCountRes,
+        portfolio_history: histCountRes,
+      },
+      top,
       byDay,
       users,
       asOf: new Date().toISOString(),
@@ -752,22 +918,241 @@ async function opAdminUser(req, origin, url) {
   if (!userId) return j(400, { error: "missing_id" }, origin);
 
   try {
-    const [profRes, portRes, holdRes, txRes, coachRes, histRes] = await Promise.all([
+    const [
+      profRes, portRes, holdRes, txRes, coachRes, histRes,
+      watchRes, friendRes, xferRes, orderRes, auditRes,
+    ] = await Promise.all([
       sbAdminFetch(`/rest/v1/profiles?select=*&id=eq.${encodeURIComponent(userId)}&limit=1`),
       sbAdminFetch(`/rest/v1/portfolios?select=*&user_id=eq.${encodeURIComponent(userId)}&limit=1`),
-      sbAdminFetch(`/rest/v1/holdings?select=symbol,qty,avg_cost_paise,first_bought_at&user_id=eq.${encodeURIComponent(userId)}&limit=200`),
-      sbAdminFetch(`/rest/v1/transactions?select=*&user_id=eq.${encodeURIComponent(userId)}&order=ts.desc&limit=200`),
-      sbAdminFetch(`/rest/v1/coach_messages?select=ts,event_type,trigger_symbol,model&user_id=eq.${encodeURIComponent(userId)}&order=ts.desc&limit=200`),
-      sbAdminFetch(`/rest/v1/portfolio_history?select=ts,value_paise&user_id=eq.${encodeURIComponent(userId)}&order=ts.asc&limit=500`),
+      sbAdminFetch(`/rest/v1/holdings?select=*&user_id=eq.${encodeURIComponent(userId)}&limit=500`),
+      sbAdminFetch(`/rest/v1/transactions?select=*&user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc&limit=500`),
+      sbAdminFetch(`/rest/v1/coach_messages?select=*&user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc&limit=500`),
+      sbAdminFetch(`/rest/v1/portfolio_history?select=ts,total_value_paise,cash_paise,holdings_value_paise,source&user_id=eq.${encodeURIComponent(userId)}&order=ts.asc&limit=2000`),
+      sbAdminFetch(`/rest/v1/watchlist?select=symbol,added_at&user_id=eq.${encodeURIComponent(userId)}&order=added_at.desc&limit=200`),
+      sbAdminFetch(`/rest/v1/friends?select=friend_id,created_at&user_id=eq.${encodeURIComponent(userId)}&limit=500`),
+      sbAdminFetch(`/rest/v1/transfers?select=*&or=(sender_id.eq.${encodeURIComponent(userId)},recipient_id.eq.${encodeURIComponent(userId)})&order=created_at.desc&limit=500`),
+      sbAdminFetch(`/rest/v1/limit_orders?select=*&user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc&limit=500`),
+      sbAdminFetch(`/rest/v1/admin_audit_log?select=*&target_user_id=eq.${encodeURIComponent(userId)}&order=ts.desc&limit=200`),
     ]);
+
     const profile = profRes.ok ? (await profRes.json())[0] : null;
+    if (!profile) return j(404, { error: "not_found" }, origin);
     const portfolio = portRes.ok ? (await portRes.json())[0] : null;
     const holdings = holdRes.ok ? await holdRes.json() : [];
     const transactions = txRes.ok ? await txRes.json() : [];
     const coachMessages = coachRes.ok ? await coachRes.json() : [];
     const portfolioHistory = histRes.ok ? await histRes.json() : [];
-    if (!profile) return j(404, { error: "not_found" }, origin);
-    return j(200, { profile, portfolio, holdings, transactions, coachMessages, portfolioHistory }, origin);
+    const watchlist = watchRes.ok ? await watchRes.json() : [];
+    const friends = friendRes.ok ? await friendRes.json() : [];
+    const transfers = xferRes.ok ? await xferRes.json() : [];
+    const limitOrders = orderRes.ok ? await orderRes.json() : [];
+    const adminActionHistory = auditRes.ok ? await auditRes.json() : [];
+
+    // Server-computed report-card metrics (replicates reportCard.js:analyzeBehavior).
+    const reportCard = computeReportCardServerSide({ transactions, coachMessages });
+
+    // Supabase auth metadata (requires Admin API — service-role).
+    const env = globalThis.process?.env || {};
+    let authMeta = null;
+    try {
+      const authRes = await fetch(
+        `${env.SUPABASE_URL.replace(/\/$/, "")}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+        { headers: { "apikey": env.SUPABASE_SERVICE_ROLE_KEY, "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+      );
+      if (authRes.ok) {
+        const a = await authRes.json();
+        authMeta = {
+          lastSignInAt: a.last_sign_in_at,
+          emailConfirmedAt: a.email_confirmed_at,
+          bannedUntil: a.banned_until,
+          phone: a.phone,
+          rawUserMetaData: a.raw_user_meta_data,
+          rawAppMetaData: a.raw_app_meta_data,
+          createdAt: a.created_at,
+          updatedAt: a.updated_at,
+        };
+      }
+    } catch {}
+
+    return j(200, {
+      profile, portfolio, holdings, transactions, coachMessages,
+      portfolioHistory, watchlist, friends, transfers, limitOrders,
+      adminActionHistory, reportCard, authMeta,
+    }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+// Mirrors js/pages/reportCard.js:analyzeBehavior — keeps admin aggregation
+// in sync without needing to run client code.
+function computeReportCardServerSide({ transactions, coachMessages }) {
+  const txs = (transactions || []).slice().sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  let wins = 0, losses = 0, biggestWin = 0, biggestLoss = 0;
+  let totalHoldDays = 0, closedCount = 0;
+  const avgByBuy = {};
+  for (const t of txs) {
+    if (t.side === "BUY") {
+      avgByBuy[t.symbol] = avgByBuy[t.symbol] || { qty: 0, cost: 0, firstAt: t.created_at };
+      avgByBuy[t.symbol].qty += Number(t.qty);
+      avgByBuy[t.symbol].cost += Number(t.qty) * Number(t.price_paise);
+    } else if (t.side === "SELL") {
+      const b = avgByBuy[t.symbol];
+      if (b?.qty) {
+        const avgCost = b.cost / b.qty;
+        const pl = (Number(t.price_paise) - avgCost) * Number(t.qty);
+        if (pl > 0) { wins++; if (pl > biggestWin) biggestWin = pl; }
+        else if (pl < 0) { losses++; if (-pl > biggestLoss) biggestLoss = -pl; }
+        b.qty -= Number(t.qty);
+        b.cost -= avgCost * Number(t.qty);
+        totalHoldDays += (new Date(t.created_at) - new Date(b.firstAt)) / 86400000;
+        closedCount++;
+      }
+    }
+  }
+  const biasFlagSet = new Set();
+  for (const m of coachMessages || []) {
+    (Array.isArray(m.biases) ? m.biases : []).forEach(bb => biasFlagSet.add(bb?.bias || bb));
+    if (Array.isArray(m.payload?.biases)) m.payload.biases.forEach(bb => biasFlagSet.add(bb?.bias || bb));
+  }
+  const totalClosed = wins + losses;
+  const winRate = totalClosed ? wins / totalClosed : 0;
+  return {
+    totalTrades: txs.length,
+    closedTrades: totalClosed,
+    wins, losses, winRate,
+    biggestWinRupees: Math.round(biggestWin / 100),
+    biggestLossRupees: Math.round(biggestLoss / 100),
+    avgHoldDays: closedCount ? Math.round(totalHoldDays / closedCount) : 0,
+    biasFlags: [...biasFlagSet],
+    coachMsgCount: (coachMessages || []).length,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// op: admin-activity-feed — unified event stream
+// GET /api/ai?op=admin-activity-feed&limit=200&before=<ts>&filter=<trades|coach|transfers|orders|signups>
+// -----------------------------------------------------------------------------
+async function opAdminActivityFeed(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get("limit") || "200", 10)));
+  const before = url.searchParams.get("before");
+  const filter = url.searchParams.get("filter") || "all";
+  const beforeQ = before ? `&created_at=lt.${encodeURIComponent(before)}` : "";
+
+  try {
+    const wants = {
+      trades:    filter === "all" || filter === "trades",
+      coach:     filter === "all" || filter === "coach",
+      transfers: filter === "all" || filter === "transfers",
+      orders:    filter === "all" || filter === "orders",
+      signups:   filter === "all" || filter === "signups",
+    };
+    const [txRes, coachRes, xferRes, orderRes, signupRes] = await Promise.all([
+      wants.trades    ? sbAdminFetch(`/rest/v1/transactions?select=id,user_id,symbol,side,qty,price_paise,value_paise,created_at&order=created_at.desc&limit=${limit}${beforeQ}`) : { ok: true, json: async () => [] },
+      wants.coach     ? sbAdminFetch(`/rest/v1/coach_messages?select=id,user_id,event_type,trigger_symbol,model,created_at&order=created_at.desc&limit=${limit}${beforeQ}`) : { ok: true, json: async () => [] },
+      wants.transfers ? sbAdminFetch(`/rest/v1/transfers?select=id,sender_id,recipient_id,amount_paise,status,created_at&order=created_at.desc&limit=${limit}${beforeQ}`) : { ok: true, json: async () => [] },
+      wants.orders    ? sbAdminFetch(`/rest/v1/limit_orders?select=id,user_id,symbol,side,qty,status,created_at&order=created_at.desc&limit=${limit}${beforeQ}`) : { ok: true, json: async () => [] },
+      wants.signups   ? sbAdminFetch(`/rest/v1/profiles?select=id,username,display_name,created_at&order=created_at.desc&limit=${limit}${beforeQ}`) : { ok: true, json: async () => [] },
+    ]);
+    const trades    = txRes.ok ? await txRes.json() : [];
+    const coach     = coachRes.ok ? await coachRes.json() : [];
+    const transfers = xferRes.ok ? await xferRes.json() : [];
+    const orders    = orderRes.ok ? await orderRes.json() : [];
+    const signups   = signupRes.ok ? await signupRes.json() : [];
+
+    const events = [
+      ...trades.map(t => ({ kind: "trade", ts: t.created_at, userId: t.user_id, payload: t })),
+      ...coach.map(c => ({ kind: "coach", ts: c.created_at, userId: c.user_id, payload: c })),
+      ...transfers.map(x => ({ kind: "transfer", ts: x.created_at, userId: x.sender_id || x.recipient_id, payload: x })),
+      ...orders.map(o => ({ kind: "order", ts: o.created_at, userId: o.user_id, payload: o })),
+      ...signups.map(s => ({ kind: "signup", ts: s.created_at, userId: s.id, payload: s })),
+    ].sort((a, b) => (a.ts < b.ts ? 1 : -1)).slice(0, limit);
+
+    return j(200, { events, count: events.length, filter, limit }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// op: admin-ai-cache — browse the ai_response_cache by bucket
+// GET /api/ai?op=admin-ai-cache&bucket=<name>&sort=hit_count|created_at&limit=500
+// -----------------------------------------------------------------------------
+async function opAdminAiCache(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const bucket = (url.searchParams.get("bucket") || "").trim();
+  const sort = url.searchParams.get("sort") === "created_at" ? "created_at" : "hit_count";
+  const limit = Math.max(1, Math.min(2000, parseInt(url.searchParams.get("limit") || "500", 10)));
+  const filter = bucket ? `&bucket=eq.${encodeURIComponent(bucket)}` : "";
+  try {
+    const r = await sbAdminFetch(`/rest/v1/ai_response_cache?select=bucket,cache_key,display_key,payload,created_at,hit_count&order=${sort}.desc&limit=${limit}${filter}`);
+    const rows = r.ok ? await r.json() : [];
+    const bucketStats = {};
+    for (const row of rows) {
+      if (!bucketStats[row.bucket]) bucketStats[row.bucket] = { count: 0, totalHits: 0 };
+      bucketStats[row.bucket].count++;
+      bucketStats[row.bucket].totalHits += (row.hit_count || 0);
+    }
+    return j(200, { rows, bucketStats }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// op: admin-quote-cache — the market tape
+// -----------------------------------------------------------------------------
+async function opAdminQuoteCache(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  try {
+    const r = await sbAdminFetch(`/rest/v1/quote_cache?select=*&order=updated_at.desc&limit=2000`);
+    const rows = r.ok ? await r.json() : [];
+    const now = Date.now();
+    const annotated = rows.map(row => ({
+      ...row,
+      staleMs: row.cached_at_ms ? now - Number(row.cached_at_ms) : null,
+    }));
+    return j(200, { rows: annotated, count: rows.length }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// op: admin-dhan-coverage — symbols in dhan_instruments vs not
+// -----------------------------------------------------------------------------
+async function opAdminDhanCoverage(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  try {
+    const r = await sbAdminFetch(`/rest/v1/dhan_instruments?select=*&limit=5000`);
+    const rows = r.ok ? await r.json() : [];
+    return j(200, { rows, count: rows.length }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// op: admin-audit-log — recent admin actions
+// -----------------------------------------------------------------------------
+async function opAdminAuditLog(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const limit = Math.max(1, Math.min(1000, parseInt(url.searchParams.get("limit") || "200", 10)));
+  const targetUserId = url.searchParams.get("targetUserId") || null;
+  const action = url.searchParams.get("action") || null;
+  let q = `/rest/v1/admin_audit_log?select=*&order=ts.desc&limit=${limit}`;
+  if (targetUserId) q += `&target_user_id=eq.${encodeURIComponent(targetUserId)}`;
+  if (action)       q += `&action=eq.${encodeURIComponent(action)}`;
+  try {
+    const r = await sbAdminFetch(q);
+    const rows = r.ok ? await r.json() : [];
+    return j(200, { rows, count: rows.length }, origin);
   } catch (e) {
     return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
   }
