@@ -617,6 +617,14 @@ export default async function handler(req) {
       case "admin-auth-magiclink": return await opAdminAuthMagicLink(req, origin);
       case "admin-auth-update-email": return await opAdminAuthUpdateEmail(req, origin);
       case "admin-auth-force-confirm": return await opAdminAuthForceConfirm(req, origin);
+      case "admin-vercel-deployments": return await opAdminVercelDeployments(req, origin, url);
+      case "admin-vercel-deployment":  return await opAdminVercelDeployment(req, origin, url);
+      case "admin-vercel-logs":        return await opAdminVercelLogs(req, origin, url);
+      case "admin-vercel-envs":        return await opAdminVercelEnvs(req, origin);
+      case "admin-vercel-env-patch":   return await opAdminVercelEnvPatch(req, origin);
+      case "admin-vercel-redeploy":    return await opAdminVercelRedeploy(req, origin);
+      case "admin-vercel-rollback":    return await opAdminVercelRollback(req, origin);
+      case "admin-vercel-domains":     return await opAdminVercelDomains(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -1933,6 +1941,231 @@ async function opAdminAuthForceConfirm(req, origin) {
   });
   if (!result.ok) return j(502, { error: "confirm_failed" }, origin);
   return j(200, { ok: true }, origin);
+}
+
+// =============================================================================
+// VERCEL PROXY — deployments, logs, envs, redeploy, rollback, domains
+// Requires VERCEL_TOKEN + VERCEL_TEAM_ID (optional) + VERCEL_PROJECT_ID.
+// https://vercel.com/docs/rest-api
+// =============================================================================
+
+const VERCEL_BASE = "https://api.vercel.com";
+
+async function vercelFetch(path, opts = {}) {
+  const env = globalThis.process?.env || {};
+  if (!env.VERCEL_TOKEN) throw new Error("vercel_not_configured");
+  const teamId = env.VERCEL_TEAM_ID;
+  const sep = path.includes("?") ? "&" : "?";
+  const pathWithTeam = teamId ? `${path}${sep}teamId=${encodeURIComponent(teamId)}` : path;
+  return fetch(`${VERCEL_BASE}${pathWithTeam}`, {
+    ...opts,
+    headers: {
+      "Authorization": `Bearer ${env.VERCEL_TOKEN}`,
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+async function opAdminVercelDeployments(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const env = globalThis.process?.env || {};
+  if (!env.VERCEL_TOKEN) return j(501, { error: "vercel_not_configured" }, origin);
+  const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "30", 10)));
+  const target = url.searchParams.get("target") || ""; // 'production' or ''
+  let path = `/v6/deployments?projectId=${encodeURIComponent(env.VERCEL_PROJECT_ID || "")}&limit=${limit}`;
+  if (target === "production") path += "&target=production";
+  try {
+    const r = await vercelFetch(path);
+    if (!r.ok) return j(502, { error: `vercel_http_${r.status}`, detail: await r.text() }, origin);
+    const body = await r.json();
+    return j(200, body, origin);
+  } catch (e) {
+    return j(502, { error: "vercel_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminVercelDeployment(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!id) return j(400, { error: "missing_id" }, origin);
+  try {
+    const r = await vercelFetch(`/v13/deployments/${encodeURIComponent(id)}`);
+    if (!r.ok) return j(502, { error: `vercel_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, await r.json(), origin);
+  } catch (e) {
+    return j(502, { error: "vercel_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminVercelLogs(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!id) return j(400, { error: "missing_id" }, origin);
+  try {
+    const r = await vercelFetch(`/v3/deployments/${encodeURIComponent(id)}/events?builds=1&direction=forward&limit=500`);
+    if (!r.ok) return j(502, { error: `vercel_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, { events: await r.json() }, origin);
+  } catch (e) {
+    return j(502, { error: "vercel_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminVercelEnvs(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const env = globalThis.process?.env || {};
+  if (!env.VERCEL_PROJECT_ID) return j(501, { error: "vercel_project_id_missing" }, origin);
+  try {
+    const r = await vercelFetch(`/v10/projects/${encodeURIComponent(env.VERCEL_PROJECT_ID)}/env`);
+    if (!r.ok) return j(502, { error: `vercel_http_${r.status}`, detail: await r.text() }, origin);
+    const body = await r.json();
+    const envs = Array.isArray(body?.envs) ? body.envs : [];
+    // Mask values: show last 4 chars + length only.
+    const masked = envs.map(e => ({
+      id: e.id,
+      key: e.key,
+      type: e.type,
+      target: e.target,
+      gitBranch: e.gitBranch,
+      comment: e.comment,
+      maskedValue: e.value ? `${"•".repeat(Math.max(0, Math.min(12, e.value.length - 4)))}${e.value.slice(-4)}` : null,
+      valueLength: e.value ? e.value.length : 0,
+      createdAt: e.createdAt,
+      updatedAt: e.updatedAt,
+    }));
+    return j(200, { envs: masked }, origin);
+  } catch (e) {
+    return j(502, { error: "vercel_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminVercelEnvPatch(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const env = globalThis.process?.env || {};
+  if (!env.VERCEL_PROJECT_ID) return j(501, { error: "vercel_project_id_missing" }, origin);
+
+  // Three modes: create, update, delete
+  const action = body?.action;  // 'create' | 'update' | 'delete'
+  const key = String(body?.key || "").trim();
+  const confirm = String(body?.confirm || "").trim();
+  if (!key) return j(400, { error: "missing_key" }, origin);
+  // Destructive-tier: require confirm=key echo for any env var change
+  if (confirm !== key) return j(400, { error: "confirm_mismatch", expected: "confirm must equal the env var name" }, origin);
+
+  const result = await auditWrap(req, {
+    action: `vercel_env_${action}`, targetKind: "env_var", targetId: key, reason,
+  }, async () => {
+    const projId = encodeURIComponent(env.VERCEL_PROJECT_ID);
+    let r;
+    if (action === "create") {
+      r = await vercelFetch(`/v10/projects/${projId}/env`, {
+        method: "POST",
+        body: JSON.stringify({
+          key, value: body?.value || "",
+          type: body?.type || "encrypted",
+          target: body?.target || ["production", "preview", "development"],
+        }),
+      });
+    } else if (action === "update") {
+      const envId = String(body?.envId || "").trim();
+      if (!envId) return { beforeState: null, afterState: { error: "missing_envId" }, ok: false };
+      r = await vercelFetch(`/v9/projects/${projId}/env/${encodeURIComponent(envId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          value: body?.value,
+          target: body?.target || undefined,
+        }),
+      });
+    } else if (action === "delete") {
+      const envId = String(body?.envId || "").trim();
+      if (!envId) return { beforeState: null, afterState: { error: "missing_envId" }, ok: false };
+      r = await vercelFetch(`/v9/projects/${projId}/env/${encodeURIComponent(envId)}`, {
+        method: "DELETE",
+      });
+    } else {
+      return { beforeState: null, afterState: { error: "bad_action" }, ok: false };
+    }
+    const rb = r.ok ? await r.json().catch(() => ({})) : await r.text();
+    // Never log the value — audit log redacts.
+    return { beforeState: { key, action }, afterState: { ok: r.ok, status: r.status }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "env_patch_failed", detail: result.afterState }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminVercelRedeploy(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const id = String(body?.deploymentId || "").trim();
+  if (!id) return j(400, { error: "missing_deploymentId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "vercel_redeploy", targetKind: "deployment", targetId: id, reason,
+  }, async () => {
+    // Vercel's "redeploy" endpoint takes the source deployment and produces a new one.
+    const r = await vercelFetch(`/v13/deployments`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: "stocksaathi-redeploy",
+        deploymentId: id,
+      }),
+    });
+    const rb = r.ok ? await r.json() : await r.text();
+    return { beforeState: { sourceId: id }, afterState: rb, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "redeploy_failed", detail: result.afterState }, origin);
+  return j(200, { ok: true, new_deployment: result.afterState }, origin);
+}
+
+async function opAdminVercelRollback(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const id = String(body?.deploymentId || "").trim();
+  const confirm = String(body?.confirm || "").trim();
+  if (!id) return j(400, { error: "missing_deploymentId" }, origin);
+  if (confirm !== id.slice(-8)) return j(400, { error: "confirm_mismatch", expected: "confirm must equal last 8 chars of deployment id" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "vercel_rollback", targetKind: "deployment", targetId: id, reason,
+  }, async () => {
+    // Vercel "promote" / rollback uses the alias API to point production
+    // alias at an old deployment.
+    const env = globalThis.process?.env || {};
+    const r = await vercelFetch(`/v9/projects/${encodeURIComponent(env.VERCEL_PROJECT_ID || "")}/promote/${encodeURIComponent(id)}`, {
+      method: "POST",
+    });
+    return { beforeState: { target_deployment: id }, afterState: { ok: r.ok, status: r.status }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "rollback_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminVercelDomains(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const env = globalThis.process?.env || {};
+  if (!env.VERCEL_PROJECT_ID) return j(501, { error: "vercel_project_id_missing" }, origin);
+  try {
+    const r = await vercelFetch(`/v9/projects/${encodeURIComponent(env.VERCEL_PROJECT_ID)}/domains`);
+    if (!r.ok) return j(502, { error: `vercel_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, await r.json(), origin);
+  } catch (e) {
+    return j(502, { error: "vercel_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
 }
 
 // -----------------------------------------------------------------------------
