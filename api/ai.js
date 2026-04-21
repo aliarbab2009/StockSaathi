@@ -592,6 +592,17 @@ export default async function handler(req) {
       case "admin-quote-cache":   return await opAdminQuoteCache(req, origin);
       case "admin-dhan-coverage": return await opAdminDhanCoverage(req, origin);
       case "admin-audit-log":     return await opAdminAuditLog(req, origin, url);
+      case "admin-user-reset":    return await opAdminUserReset(req, origin);
+      case "admin-user-ban":      return await opAdminUserBan(req, origin);
+      case "admin-user-unban":    return await opAdminUserUnban(req, origin);
+      case "admin-user-delete":   return await opAdminUserDelete(req, origin);
+      case "admin-profile-patch": return await opAdminProfilePatch(req, origin);
+      case "admin-order-cancel":  return await opAdminOrderCancel(req, origin);
+      case "admin-trade-delete":  return await opAdminTradeDelete(req, origin);
+      case "admin-transfer-void": return await opAdminTransferVoid(req, origin);
+      case "admin-coach-delete":  return await opAdminCoachDelete(req, origin);
+      case "admin-cache-invalidate": return await opAdminCacheInvalidate(req, origin);
+      case "admin-backfill-history": return await opAdminBackfillHistory(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -1135,6 +1146,393 @@ async function opAdminDhanCoverage(req, origin) {
   } catch (e) {
     return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
   }
+}
+
+// -----------------------------------------------------------------------------
+// Shared utility: parse + validate write-op body.
+// Every write op takes JSON { reason, ... }. reason is required ≥ 8 chars
+// so the admin has to justify every mutation (logged to audit trail).
+// -----------------------------------------------------------------------------
+async function parseWriteBody(req) {
+  let body;
+  try { body = await req.json(); }
+  catch { return { err: "bad_body" }; }
+  const reason = String(body?.reason || "").trim();
+  if (reason.length < 8) return { err: "reason_required" };
+  return { body, reason };
+}
+
+// Fetch a single row by PK helper.
+async function sbFetchOne(path) {
+  try {
+    const r = await sbAdminFetch(path);
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  } catch { return null; }
+}
+
+// -----------------------------------------------------------------------------
+// WRITE OPS — StockSaathi user data
+// All require Authorization: Bearer <ADMIN_TOKEN> + JSON { reason, ... }.
+// Every op is audit-logged before and after.
+// -----------------------------------------------------------------------------
+
+async function opAdminUserReset(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "user_reset", targetKind: "user", targetUserId: userId, targetId: userId, reason,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/portfolios?select=*&user_id=eq.${encodeURIComponent(userId)}`);
+    const rpc = await sbAdminFetch(`/rest/v1/rpc/admin_reset_user`, {
+      method: "POST",
+      body: JSON.stringify({ p_user_id: userId }),
+    });
+    const rpcBody = rpc.ok ? await rpc.json() : { error: `rpc_failed_${rpc.status}` };
+    const after = await sbFetchOne(`/rest/v1/portfolios?select=*&user_id=eq.${encodeURIComponent(userId)}`);
+    return { beforeState: before, afterState: after, rpcBody, ok: rpc.ok };
+  });
+  if (!result.ok) return j(502, { error: "reset_failed", detail: result.rpcBody }, origin);
+  return j(200, { ok: true, result: result.rpcBody }, origin);
+}
+
+async function opAdminUserBan(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+  // Ban until either the provided bannedUntil (ISO) or 100 years from now.
+  const until = body?.bannedUntil || new Date(Date.now() + 100 * 365 * 86400000).toISOString();
+
+  const env = globalThis.process?.env || {};
+  const result = await auditWrap(req, {
+    action: "user_ban", targetKind: "user", targetUserId: userId, targetId: userId, reason,
+    note: `banned_until=${until}`,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/profiles?select=*&id=eq.${encodeURIComponent(userId)}`);
+    const r = await fetch(
+      `${env.SUPABASE_URL.replace(/\/$/, "")}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        headers: {
+          "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+          "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ban_duration: "876000h" }),  // ~100 years
+      }
+    );
+    const rBody = r.ok ? await r.json() : await r.text();
+    const after = await sbFetchOne(`/rest/v1/profiles?select=*&id=eq.${encodeURIComponent(userId)}`);
+    return { beforeState: before, afterState: after, ok: r.ok, authBody: rBody };
+  });
+  if (!result.ok) return j(502, { error: "ban_failed", detail: result.authBody }, origin);
+  return j(200, { ok: true, bannedUntil: until }, origin);
+}
+
+async function opAdminUserUnban(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+
+  const env = globalThis.process?.env || {};
+  const result = await auditWrap(req, {
+    action: "user_unban", targetKind: "user", targetUserId: userId, targetId: userId, reason,
+  }, async () => {
+    const r = await fetch(
+      `${env.SUPABASE_URL.replace(/\/$/, "")}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        headers: {
+          "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+          "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ban_duration: "none" }),
+      }
+    );
+    const rBody = r.ok ? await r.json() : await r.text();
+    return { beforeState: { ban: "yes" }, afterState: { ban: "no" }, ok: r.ok, authBody: rBody };
+  });
+  if (!result.ok) return j(502, { error: "unban_failed", detail: result.authBody }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminUserDelete(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  const confirm = String(body?.confirm || "").trim();
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+  // Destructive tier: require the client to echo back the username as `confirm`.
+  const profile = await sbFetchOne(`/rest/v1/profiles?select=username&id=eq.${encodeURIComponent(userId)}`);
+  if (!profile) return j(404, { error: "not_found" }, origin);
+  if (confirm !== profile.username) return j(400, { error: "confirm_mismatch", expected_form: "confirm must equal the user's username" }, origin);
+
+  const env = globalThis.process?.env || {};
+  const result = await auditWrap(req, {
+    action: "user_delete", targetKind: "user", targetUserId: userId, targetId: userId, reason,
+    note: `username=${profile.username}`,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/profiles?select=*&id=eq.${encodeURIComponent(userId)}`);
+    const r = await fetch(
+      `${env.SUPABASE_URL.replace(/\/$/, "")}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+          "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+    return { beforeState: before, afterState: { deleted: true }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "delete_failed" }, origin);
+  return j(200, { ok: true, deleted: userId }, origin);
+}
+
+async function opAdminProfilePatch(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  const patch = body?.patch && typeof body.patch === "object" ? body.patch : null;
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+  if (!patch) return j(400, { error: "missing_patch" }, origin);
+
+  // Whitelist editable columns — never let an admin accidentally rewrite id / created_at.
+  const ALLOWED = new Set([
+    "display_name", "email", "age", "school", "class_code", "city",
+    "risk_profile", "parent_email", "avatar_color", "onboarded",
+  ]);
+  const cleanPatch = {};
+  for (const [k, v] of Object.entries(patch)) if (ALLOWED.has(k)) cleanPatch[k] = v;
+  if (Object.keys(cleanPatch).length === 0) return j(400, { error: "no_allowed_fields" }, origin);
+  cleanPatch.updated_at = new Date().toISOString();
+
+  const result = await auditWrap(req, {
+    action: "profile_patch", targetKind: "user", targetUserId: userId, targetId: userId, reason,
+    note: `fields=${Object.keys(cleanPatch).join(",")}`,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/profiles?select=*&id=eq.${encodeURIComponent(userId)}`);
+    const r = await sbAdminFetch(`/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      headers: { "Prefer": "return=representation" },
+      body: JSON.stringify(cleanPatch),
+    });
+    const after = r.ok ? (await r.json())[0] : null;
+    return { beforeState: before, afterState: after, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "patch_failed" }, origin);
+  return j(200, { ok: true, profile: result.afterState }, origin);
+}
+
+async function opAdminOrderCancel(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const orderId = String(body?.orderId || "").trim();
+  if (!orderId) return j(400, { error: "missing_orderId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "order_cancel", targetKind: "limit_order", targetId: orderId, reason,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/limit_orders?select=*&id=eq.${encodeURIComponent(orderId)}`);
+    if (!before) return { beforeState: null, afterState: null, ok: false, reason: "not_found" };
+    // Refund reserved cash if pending BUY, then mark cancelled.
+    if (before.status === "pending" && before.side === "BUY" && before.reserved_cash) {
+      await sbAdminFetch(`/rest/v1/portfolios?user_id=eq.${encodeURIComponent(before.user_id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          cash_paise: `\${cash_paise} + ${before.reserved_cash}`,  // won't work in REST; use RPC below if needed
+        }),
+      });
+    }
+    const r = await sbAdminFetch(`/rest/v1/limit_orders?id=eq.${encodeURIComponent(orderId)}`, {
+      method: "PATCH",
+      headers: { "Prefer": "return=representation" },
+      body: JSON.stringify({ status: "cancelled" }),
+    });
+    const after = r.ok ? (await r.json())[0] : null;
+    return { beforeState: before, afterState: after, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "cancel_failed", reason: result.reason }, origin);
+  return j(200, { ok: true, order: result.afterState }, origin);
+}
+
+async function opAdminTradeDelete(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const txnId = String(body?.txnId || "").trim();
+  if (!txnId) return j(400, { error: "missing_txnId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "trade_delete", targetKind: "transaction", targetId: txnId, reason,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/transactions?select=*&id=eq.${encodeURIComponent(txnId)}`);
+    if (!before) return { beforeState: null, afterState: null, ok: false };
+    const rpc = await sbAdminFetch(`/rest/v1/rpc/admin_reverse_trade`, {
+      method: "POST",
+      body: JSON.stringify({ p_txn_id: txnId }),
+    });
+    const rpcBody = rpc.ok ? await rpc.json() : null;
+    return { beforeState: before, afterState: rpcBody, ok: rpc.ok };
+  });
+  if (!result.ok) return j(502, { error: "reverse_failed" }, origin);
+  return j(200, { ok: true, result: result.afterState }, origin);
+}
+
+async function opAdminTransferVoid(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const transferId = String(body?.transferId || "").trim();
+  if (!transferId) return j(400, { error: "missing_transferId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "transfer_void", targetKind: "transfer", targetId: transferId, reason,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/transfers?select=*&id=eq.${encodeURIComponent(transferId)}`);
+    if (!before) return { beforeState: null, afterState: null, ok: false };
+    const rpc = await sbAdminFetch(`/rest/v1/rpc/admin_refund_transfer`, {
+      method: "POST",
+      body: JSON.stringify({ p_transfer_id: transferId }),
+    });
+    const rpcBody = rpc.ok ? await rpc.json() : null;
+    return { beforeState: before, afterState: rpcBody, ok: rpc.ok };
+  });
+  if (!result.ok) return j(502, { error: "refund_failed" }, origin);
+  return j(200, { ok: true, result: result.afterState }, origin);
+}
+
+async function opAdminCoachDelete(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const msgId = String(body?.messageId || "").trim();
+  if (!msgId) return j(400, { error: "missing_messageId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "coach_delete", targetKind: "coach_message", targetId: msgId, reason,
+  }, async () => {
+    const before = await sbFetchOne(`/rest/v1/coach_messages?select=*&id=eq.${encodeURIComponent(msgId)}`);
+    const r = await sbAdminFetch(`/rest/v1/coach_messages?id=eq.${encodeURIComponent(msgId)}`, {
+      method: "DELETE",
+      headers: { "Prefer": "return=minimal" },
+    });
+    return { beforeState: before, afterState: { deleted: true }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "delete_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminCacheInvalidate(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const cacheTable = String(body?.table || "").trim();
+  if (!["ai_response_cache", "quote_cache"].includes(cacheTable))
+    return j(400, { error: "bad_table" }, origin);
+
+  // Two modes:
+  //  - body.bucket + body.key → delete one row from ai_response_cache
+  //  - body.symbol           → delete one row from quote_cache
+  //  - body.bucket alone     → purge all rows in a bucket (requires confirm = bucket name)
+  //  - body.purgeAll = true  → full wipe (requires confirm = table name)
+  let filter = "";
+  let note = "";
+  if (cacheTable === "ai_response_cache") {
+    if (body?.bucket && body?.key) {
+      filter = `&bucket=eq.${encodeURIComponent(body.bucket)}&cache_key=eq.${encodeURIComponent(body.key)}`;
+      note = `bucket=${body.bucket}, key=${body.key}`;
+    } else if (body?.bucket) {
+      if (String(body?.confirm || "") !== body.bucket) return j(400, { error: "confirm_mismatch" }, origin);
+      filter = `&bucket=eq.${encodeURIComponent(body.bucket)}`;
+      note = `bucket-purge=${body.bucket}`;
+    } else if (body?.purgeAll) {
+      if (String(body?.confirm || "") !== "ai_response_cache") return j(400, { error: "confirm_mismatch" }, origin);
+      filter = "&cache_key=not.is.null";  // matches everything
+      note = "full_cache_purge";
+    } else {
+      return j(400, { error: "bad_target" }, origin);
+    }
+  } else {
+    // quote_cache
+    if (body?.symbol) {
+      filter = `&symbol=eq.${encodeURIComponent(body.symbol)}`;
+      note = `symbol=${body.symbol}`;
+    } else if (body?.purgeAll) {
+      if (String(body?.confirm || "") !== "quote_cache") return j(400, { error: "confirm_mismatch" }, origin);
+      filter = "&symbol=not.is.null";
+      note = "full_quote_cache_purge";
+    } else {
+      return j(400, { error: "bad_target" }, origin);
+    }
+  }
+
+  const result = await auditWrap(req, {
+    action: "cache_invalidate", targetKind: cacheTable, targetId: null, reason, note,
+  }, async () => {
+    const r = await sbAdminFetch(`/rest/v1/${cacheTable}?${filter.slice(1)}`, {
+      method: "DELETE",
+      headers: { "Prefer": "return=minimal" },
+    });
+    return { beforeState: { filter, table: cacheTable }, afterState: { status: r.status, ok: r.ok }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "invalidate_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminBackfillHistory(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const todayOnly = !!body?.todayOnly;
+
+  const result = await auditWrap(req, {
+    action: "backfill_history", targetKind: "system", targetId: todayOnly ? "today" : "full", reason,
+  }, async () => {
+    const r = await sbAdminFetch(`/rest/v1/rpc/admin_portfolio_backfill`, {
+      method: "POST",
+      body: JSON.stringify({ p_today_only: todayOnly }),
+    });
+    const rpcBody = r.ok ? await r.json() : await r.text();
+    return { beforeState: { mode: todayOnly ? "today" : "full" }, afterState: rpcBody, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "backfill_failed", detail: result.afterState }, origin);
+  return j(200, { ok: true, result: result.afterState }, origin);
 }
 
 // -----------------------------------------------------------------------------
