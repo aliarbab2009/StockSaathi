@@ -137,13 +137,10 @@ function providerDescriptors() {
       key: env.CEREBRAS_API_KEY,
       model: CEREBRAS_MODEL,
     },
-    groq: {
-      label: "groq",
-      enabled: () => !!env.GROQ_API_KEY,
-      url: "https://api.groq.com/openai/v1/chat/completions",
-      key: env.GROQ_API_KEY,
-      model: GROQ_MODEL,
-    },
+    // Groq removed from the descriptor list by request — user explicitly
+    // does not want Groq/Llama ever serving responses, even as a last-resort
+    // fallback. If every Gemini/OpenAI/Cerebras upstream fails, the chat
+    // returns a clean error rather than quietly downgrading to Llama.
   };
 }
 
@@ -159,14 +156,14 @@ function providerDescriptors() {
 function chainFor(profile) {
   switch (profile) {
     case "fast":
-      return ["gemini_fast", "cerebras", "groq", "gemini_pro", "openai"];
+      return ["gemini_fast", "cerebras", "gemini_pro", "openai"];
     case "creative":
-      return ["openai", "gemini_pro", "gemini_fast", "groq"];
+      return ["openai", "gemini_pro", "gemini_fast"];
     case "json":
-      return ["openai", "gemini_pro", "gemini_fast", "groq"];
+      return ["openai", "gemini_pro", "gemini_fast"];
     case "reasoning":
     default:
-      return ["gemini_pro", "openai", "gemini_fast", "cerebras", "groq"];
+      return ["gemini_pro", "openai", "gemini_fast", "cerebras"];
   }
 }
 

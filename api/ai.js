@@ -124,19 +124,18 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
     ? `https://${subdomain}aiplatform.googleapis.com/v1/projects/${vertexProject}/locations/${vertexRegion}/endpoints/openapi/chat/completions`
     : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-  // Order by profile — same logic as /api/chat.
+  // Order by profile. Groq removed entirely by user request — Gemini is
+  // the only acceptable provider, with OpenAI as a paid-upgrade fallback
+  // for users who set OPENAI_API_KEY. No Llama anywhere.
   if (profile === "fast") {
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
-    if (env.GROQ_API_KEY)   providers.push({ url: "https://api.groq.com/openai/v1/chat/completions", key: env.GROQ_API_KEY, model: groqModel, label: "groq" });
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
     if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
   } else {
-    // reasoning / json / creative — prefer Gemini Pro first (smart + fast),
-    // OpenAI fallback, Gemini Flash, Groq floor.
+    // reasoning / json / creative — Gemini Pro first, Flash fallback, OpenAI last.
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
-    if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
-    if (env.GROQ_API_KEY)   providers.push({ url: "https://api.groq.com/openai/v1/chat/completions", key: env.GROQ_API_KEY, model: groqModel, label: "groq" });
+    if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
   }
   if (!providers.length) throw new Error("no_provider_configured");
 
