@@ -85,7 +85,11 @@ export function mountNav() {
           </button>
           ${themeToggleHtml(state.settings.theme)}
           ${state.isAuthed ? `
-            <div class="market-status" title="${ms.istTime}"><span class="dot ${ms.open ? "" : "closed"}"></span><span class="muted">${ms.open ? "Live" : "Closed"}</span></div>
+            <div class="market-status" title="NSE · ${escapeHtml(ms.istDate)} · ${escapeHtml(ms.istTime)}${ms.isHoliday ? " · Holiday" : ""}${ms.state === "closed" && ms.nextOpenLabel ? " · " + escapeHtml(ms.nextOpenLabel) : ""}">
+              <span class="dot ${ms.open ? "" : ms.state === "pre-open" ? "preopen" : "closed"}"></span>
+              <span class="muted">NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}</span>
+              <span class="dim text-xs" style="margin-left: 6px;">${escapeHtml(ms.istTime)}</span>
+            </div>
             <div class="nav-cash" aria-label="Portfolio value">
               <span class="label">Portfolio</span>
               <span class="val tabular">${formatRupees(pfValue, { compact: true })}</span>
@@ -200,7 +204,9 @@ function renderDrawer(state, allLinks, active, pfValue, ms) {
         <div class="muted text-xs" style="text-transform: uppercase; letter-spacing: 0.05em;">Portfolio</div>
         <div class="val">${formatRupees(pfValue, { compact: true })}</div>
         <div class="text-xs ${ms.open ? "up" : "muted"}" style="margin-top: 4px;">
-          ${ms.open ? "● Market open" : "○ Market closed"} · ${ms.istTime}
+          ${ms.open ? "● NSE open" : ms.state === "pre-open" ? "◐ NSE pre-open" : "○ NSE closed"} · ${ms.istDate} · ${ms.istTime}
+          ${ms.state !== "open" && ms.nextOpenLabel ? `<br><span class="dim">${ms.nextOpenLabel}</span>` : ""}
+          ${ms.isHoliday ? '<br><span class="dim">Holiday today</span>' : ""}
         </div>
       </div>
     ` : ""}

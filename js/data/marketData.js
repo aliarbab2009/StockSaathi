@@ -94,9 +94,10 @@ export function getCachedQuotes(symbols) {
 }
 
 export function getDataSource() {
-  const s = getState().settings;
-  if (s.finnhubKey) return { name: "Finnhub + Yahoo", tier: "premium" };
-  return { name: "Yahoo Finance", tier: "public" };
+  // Branded "NSE" — the underlying upstream (Yahoo / Finnhub) is sourcing
+  // NSE tick data itself, and the user only cares that the numbers reflect
+  // NSE. Calling it "Yahoo Finance" was technically accurate but confusing.
+  return { name: "NSE", tier: "public" };
 }
 
 function normalizeFromApi(payload, symbol) {

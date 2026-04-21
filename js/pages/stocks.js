@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS } from "../data/universe.js";
-import { getTodayChange, getCloses } from "../data/prices.js";
+import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
@@ -331,13 +331,24 @@ function renderStockCard(inst, state) {
   const price = hasLive ? quote.pricePaise : (inst.price ?? null);
   const change = quote?.changePct ?? (inst.price != null ? getTodayChange(inst.symbol) : 0);
   const isWatched = state.watchlist.includes(inst.symbol);
-  // Badge logic. LIVE = fresh real feed. DELAYED = feed value older than
-  // expected during market hours. SYNCING = no live quote yet + we have
-  // only a static seed price. NAV = mutual fund, end-of-day only (no live
-  // feed exists for MF NAVs — showing LIVE would lie).
+  // Badge logic:
+  //   market-closed  → CLOSED pill with last-close time (even if we have a quote
+  //                    cached from the final trading tick, it's by definition
+  //                    not live anymore outside session hours)
+  //   MF             → NAV (end-of-day; no intraday NSE feed for mutual funds)
+  //   live & fresh   → LIVE
+  //   live & stale   → DELAYED Xm old
+  //   seeded only    → SYNCING
+  const ms = marketStatus();
   let badge = "";
   if (inst.kind === "MF") {
     badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV — refreshed once per day after market close">NAV</span>`;
+  } else if (ms.state !== "open") {
+    const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
+    const hint = ms.state === "pre-open"
+      ? `Pre-open session · opens ${ms.istTime}`
+      : (ms.lastCloseLabel || "Market closed");
+    badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="${escapeAttr(hint)}">${lbl}</span>`;
   } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
     if (quote.stale) {
       const ageLabel = quote.staleAgeMinutes >= 60
@@ -346,7 +357,7 @@ function renderStockCard(inst, state) {
       const asOf = quote.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
       badge = `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Data as of ${asOf} IST — upstream feed is behind">DELAYED ${ageLabel}</span>`;
     } else {
-      badge = `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;">LIVE</span>`;
+      badge = `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
     }
   } else if (inst.price != null) {
     badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing — price shown is a reference, not current">SYNCING</span>`;

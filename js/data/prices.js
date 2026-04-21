@@ -8,6 +8,7 @@
 // =============================================================================
 
 import { INSTRUMENTS, INSTRUMENT_BY_SYMBOL } from "./universe.js";
+import { serverNow, isServerTimeSynced } from "./serverTime.js";
 
 const TRADING_DAYS = 365;   // ~18 months calendar = ~365 trading days
 const SECONDS_PER_DAY = 86400000;
@@ -192,34 +193,170 @@ export function get52wRange(symbol) {
   return { hi, lo };
 }
 
-/**
- * Return a short friendly market status — for nav bar ticker
- */
-export function marketStatus() {
-  const now = new Date();
-  // Use Intl.DateTimeFormat with Asia/Kolkata — bulletproof against
-  // timezone maths errors around UTC day boundaries. (The old manual
-  // utcMinutes + 330 trick had a dead-code branch and drifted at midnight.)
+// NSE trading holidays (2026) — hardcoded since NSE doesn't expose a
+// public holiday API and official dates are a short list. Keep as
+// YYYY-MM-DD in IST. Update annually.
+// Source: NSE 2026 trading holiday circular.
+const NSE_HOLIDAYS_2026 = new Set([
+  "2026-01-26",  // Republic Day
+  "2026-02-17",  // Mahashivratri
+  "2026-03-03",  // Holi
+  "2026-03-26",  // Ram Navami
+  "2026-04-03",  // Good Friday
+  "2026-04-14",  // Ambedkar Jayanti
+  "2026-05-01",  // Maharashtra Day
+  "2026-08-15",  // Independence Day (Sat — non-effect)
+  "2026-08-26",  // Janmashtami
+  "2026-09-14",  // Ganesh Chaturthi (approx)
+  "2026-10-02",  // Gandhi Jayanti
+  "2026-10-21",  // Diwali (Laxmi Puja; special muhurat session happens in evening)
+  "2026-11-04",  // Guru Nanak Jayanti
+  "2026-12-25",  // Christmas
+]);
+
+// 9:15 IST → 15:30 IST for continuous trading (normal session).
+// 9:00 → 9:15 is pre-open session — orders accepted but no trading.
+const OPEN_MIN = 9 * 60 + 15;
+const CLOSE_MIN = 15 * 60 + 30;
+const PREOPEN_MIN = 9 * 60;
+
+function istParts(date) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata",
     hour: "2-digit", minute: "2-digit", hour12: false,
     weekday: "short", year: "numeric", month: "2-digit", day: "2-digit",
   });
-  const parts = fmt.formatToParts(now).reduce((acc, p) => {
-    acc[p.type] = p.value;
-    return acc;
-  }, {});
-  const istHours = parseInt(parts.hour, 10);
-  const istMin = parseInt(parts.minute, 10);
-  const istMinutes = istHours * 60 + istMin;
-  const weekdayShort = (parts.weekday || "").toLowerCase();
-  const isWeekday = !["sat", "sun"].includes(weekdayShort);
-  const openMin = 9 * 60 + 15;   // 9:15 IST
-  const closeMin = 15 * 60 + 30; // 15:30 IST
-  const open = isWeekday && istMinutes >= openMin && istMinutes < closeMin;
+  const p = fmt.formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
   return {
-    open,
-    label: open ? "Market Open" : "Market Closed",
-    istTime: `${String(istHours).padStart(2, "0")}:${String(istMin).padStart(2, "0")} IST`,
+    y: p.year,
+    m: p.month,
+    d: p.day,
+    ymd: `${p.year}-${p.month}-${p.day}`,
+    weekday: (p.weekday || "").toLowerCase(),   // "mon" .. "sun"
+    hour: parseInt(p.hour, 10),
+    min: parseInt(p.minute, 10),
+    minutes: parseInt(p.hour, 10) * 60 + parseInt(p.minute, 10),
   };
 }
+
+function isTradingDay(parts) {
+  if (parts.weekday === "sat" || parts.weekday === "sun") return false;
+  if (NSE_HOLIDAYS_2026.has(parts.ymd)) return false;
+  return true;
+}
+
+function labelIstTime(minutes) {
+  const h24 = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const h12 = ((h24 + 11) % 12) + 1;
+  const ampm = h24 < 12 ? "AM" : "PM";
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+// Pretty day offset: "today", "Mon", "Tue 28 Apr". Used in open-next labels.
+function labelDay(parts, todayParts) {
+  if (parts.ymd === todayParts.ymd) return "today";
+  return {
+    mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun",
+  }[parts.weekday] || parts.weekday;
+}
+
+// Compute the next IST trading-day open and last IST trading-day close
+// around a reference serverDate. Used for "Opens Mon 9:15 AM" / "Closed
+// at 3:30 PM today" labels.
+function findBoundary(serverDate, direction /* +1 = next open, -1 = last close */) {
+  // Walk up to 10 days to skip weekends + holidays.
+  for (let i = direction === 1 ? 0 : 0; i < 10; i++) {
+    const d = new Date(serverDate.getTime() + direction * i * 86400000);
+    const p = istParts(d);
+    if (!isTradingDay(p)) continue;
+    // Same-day open/close is only a boundary if it's actually ahead of / behind now.
+    const edgeMin = direction === 1 ? OPEN_MIN : CLOSE_MIN;
+    const nowParts = istParts(serverDate);
+    if (p.ymd === nowParts.ymd) {
+      if (direction === 1 && nowParts.minutes < edgeMin) {
+        return { parts: p, minutes: edgeMin };
+      }
+      if (direction === -1 && nowParts.minutes >= edgeMin) {
+        return { parts: p, minutes: edgeMin };
+      }
+      continue;
+    }
+    return { parts: p, minutes: edgeMin };
+  }
+  return null;
+}
+
+/**
+ * Rich NSE market status. Uses server-authoritative time via serverNow()
+ * when available, falls back to local clock otherwise.
+ *
+ * Returns:
+ *   state       — "open" | "pre-open" | "closed"
+ *   open        — boolean (true only for state === "open")
+ *   label       — "Market Open" | "Pre-Open Session" | "Market Closed"
+ *   shortLabel  — "LIVE" | "PRE-OPEN" | "CLOSED" (for tight pills)
+ *   istTime     — "14:32 IST"
+ *   istDate     — "Tue, 21 Apr"
+ *   istDay      — "tue" (lowercase short weekday)
+ *   isHoliday   — true if NSE is closed for a listed holiday today
+ *   nextOpenAt       — Date of next market open (or null if inside open window)
+ *   nextOpenLabel    — "Opens Tue 9:15 AM" etc.
+ *   lastCloseLabel   — "Closed at 3:30 PM today" / "Closed Fri 3:30 PM"
+ *   degraded    — true when we're using local clock (server-time not yet synced)
+ */
+export function marketStatus(opts = {}) {
+  const now = serverNow();
+  const degraded = !isServerTimeSynced();
+
+  const nowParts = istParts(now);
+  const tradingDay = isTradingDay(nowParts);
+  const isHoliday = tradingDay === false && nowParts.weekday !== "sat" && nowParts.weekday !== "sun"
+    ? NSE_HOLIDAYS_2026.has(nowParts.ymd)
+    : false;
+
+  let state;
+  if (tradingDay && nowParts.minutes >= OPEN_MIN && nowParts.minutes < CLOSE_MIN) state = "open";
+  else if (tradingDay && nowParts.minutes >= PREOPEN_MIN && nowParts.minutes < OPEN_MIN) state = "pre-open";
+  else state = "closed";
+
+  const nextOpen = state === "open" ? null : findBoundary(now, +1);
+  const lastClose = findBoundary(now, -1);
+
+  const nextOpenLabel = nextOpen
+    ? `Opens ${labelDay(nextOpen.parts, nowParts)} ${labelIstTime(nextOpen.minutes)}`
+    : "";
+  const lastCloseLabel = lastClose
+    ? `Closed at ${labelIstTime(lastClose.minutes)} ${labelDay(lastClose.parts, nowParts) === "today" ? "today" : labelDay(lastClose.parts, nowParts)}`
+    : "";
+
+  // Compose nextOpenAt Date from IST parts so callers can do countdowns.
+  let nextOpenAt = null;
+  if (nextOpen) {
+    const h = Math.floor(nextOpen.minutes / 60);
+    const mm = nextOpen.minutes % 60;
+    // Build from IST parts: 'YYYY-MM-DDTHH:mm+05:30' → Date
+    nextOpenAt = new Date(`${nextOpen.parts.ymd}T${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00+05:30`);
+  }
+
+  const weekdayCap = nowParts.weekday
+    ? nowParts.weekday[0].toUpperCase() + nowParts.weekday.slice(1)
+    : "";
+  const monthName = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(nowParts.m,10)-1] || "";
+
+  return {
+    state,
+    open: state === "open",
+    label: state === "open" ? "Market Open" : state === "pre-open" ? "Pre-Open Session" : "Market Closed",
+    shortLabel: state === "open" ? "LIVE" : state === "pre-open" ? "PRE-OPEN" : "CLOSED",
+    istTime: `${labelIstTime(nowParts.minutes)} IST`,
+    istDate: `${weekdayCap}, ${parseInt(nowParts.d, 10)} ${monthName}`,
+    istDay: nowParts.weekday,
+    isHoliday,
+    nextOpenAt,
+    nextOpenLabel,
+    lastCloseLabel,
+    degraded,
+  };
+}
+

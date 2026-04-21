@@ -582,9 +582,19 @@ export default async function handler(req) {
       case "report-card":         if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opReportCard(req, origin);
       case "crash-suggestions":   return await opCrashSuggestions(req, origin);
       case "command":             if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opCommand(req, origin);
+      case "time":                return opTime(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
     return j(500, { error: "handler_exception", detail: String(e.message).slice(0, 120) }, origin);
   }
+}
+
+// -----------------------------------------------------------------------------
+// op: time — tiny, authoritative server time. The client uses this to
+// compute an offset so the market-open / market-closed badge can't be
+// faked by changing the user's system clock.
+// -----------------------------------------------------------------------------
+function opTime(req, origin) {
+  return j(200, { ms: Date.now() }, origin);
 }

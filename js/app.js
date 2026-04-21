@@ -11,6 +11,7 @@ import { bootSync } from "./db/sync.js";
 import { startLimitMatcher } from "./features/limitOrders.js";
 import { mountAiExplainer } from "./features/aiExplainer.js";
 import { mountCommandPalette, openCommandPalette } from "./components/commandPalette.js";
+import { startServerTimeSync } from "./data/serverTime.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -20,6 +21,10 @@ import { mountCommandPalette, openCommandPalette } from "./components/commandPal
 
 // Load user-scoped state on boot (local immediately)
 switchUser();
+
+// Kick off the server-time sync early so the market-status badge has a
+// trusted clock within a second of first paint. Non-blocking.
+startServerTimeSync();
 
 // Mount components
 mountNav();

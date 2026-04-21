@@ -7,7 +7,7 @@ import { getInstrument } from "../data/universe.js";
 import { getQuote, getHistory, subscribeToQuotes, quoteAge, getFundamentals } from "../data/marketData.js";
 import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
-import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange } from "../data/prices.js";
+import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange, marketStatus } from "../data/prices.js";
 import { candleChart, lineChart, stockChart, attachStockChartHover } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import {
@@ -149,6 +149,7 @@ function render(inst, symbol) {
   const dataSource = liveQuote?.source === "yahoo" || liveQuote?.source === "finnhub"
     ? { label: "Live", live: true }
     : { label: "Cached", live: false };
+  const ms = marketStatus();
 
   main.innerHTML = `
     <div style="margin-bottom: var(--sp-5);">
@@ -168,7 +169,10 @@ function render(inst, symbol) {
               <h1 style="font-size: var(--text-2xl); margin-bottom: 2px;">${escapeHtml(inst.name)}</h1>
               <div class="dim text-xs">
                 ${symbol} · ${inst.kind === "MF" ? "Mutual Fund" : "NSE"} · ${escapeHtml(inst.sector)}
-                <span class="data-badge" style="margin-left: 8px;"><span class="dot ${dataSource.live ? "" : "offline"}"></span> ${dataSource.label}</span>
+                <span class="data-badge ${ms.state}" style="margin-left: 8px;" title="${escapeAttr("NSE · " + ms.istDate + " · " + ms.istTime + (ms.state !== "open" && ms.nextOpenLabel ? " · " + ms.nextOpenLabel : "") + (ms.isHoliday ? " · Holiday" : ""))}">
+                  <span class="dot ${ms.open ? "" : ms.state === "pre-open" ? "preopen" : "closed"}"></span>
+                  NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}${ms.state !== "open" ? " · " + escapeHtml(ms.istTime) : ""}
+                </span>
               </div>
             </div>
           </div>
@@ -218,7 +222,7 @@ function render(inst, symbol) {
         <div class="card" style="margin-top: var(--sp-4);">
           <div class="card-head">
             <h3>Fundamentals</h3>
-            ${liveFundamentals ? `<span class="data-badge"><span class="dot"></span> Live · Yahoo Finance</span>` : `<span class="data-badge"><span class="dot offline"></span> Loading…</span>`}
+            ${liveFundamentals ? `<span class="data-badge"><span class="dot"></span> NSE</span>` : `<span class="data-badge"><span class="dot offline"></span> Loading…</span>`}
           </div>
           <div class="fundamentals">
             ${renderFundamentals(inst, liveFundamentals, hi, lo)}
