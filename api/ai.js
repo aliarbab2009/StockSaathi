@@ -111,18 +111,27 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
   const openaiModel = env.OPENAI_MODEL || "gpt-5.4";
   const groqModel = env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
+  // Route Gemini via Vertex if GEMINI_VERTEX_PROJECT is set (consumes Cloud
+  // credits) — else via AI Studio's generativelanguage endpoint. Mumbai
+  // (asia-south1) by default for lowest latency to Indian users.
+  const vertexProject = env.GEMINI_VERTEX_PROJECT || "";
+  const vertexRegion  = env.GEMINI_VERTEX_REGION  || "asia-south1";
+  const geminiUrl = vertexProject
+    ? `https://${vertexRegion}-aiplatform.googleapis.com/v1/projects/${vertexProject}/locations/${vertexRegion}/endpoints/openapi/chat/completions`
+    : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
   // Order by profile — same logic as /api/chat.
   if (profile === "fast") {
-    if (env.GEMINI_API_KEY) providers.push({ url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
     if (env.GROQ_API_KEY)   providers.push({ url: "https://api.groq.com/openai/v1/chat/completions", key: env.GROQ_API_KEY, model: groqModel, label: "groq" });
-    if (env.GEMINI_API_KEY) providers.push({ url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
     if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
   } else {
     // reasoning / json / creative — prefer Gemini Pro first (smart + fast),
     // OpenAI fallback, Gemini Flash, Groq floor.
-    if (env.GEMINI_API_KEY) providers.push({ url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
     if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
-    if (env.GEMINI_API_KEY) providers.push({ url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
     if (env.GROQ_API_KEY)   providers.push({ url: "https://api.groq.com/openai/v1/chat/completions", key: env.GROQ_API_KEY, model: groqModel, label: "groq" });
   }
   if (!providers.length) throw new Error("no_provider_configured");

@@ -43,6 +43,17 @@ const CEREBRAS_MODEL = (globalThis.process?.env?.CEREBRAS_MODEL)  || "llama3.3-7
 const GROQ_MODEL     = (globalThis.process?.env?.GROQ_MODEL)      || "llama-3.3-70b-versatile";
 const PUBLIC_ORIGIN  = ((globalThis.process?.env?.PUBLIC_ORIGIN) || "").replace(/\/$/, "");
 
+// Gemini endpoint resolution. If GEMINI_VERTEX_PROJECT is set, route through
+// Vertex AI (consumes Google Cloud credits). Otherwise, use the AI Studio
+// OpenAI-compat endpoint (generativelanguage.googleapis.com). Default region
+// is asia-south1 (Mumbai) so Indian users get the lowest latency and data
+// stays in-region. Override region via GEMINI_VERTEX_REGION.
+const GEMINI_VERTEX_PROJECT = globalThis.process?.env?.GEMINI_VERTEX_PROJECT || "";
+const GEMINI_VERTEX_REGION  = globalThis.process?.env?.GEMINI_VERTEX_REGION  || "asia-south1";
+const GEMINI_URL = GEMINI_VERTEX_PROJECT
+  ? `https://${GEMINI_VERTEX_REGION}-aiplatform.googleapis.com/v1/projects/${GEMINI_VERTEX_PROJECT}/locations/${GEMINI_VERTEX_REGION}/endpoints/openapi/chat/completions`
+  : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
 const ALLOWED_ORIGINS = new Set([
   PUBLIC_ORIGIN,
   "https://stocksaathi.co.in",
@@ -99,14 +110,14 @@ function providerDescriptors() {
     gemini_fast: {
       label: "gemini_fast",
       enabled: () => !!env.GEMINI_API_KEY,
-      url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      url: GEMINI_URL,
       key: env.GEMINI_API_KEY,
       model: GEMINI_FAST,
     },
     gemini_pro: {
       label: "gemini_pro",
       enabled: () => !!env.GEMINI_API_KEY,
-      url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      url: GEMINI_URL,
       key: env.GEMINI_API_KEY,
       model: GEMINI_PRO,
     },
