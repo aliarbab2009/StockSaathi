@@ -37,8 +37,12 @@ const MAX_BODY = 64 * 1024;
 const MAX_OUTPUT_TOKENS = 2000;
 
 const OPENAI_MODEL   = (globalThis.process?.env?.OPENAI_MODEL)    || "gpt-5.4";
-const GEMINI_FAST    = (globalThis.process?.env?.GEMINI_FAST_MODEL) || "gemini-3.1-flash";
-const GEMINI_PRO     = (globalThis.process?.env?.GEMINI_PRO_MODEL)  || "gemini-3.1-pro";
+// Defaults target the Gemini 2.5 production GA models — available in every
+// Vertex region including asia-south1. 3.x family is still preview-only and
+// not deployed to all regions. Override via env vars if you want a specific
+// version or to test the 3.x preview.
+const GEMINI_FAST    = (globalThis.process?.env?.GEMINI_FAST_MODEL) || "gemini-2.5-flash";
+const GEMINI_PRO     = (globalThis.process?.env?.GEMINI_PRO_MODEL)  || "gemini-2.5-pro";
 const CEREBRAS_MODEL = (globalThis.process?.env?.CEREBRAS_MODEL)  || "llama3.3-70b";
 const GROQ_MODEL     = (globalThis.process?.env?.GROQ_MODEL)      || "llama-3.3-70b-versatile";
 const PUBLIC_ORIGIN  = ((globalThis.process?.env?.PUBLIC_ORIGIN) || "").replace(/\/$/, "");

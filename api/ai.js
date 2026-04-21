@@ -106,8 +106,9 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
   const env = globalThis.process?.env || {};
   const providers = [];
 
-  const geminiFastModel = env.GEMINI_FAST_MODEL || "gemini-3.1-flash";
-  const geminiProModel = env.GEMINI_PRO_MODEL || "gemini-3.1-pro";
+  // 2.5 = production GA, available in every Vertex region. 3.x = preview-only.
+  const geminiFastModel = env.GEMINI_FAST_MODEL || "gemini-2.5-flash";
+  const geminiProModel = env.GEMINI_PRO_MODEL || "gemini-2.5-pro";
   const openaiModel = env.OPENAI_MODEL || "gpt-5.4";
   const groqModel = env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
