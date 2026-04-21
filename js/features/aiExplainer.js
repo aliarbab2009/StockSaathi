@@ -12,11 +12,12 @@
 //
 // The wrapper returns an <abbr class="ai-term" data-term="..."> element that
 // looks subtle (dotted-underline) and pops a tooltip on hover/focus. The
-// tooltip fetches /api/explain lazily — first hover triggers the API call,
-// subsequent hovers on any instance of the same term anywhere on the page
-// are instant from the in-memory cache. The backend also caches across
-// users in Supabase so the second person to hover "P/E" on the whole site
-// ever gets the cached answer for free.
+// tooltip fetches /api/ai?op=explain lazily — first hover triggers the API
+// call, subsequent hovers on any instance of the same term anywhere on the
+// page are instant from the in-memory cache. The backend also caches across
+// users in Supabase (table public.ai_response_cache, bucket="explain") so
+// the second person to hover "P/E" on the whole site ever gets the cached
+// answer for free.
 // =============================================================================
 
 const TOOLTIP_ID = "ai-term-tooltip";
