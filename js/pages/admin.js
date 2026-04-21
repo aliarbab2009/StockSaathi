@@ -1,14 +1,24 @@
 // =============================================================================
-// ADMIN PANEL — Owner-only dashboard. Gated by an ADMIN_TOKEN env var set
-// on Vercel + pasted once into this page. Token is stored in localStorage
-// and sent as Authorization: Bearer <token> on every admin API call.
+// ADMIN GOD-MODE PANEL
+// Nine-tab unified ops console at /#/a/<ADMIN_PATH>. Replaces the owner's
+// need to open Supabase Studio, Vercel Dashboard, or GitHub Web UI for
+// routine operations.
 //
-// Shows:
-//   - Aggregate stats (users, onboarded %, active, total cash, total trades)
-//   - 30-day sign-up chart
-//   - Searchable / sortable user table
-//   - Click a user → drill-down modal: profile, holdings, transactions,
-//     coach messages, portfolio-value graph
+// Tabs:
+//   Overview   — aggregate health across all three services
+//   Users      — every user x every column x filterable/sortable/drill-down
+//   Activity   — live-tailing SSE feed of every event
+//   Database   — Supabase god mode (SQL editor, table CRUD, RPC runner)
+//   Auth       — Supabase Auth admin (list, reset, ban, magic link)
+//   Markets    — quote_cache + ai_response_cache + dhan coverage
+//   Deploy     — Vercel deployments + logs + envs + redeploy + rollback
+//   Repo       — GitHub commits + PRs + issues + Actions + workflow dispatch
+//   Audit      — every admin write with before/after diff
+//
+// Gated by ADMIN_PATH (URL slug) + ADMIN_TOKEN (bearer). Each tab's detail
+// code lives in separate modules under /js/pages/admin/ where the module
+// count justifies; for now, everything's inline here and will split later
+// if the file grows unwieldy.
 // =============================================================================
 
 import { formatRupees } from "../money.js";
@@ -16,44 +26,56 @@ import { areaChart } from "../components/charts.js";
 import { toast } from "../components/toast.js";
 
 const TOKEN_KEY = "ss.adminToken.v1";
+const LAST_TAB_KEY = "ss.adminLastTab.v1";
 
-let overview = null;
-let overviewLoading = false;
-let overviewError = null;
-let userDetail = null;     // currently-open user drill-down
-let userDetailLoading = false;
+// Shared fetch state so tabs don't re-fetch on every switch.
+const state = {
+  overview: null,
+  overviewLoading: false,
+  overviewError: null,
+  activity: [],
+  activityFilter: "all",     // trades | coach | transfers | orders | signups | all
+  activityPaused: false,
+  tail: null,                // EventSource instance
+  tailConnected: false,
+  userDetail: null,
+  userDetailLoading: false,
+  filters: {
+    search: "",
+    onboarded: "any",         // any | yes | no
+    riskProfile: "any",       // any | cautious | balanced | bold
+    consent: "any",           // any | yes | no
+    traded: "any",            // any | yes | no
+    coached: "any",           // any | yes | no
+    ageBracket: "any",        // any | 13-15 | 16-17 | 18+
+    tradeBucket: "any",       // any | 0 | 1-5 | 6-20 | 20+
+    activity: "any",          // any | <1d | <7d | <30d | 30d+
+    school: "any",            // any | <specific school name>
+  },
+  sort: { by: "createdAt", dir: "desc" },
+};
 
-let sortBy = "createdAt";
-let sortDir = "desc";       // "desc" | "asc"
-let search = "";
+let currentTab = "overview";
 
+// -----------------------------------------------------------------------------
+// Bootstrap
+// -----------------------------------------------------------------------------
 export function renderAdmin(main, params) {
-  let cancelled = false;
-  const onLeave = () => { cancelled = true; };
-  window.addEventListener("hashchange", onLeave, { once: true });
-
   const slug = params?.slug || "";
   if (!slug) return render404Like(main);
 
-  // First: ask the server whether this slug matches ADMIN_PATH.
-  // If it doesn't, render the same 404 shape the router would show — so
-  // scanners get the same response whether they typed /a/abc or /foo/bar.
   renderLoadingShell(main);
   fetch("/api/ai?op=admin-path-check&slug=" + encodeURIComponent(slug))
     .then(r => r.ok ? r.json() : null)
     .then(data => {
-      if (cancelled) return;
       if (!data?.ok) return render404Like(main);
       if (!getToken()) return renderTokenForm(main);
-      if (!overview && !overviewLoading) {
-        loadOverview().then(() => { if (!cancelled) render(main); });
-      }
-      render(main);
+      currentTab = getLastTab() || "overview";
+      renderTabbedShell(main);
     })
     .catch(() => render404Like(main));
 }
 
-// 404 shape — mirrors the router's render404 so guessers can't distinguish.
 function render404Like(main) {
   main.innerHTML = `
     <div class="empty-state" style="padding: 12vh var(--sp-4);">
@@ -61,57 +83,16 @@ function render404Like(main) {
       <h3>Page not found</h3>
       <p class="muted">The route you tried doesn't exist.</p>
       <a href="#/" class="btn btn-primary">Back home</a>
-    </div>
-  `;
+    </div>`;
 }
-
 function renderLoadingShell(main) {
   main.innerHTML = `<div class="card" style="max-width: 420px; margin: 10vh auto; text-align:center; padding: var(--sp-5);"><div class="muted">Loading…</div></div>`;
 }
 
-function getToken() {
-  try { return localStorage.getItem(TOKEN_KEY) || ""; }
-  catch { return ""; }
-}
-function setToken(t) {
-  try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); }
-  catch {}
-}
-
-async function adminFetch(path) {
-  const token = getToken();
-  const r = await fetch(path, { headers: { "Authorization": "Bearer " + token } });
-  if (r.status === 401) {
-    setToken("");
-    throw new Error("Unauthorised — check token and try again.");
-  }
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
-}
-
-async function loadOverview() {
-  overviewLoading = true;
-  overviewError = null;
-  try {
-    overview = await adminFetch("/api/ai?op=admin-overview");
-  } catch (e) {
-    overviewError = e.message || String(e);
-  } finally {
-    overviewLoading = false;
-  }
-}
-
-async function loadUser(id) {
-  userDetailLoading = true;
-  userDetail = { id };
-  try {
-    userDetail = await adminFetch("/api/ai?op=admin-user&id=" + encodeURIComponent(id));
-  } catch (e) {
-    userDetail = { id, error: e.message || String(e) };
-  } finally {
-    userDetailLoading = false;
-  }
-}
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } }
+function setToken(t) { try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch {} }
+function getLastTab() { try { return localStorage.getItem(LAST_TAB_KEY); } catch { return null; } }
+function setLastTab(t) { try { localStorage.setItem(LAST_TAB_KEY, t); } catch {} }
 
 function renderTokenForm(main) {
   main.innerHTML = `
@@ -120,294 +101,468 @@ function renderTokenForm(main) {
         <h2 style="margin-top: 0;">Admin access</h2>
         <p class="muted" style="line-height: 1.6;">
           Paste the ADMIN_TOKEN you set on Vercel. Stored in localStorage on this
-          device only; sent as a Bearer header on admin API calls.
+          device only; sent as a Bearer header on every admin API call.
         </p>
         <div class="field">
           <label class="label" for="admin-token">ADMIN_TOKEN</label>
-          <input class="input" id="admin-token" type="password" autocomplete="off" placeholder="Paste token here" />
+          <input class="input" id="admin-token" type="password" autocomplete="off" />
         </div>
         <div class="flex gap-2" style="margin-top: var(--sp-3);">
           <button id="admin-token-save" class="btn btn-primary">Unlock</button>
           <a href="#/" class="btn btn-ghost">Cancel</a>
         </div>
-        <p class="dim text-xs" style="margin-top: var(--sp-4); line-height: 1.6;">
-          Set ADMIN_TOKEN in Vercel → Settings → Environment Variables, any
-          random string (e.g. openssl rand -hex 24). Restart the deployment
-          or wait for the next cold start for the env var to apply.
-        </p>
       </div>
-    </div>
-  `;
+    </div>`;
   const input = main.querySelector("#admin-token");
   input.focus();
-  const submit = () => {
+  const submit = async () => {
     const t = input.value.trim();
     if (!t) return;
     setToken(t);
-    loadOverview().then(() => {
-      if (!overview) {
-        setToken("");
-        toast({ kind: "error", message: overviewError || "Token rejected." });
-        renderAdmin(main);
-        return;
-      }
-      renderAdmin(main);
-    });
+    try {
+      await loadOverview();
+      if (!state.overview) throw new Error(state.overviewError || "rejected");
+      renderTabbedShell(main);
+    } catch (e) {
+      setToken("");
+      toast({ kind: "error", message: "Token rejected — try again." });
+      renderTokenForm(main);
+    }
   };
   main.querySelector("#admin-token-save").addEventListener("click", submit);
   input.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
 }
 
-function render(main) {
-  if (overviewLoading && !overview) {
-    main.innerHTML = `<div class="card" style="text-align:center; padding: var(--sp-6);"><div class="muted">Loading admin overview…</div></div>`;
-    return;
-  }
-  if (overviewError && !overview) {
-    main.innerHTML = `<div class="card"><h3 style="color: var(--negative);">Admin error</h3><p class="muted">${escapeHtml(overviewError)}</p><button class="btn btn-ghost" id="logout">Clear token</button></div>`;
-    main.querySelector("#logout")?.addEventListener("click", () => { setToken(""); renderAdmin(main); });
-    return;
-  }
-  if (!overview) { renderTokenForm(main); return; }
+// -----------------------------------------------------------------------------
+// Shared HTTP helpers
+// -----------------------------------------------------------------------------
+async function adminGet(path) {
+  const token = getToken();
+  const r = await fetch(path, { headers: { "Authorization": "Bearer " + token } });
+  if (r.status === 401) { setToken(""); throw new Error("Unauthorised — sign in again."); }
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+async function adminPost(path, body) {
+  const token = getToken();
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (r.status === 401) { setToken(""); throw new Error("Unauthorised — sign in again."); }
+  const rb = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(rb?.error || ("HTTP " + r.status));
+  return rb;
+}
 
-  const { aggregates: a, byDay, users } = overview;
-  const filteredUsers = filterAndSort(users, search, sortBy, sortDir);
-  const chartValues = byDay.map(d => d.count);
-  const chartSvg = areaChart(chartValues, { height: 80, color: "var(--brand)", paddingLeft: 0 });
-  const maxDay = byDay.reduce((a, b) => b.count > a.count ? b : a, { count: 0, day: "" });
+async function loadOverview() {
+  state.overviewLoading = true;
+  state.overviewError = null;
+  try { state.overview = await adminGet("/api/ai?op=admin-overview"); }
+  catch (e) { state.overviewError = e.message || String(e); state.overview = null; throw e; }
+  finally { state.overviewLoading = false; }
+}
 
+// -----------------------------------------------------------------------------
+// Tabbed shell
+// -----------------------------------------------------------------------------
+function renderTabbedShell(main) {
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "users",    label: "Users" },
+    { id: "activity", label: "Activity" },
+    { id: "database", label: "Database" },
+    { id: "auth",     label: "Auth" },
+    { id: "markets",  label: "Markets" },
+    { id: "deploy",   label: "Deploy" },
+    { id: "repo",     label: "Repo" },
+    { id: "audit",    label: "Audit" },
+  ];
   main.innerHTML = `
-    <div class="flex items-center justify-between wrap gap-3" style="margin-bottom: var(--sp-5);">
-      <div>
-        <h1 style="margin-bottom: 4px;">Admin</h1>
-        <p class="muted">Every user, every trade, every rupee. Refreshed on load.</p>
-      </div>
-      <div class="flex gap-2">
-        <button class="btn btn-ghost btn-sm" id="admin-refresh">↻ Refresh</button>
-        <button class="btn btn-ghost btn-sm" id="admin-logout">Sign out</button>
-      </div>
-    </div>
+    <div class="admin-shell">
+      <header class="admin-shell-head">
+        <div>
+          <h1 style="margin:0;">Admin</h1>
+          <p class="muted" style="margin:4px 0 0 0;">God-mode ops. Every write is audit-logged.</p>
+        </div>
+        <div class="flex gap-2 items-center">
+          <span id="tail-indicator" class="tail-indicator ${state.tailConnected ? "live" : "off"}">${state.tailConnected ? "● LIVE" : "○ paused"}</span>
+          <button class="btn btn-ghost btn-sm" id="tail-toggle">${state.tailConnected ? "Pause tail" : "Live tail"}</button>
+          <button class="btn btn-ghost btn-sm" id="admin-refresh">↻ Refresh</button>
+          <button class="btn btn-ghost btn-sm" id="admin-logout">Sign out</button>
+        </div>
+      </header>
+      <nav class="admin-tabs">
+        ${tabs.map(t => `<button class="admin-tab ${currentTab === t.id ? "active" : ""}" data-tab="${t.id}">${t.label}</button>`).join("")}
+      </nav>
+      <div class="admin-tab-body" id="admin-tab-body"></div>
+    </div>`;
+  main.querySelectorAll(".admin-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      currentTab = btn.dataset.tab;
+      setLastTab(currentTab);
+      renderTabBody(main);
+      main.querySelectorAll(".admin-tab").forEach(b => b.classList.toggle("active", b.dataset.tab === currentTab));
+    });
+  });
+  main.querySelector("#admin-refresh").addEventListener("click", async () => {
+    await loadOverview().catch(() => {});
+    renderTabBody(main);
+  });
+  main.querySelector("#admin-logout").addEventListener("click", () => {
+    setToken("");
+    closeTail();
+    state.overview = null;
+    renderTokenForm(main);
+  });
+  main.querySelector("#tail-toggle").addEventListener("click", () => {
+    if (state.tailConnected) closeTail(); else openTail(main);
+    updateTailBadge(main);
+  });
+  renderTabBody(main);
+}
 
+function renderTabBody(main) {
+  const host = main.querySelector("#admin-tab-body");
+  if (!host) return;
+  host.innerHTML = "";
+  switch (currentTab) {
+    case "overview": return renderOverview(host, main);
+    case "users":    return renderUsersTab(host, main);
+    case "activity": return renderActivityTab(host, main);
+    case "database": return renderPlaceholder(host, "Database", "Coming in next commit.");
+    case "auth":     return renderPlaceholder(host, "Auth", "Coming in next commit.");
+    case "markets":  return renderPlaceholder(host, "Markets / AI cache", "Coming in next commit.");
+    case "deploy":   return renderPlaceholder(host, "Deploy (Vercel)", "Coming in next commit.");
+    case "repo":     return renderPlaceholder(host, "Repo (GitHub)", "Coming in next commit.");
+    case "audit":    return renderPlaceholder(host, "Audit log", "Coming in next commit.");
+    default:         return renderOverview(host, main);
+  }
+}
+
+function renderPlaceholder(host, title, hint) {
+  host.innerHTML = `<div class="card" style="text-align:center; padding: var(--sp-6);"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(hint)}</p></div>`;
+}
+
+// -----------------------------------------------------------------------------
+// Overview tab
+// -----------------------------------------------------------------------------
+function renderOverview(host, main) {
+  if (!state.overview && !state.overviewLoading) {
+    loadOverview().catch(() => {}).finally(() => renderTabBody(main));
+  }
+  if (state.overviewLoading && !state.overview) {
+    host.innerHTML = `<div class="card"><div class="muted">Loading overview…</div></div>`;
+    return;
+  }
+  if (!state.overview) {
+    host.innerHTML = `<div class="card"><div style="color: var(--negative);">${escapeHtml(state.overviewError || "Failed to load.")}</div></div>`;
+    return;
+  }
+  const { aggregates: a, byDay, top, rowCounts } = state.overview;
+  const maxDay = byDay.reduce((b, c) => c.count > b.count ? c : b, { count: 0, day: "" });
+  const signupChart = areaChart(byDay.map(d => d.count), { height: 80, color: "var(--brand)", paddingLeft: 0 });
+  host.innerHTML = `
     <div class="admin-stats">
       <div class="stat-tile"><div class="l">Users</div><div class="v tabular">${a.users}</div></div>
       <div class="stat-tile"><div class="l">Onboarded</div><div class="v tabular">${a.onboarded} <span class="dim text-sm">(${a.onboardedPct}%)</span></div></div>
-      <div class="stat-tile"><div class="l">Traded ever</div><div class="v tabular">${a.active}</div></div>
+      <div class="stat-tile"><div class="l">Traded ever</div><div class="v tabular">${a.active} <span class="dim text-sm">(${a.activePct}%)</span></div></div>
+      <div class="stat-tile"><div class="l">Consented</div><div class="v tabular">${a.consented}</div></div>
+      <div class="stat-tile"><div class="l">Total portfolio</div><div class="v tabular">${formatRupees((a.totalPortfolioRupees || 0) * 100, { compact: true })}</div></div>
       <div class="stat-tile"><div class="l">Total cash</div><div class="v tabular">${formatRupees(a.totalCashRupees * 100, { compact: true })}</div></div>
       <div class="stat-tile"><div class="l">Total trades</div><div class="v tabular">${a.totalTrades}</div></div>
       <div class="stat-tile"><div class="l">Coach msgs</div><div class="v tabular">${a.totalCoachMessages}</div></div>
     </div>
 
     <div class="card" style="margin-top: var(--sp-4);">
-      <div class="card-head">
-        <h3>Sign-ups · last 30 days</h3>
-        <span class="dim text-sm">Peak: ${maxDay.count || 0} on ${escapeHtml(maxDay.day || "—")}</span>
-      </div>
-      <div style="height: 80px;">${chartSvg}</div>
-      <div class="admin-day-bars">
-        ${byDay.slice(-14).map(d => `<div class="admin-day-bar" title="${d.day}: ${d.count}"><div class="bar" style="height: ${Math.max(2, d.count * 6)}px;"></div><div class="label">${d.day.slice(5)}</div></div>`).join("")}
-      </div>
+      <div class="card-head"><h3>Sign-ups · last 30 days</h3><span class="dim text-sm">Peak: ${maxDay.count || 0} on ${escapeHtml(maxDay.day || "—")}</span></div>
+      <div style="height: 80px;">${signupChart}</div>
     </div>
 
-    <div class="card" style="margin-top: var(--sp-4);">
-      <div class="card-head">
-        <h3>Users (${users.length})</h3>
-        <input id="admin-search" class="input" placeholder="Search by username / name / email / school" value="${escapeAttr(search)}" style="max-width: 360px;" />
-      </div>
-      <div class="admin-table-wrap">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              ${colHead("username", "User")}
-              ${colHead("createdAt", "Joined")}
-              ${colHead("onboarded", "OB")}
-              ${colHead("age", "Age")}
-              ${colHead("city", "City")}
-              ${colHead("tradeCount", "Trades")}
-              ${colHead("cashRupees", "Cash")}
-              ${colHead("lastActive", "Last active")}
-            </tr>
-          </thead>
-          <tbody>
-            ${filteredUsers.map(u => `
-              <tr data-user-id="${escapeAttr(u.id)}">
-                <td>
-                  <div class="font-semi">${escapeHtml(u.displayName || u.username)}</div>
-                  <div class="dim text-xs">@${escapeHtml(u.username || "")} · ${escapeHtml(u.email || "")}</div>
-                </td>
-                <td class="dim text-xs">${formatDateShort(u.createdAt)}</td>
-                <td>${u.onboarded ? '<span class="pill pill-green" style="font-size:10px;">OB</span>' : '<span class="pill" style="font-size:10px;background:var(--bg-subtle);color:var(--text-dim);">NEW</span>'}</td>
-                <td class="dim">${u.age ?? "—"}</td>
-                <td class="dim">${escapeHtml(u.city || "—")}</td>
-                <td class="tabular">${u.tradeCount}</td>
-                <td class="tabular">${u.cashRupees != null ? formatRupees(u.cashRupees * 100, { compact: true }) : "—"}</td>
-                <td class="dim text-xs">${formatDateShort(u.lastActive)}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-
-  main.querySelector("#admin-refresh")?.addEventListener("click", async () => {
-    await loadOverview();
-    render(main);
-  });
-  main.querySelector("#admin-logout")?.addEventListener("click", () => {
-    setToken("");
-    overview = null;
-    renderAdmin(main);
-  });
-  main.querySelector("#admin-search")?.addEventListener("input", (e) => {
-    search = e.target.value;
-    // Re-render table body only to preserve focus
-    const tbody = main.querySelector(".admin-table tbody");
-    if (tbody) {
-      const list = filterAndSort(users, search, sortBy, sortDir);
-      tbody.innerHTML = list.map(u => `
-        <tr data-user-id="${escapeAttr(u.id)}">
-          <td>
-            <div class="font-semi">${escapeHtml(u.displayName || u.username)}</div>
-            <div class="dim text-xs">@${escapeHtml(u.username || "")} · ${escapeHtml(u.email || "")}</div>
-          </td>
-          <td class="dim text-xs">${formatDateShort(u.createdAt)}</td>
-          <td>${u.onboarded ? '<span class="pill pill-green" style="font-size:10px;">OB</span>' : '<span class="pill" style="font-size:10px;background:var(--bg-subtle);color:var(--text-dim);">NEW</span>'}</td>
-          <td class="dim">${u.age ?? "—"}</td>
-          <td class="dim">${escapeHtml(u.city || "—")}</td>
-          <td class="tabular">${u.tradeCount}</td>
-          <td class="tabular">${u.cashRupees != null ? formatRupees(u.cashRupees * 100, { compact: true }) : "—"}</td>
-          <td class="dim text-xs">${formatDateShort(u.lastActive)}</td>
-        </tr>
-      `).join("");
-      wireRowClicks(main);
-    }
-  });
-  main.querySelectorAll(".admin-table th[data-col]").forEach(th => {
-    th.addEventListener("click", () => {
-      const col = th.dataset.col;
-      if (sortBy === col) sortDir = sortDir === "asc" ? "desc" : "asc";
-      else { sortBy = col; sortDir = "desc"; }
-      render(main);
-    });
-  });
-  wireRowClicks(main);
-}
-
-function colHead(col, label) {
-  const arrow = sortBy === col ? (sortDir === "asc" ? " ↑" : " ↓") : "";
-  return `<th data-col="${col}" class="sortable">${label}${arrow}</th>`;
-}
-
-function wireRowClicks(main) {
-  main.querySelectorAll(".admin-table tbody tr").forEach(tr => {
-    tr.addEventListener("click", async () => {
-      const id = tr.dataset.userId;
-      openUserModal(id);
-    });
-  });
-}
-
-async function openUserModal(id) {
-  const host = document.getElementById("modal-root");
-  host.innerHTML = `
-    <div class="modal-overlay" role="dialog" aria-modal="true" id="admin-user-overlay">
-      <div class="modal" style="max-width: 820px; max-height: 86vh; overflow: auto;">
-        <div class="modal-head">
-          <h2>Loading…</h2>
-          <button class="btn btn-ghost btn-icon" aria-label="Close" id="admin-close-modal">✕</button>
-        </div>
-        <div class="modal-body" id="admin-user-body">
-          <div class="muted">Fetching profile + holdings + transactions…</div>
+    <div class="admin-overview-grid" style="margin-top: var(--sp-4);">
+      <div class="card">
+        <div class="card-head"><h3>Row counts (every table)</h3></div>
+        <div class="admin-row-counts">
+          ${Object.entries(rowCounts).map(([k, v]) => `<div class="admin-kv"><span>${escapeHtml(k)}</span><span class="tabular">${v}</span></div>`).join("")}
         </div>
       </div>
-    </div>
-  `;
-  document.getElementById("admin-close-modal").addEventListener("click", () => host.innerHTML = "");
-  document.getElementById("admin-user-overlay").addEventListener("click", (e) => {
-    if (e.target.id === "admin-user-overlay") host.innerHTML = "";
-  });
-  await loadUser(id);
-  if (!document.getElementById("admin-user-body")) return;   // user closed
-  paintUserModal();
+      <div class="card">
+        <div class="card-head"><h3>Top portfolios</h3></div>
+        ${renderLeaderboard(top.biggestPortfolios, v => formatRupees(v * 100, { compact: true }))}
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Most active (trades)</h3></div>
+        ${renderLeaderboard(top.mostActive, v => v + " trades")}
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Most coached</h3></div>
+        ${renderLeaderboard(top.mostCoached, v => v + " msgs")}
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Biggest gainers</h3></div>
+        ${renderLeaderboard(top.biggestGainers, v => (v >= 0 ? "+" : "") + v.toFixed(1) + "%")}
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Biggest losers</h3></div>
+        ${renderLeaderboard(top.biggestLosers, v => v.toFixed(1) + "%")}
+      </div>
+    </div>`;
+}
+function renderLeaderboard(rows, fmt) {
+  if (!rows?.length) return `<div class="muted text-sm" style="padding: var(--sp-3);">No data yet.</div>`;
+  return `<ol class="admin-lb">${rows.map(r => `<li><a href="#" data-open-user="${escapeAttr(r.id)}">@${escapeHtml(r.username || "?")}</a><span class="tabular">${escapeHtml(fmt(r.value))}</span></li>`).join("")}</ol>`;
 }
 
-function paintUserModal() {
-  const host = document.getElementById("modal-root");
-  const body = document.getElementById("admin-user-body");
-  const head = host.querySelector(".modal-head h2");
-  if (!body || !head) return;
-  if (userDetail?.error) {
-    body.innerHTML = `<div style="color: var(--negative);">${escapeHtml(userDetail.error)}</div>`;
-    head.textContent = "Error";
+// -----------------------------------------------------------------------------
+// Users tab
+// -----------------------------------------------------------------------------
+function renderUsersTab(host, main) {
+  if (!state.overview && !state.overviewLoading) {
+    loadOverview().catch(() => {}).finally(() => renderTabBody(main));
+  }
+  if (state.overviewLoading && !state.overview) {
+    host.innerHTML = `<div class="card"><div class="muted">Loading users…</div></div>`;
     return;
   }
-  const { profile, portfolio, holdings, transactions, coachMessages, portfolioHistory } = userDetail;
-  head.innerHTML = `${escapeHtml(profile.display_name || profile.username)} <span class="dim text-sm">@${escapeHtml(profile.username)}</span>`;
+  if (!state.overview) return;
+  const users = state.overview.users || [];
+  const list = applyFiltersAndSort(users);
+  const schools = [...new Set(users.map(u => u.school).filter(Boolean))].sort();
 
-  const histValues = (portfolioHistory || []).map(h => (h.value_paise || 0) / 100);
-  const histSvg = histValues.length > 1
-    ? `<div style="height: 180px;">${areaChart(histValues, { height: 180, color: "var(--brand)", paddingLeft: 40 })}</div>`
-    : `<div class="muted text-sm" style="padding: var(--sp-3); border: 1px dashed var(--border); border-radius: var(--r); text-align:center;">No portfolio history recorded yet.</div>`;
-
-  const totalHoldValue = (holdings || []).reduce((a, h) => a + (h.qty || 0) * (h.avg_cost_paise || 0), 0) / 100;
-  const cashRupees = (portfolio?.cash_paise || 0) / 100;
-  const totalValue = cashRupees + totalHoldValue;
-
-  body.innerHTML = `
-    <div class="admin-user-grid">
-      <div>
-        <div class="admin-user-section-label">Profile</div>
-        <div class="admin-kv"><span>Email</span><span>${escapeHtml(profile.email || "—")}</span></div>
-        <div class="admin-kv"><span>Age</span><span>${profile.age ?? "—"}</span></div>
-        <div class="admin-kv"><span>School</span><span>${escapeHtml(profile.school || "—")}</span></div>
-        <div class="admin-kv"><span>Class code</span><span>${escapeHtml(profile.class_code || "—")}</span></div>
-        <div class="admin-kv"><span>City</span><span>${escapeHtml(profile.city || "—")}</span></div>
-        <div class="admin-kv"><span>Risk profile</span><span>${escapeHtml(profile.risk_profile || "—")}</span></div>
-        <div class="admin-kv"><span>Parent email</span><span>${escapeHtml(profile.parent_email || "—")}</span></div>
-        <div class="admin-kv"><span>Consent</span><span>${profile.parent_consent_at ? formatDateShort(profile.parent_consent_at) : "—"}</span></div>
-        <div class="admin-kv"><span>Onboarded</span><span>${profile.onboarded ? "Yes" : "No"}</span></div>
-        <div class="admin-kv"><span>Joined</span><span>${formatDateShort(profile.created_at)}</span></div>
-      </div>
-      <div>
-        <div class="admin-user-section-label">Money</div>
-        <div class="admin-kv"><span>Cash</span><span>${formatRupees(cashRupees * 100)}</span></div>
-        <div class="admin-kv"><span>Holdings value (cost-basis)</span><span>${formatRupees(totalHoldValue * 100)}</span></div>
-        <div class="admin-kv"><span>Starting cash</span><span>${formatRupees((portfolio?.starting_cash_paise || 10000000))}</span></div>
-        <div class="admin-kv" style="border-top: 1px solid var(--divider); padding-top: 6px; margin-top: 6px;"><span class="font-semi">Total portfolio</span><span class="font-semi">${formatRupees(totalValue * 100)}</span></div>
-        <div class="admin-user-section-label" style="margin-top: var(--sp-3);">Activity</div>
-        <div class="admin-kv"><span>Trades</span><span>${transactions?.length || 0}</span></div>
-        <div class="admin-kv"><span>Coach messages</span><span>${coachMessages?.length || 0}</span></div>
-        <div class="admin-kv"><span>Last active</span><span>${portfolio?.updated_at ? formatDateShort(portfolio.updated_at) : "—"}</span></div>
-      </div>
+  host.innerHTML = `
+    <div class="admin-filter-bar card" style="margin-bottom: var(--sp-3);">
+      <input id="u-search" class="input" placeholder="Search username / name / email / school / city" value="${escapeAttr(state.filters.search)}" style="flex:1; min-width: 240px;" />
+      <select id="u-onboarded" class="select">
+        <option value="any">Onboarded: any</option>
+        <option value="yes" ${state.filters.onboarded === "yes" ? "selected" : ""}>Onboarded: yes</option>
+        <option value="no"  ${state.filters.onboarded === "no"  ? "selected" : ""}>Onboarded: no</option>
+      </select>
+      <select id="u-risk" class="select">
+        <option value="any">Risk: any</option>
+        <option value="cautious">Cautious</option>
+        <option value="balanced">Balanced</option>
+        <option value="bold">Bold</option>
+      </select>
+      <select id="u-consent" class="select">
+        <option value="any">Consent: any</option>
+        <option value="yes">Consented</option>
+        <option value="no">No consent</option>
+      </select>
+      <select id="u-traded" class="select">
+        <option value="any">Trading: any</option>
+        <option value="yes">Has traded</option>
+        <option value="no">Zero trades</option>
+      </select>
+      <select id="u-coached" class="select">
+        <option value="any">Coach msgs: any</option>
+        <option value="yes">Has coach msgs</option>
+        <option value="no">No coach msgs</option>
+      </select>
+      <select id="u-age" class="select">
+        <option value="any">Age: any</option>
+        <option value="13-15">13–15</option>
+        <option value="16-17">16–17</option>
+        <option value="18+">18+</option>
+      </select>
+      <select id="u-trades" class="select">
+        <option value="any">Trade count: any</option>
+        <option value="0">0</option>
+        <option value="1-5">1–5</option>
+        <option value="6-20">6–20</option>
+        <option value="20+">20+</option>
+      </select>
+      <select id="u-activity" class="select">
+        <option value="any">Activity: any</option>
+        <option value="<1d">Active &lt; 1d</option>
+        <option value="<7d">Active &lt; 7d</option>
+        <option value="<30d">Active &lt; 30d</option>
+        <option value="30d+">Stale 30d+</option>
+      </select>
+      <select id="u-school" class="select">
+        <option value="any">School: any</option>
+        ${schools.map(s => `<option ${state.filters.school === s ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
+      </select>
     </div>
 
-    <div class="admin-user-section-label" style="margin-top: var(--sp-4);">Portfolio value over time</div>
-    ${histSvg}
+    <div class="card">
+      <div class="card-head">
+        <h3>Users (${list.length} of ${users.length})</h3>
+        <div class="dim text-xs">Click header to sort · click row for drill-down</div>
+      </div>
+      <div class="admin-table-wrap">
+        ${renderUsersTable(list)}
+      </div>
+    </div>`;
 
-    <div class="admin-user-section-label" style="margin-top: var(--sp-4);">Holdings (${holdings?.length || 0})</div>
-    ${holdings?.length ? `<table class="admin-table"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg cost</th><th>Cost basis</th><th>First bought</th></tr></thead><tbody>
-      ${holdings.map(h => `<tr><td>${escapeHtml(h.symbol)}</td><td class="tabular">${h.qty}</td><td class="tabular">${formatRupees(h.avg_cost_paise || 0)}</td><td class="tabular">${formatRupees((h.qty || 0) * (h.avg_cost_paise || 0))}</td><td class="dim text-xs">${formatDateShort(h.first_bought_at)}</td></tr>`).join("")}
-    </tbody></table>` : `<div class="muted text-sm">No holdings.</div>`}
+  // Wire filters
+  const setF = (key, val) => {
+    state.filters[key] = val;
+    renderTabBody(main);
+  };
+  host.querySelector("#u-search").addEventListener("input", e => {
+    state.filters.search = e.target.value;
+    const tbody = host.querySelector(".admin-table tbody");
+    if (tbody) tbody.innerHTML = renderUsersRowsHtml(applyFiltersAndSort(users));
+    wireRowClicks(host, main);
+  });
+  host.querySelector("#u-onboarded").addEventListener("change", e => setF("onboarded", e.target.value));
+  host.querySelector("#u-risk").addEventListener("change", e => setF("riskProfile", e.target.value));
+  host.querySelector("#u-consent").addEventListener("change", e => setF("consent", e.target.value));
+  host.querySelector("#u-traded").addEventListener("change", e => setF("traded", e.target.value));
+  host.querySelector("#u-coached").addEventListener("change", e => setF("coached", e.target.value));
+  host.querySelector("#u-age").addEventListener("change", e => setF("ageBracket", e.target.value));
+  host.querySelector("#u-trades").addEventListener("change", e => setF("tradeBucket", e.target.value));
+  host.querySelector("#u-activity").addEventListener("change", e => setF("activity", e.target.value));
+  host.querySelector("#u-school").addEventListener("change", e => setF("school", e.target.value));
 
-    <div class="admin-user-section-label" style="margin-top: var(--sp-4);">Recent transactions (${transactions?.length || 0})</div>
-    ${transactions?.length ? `<table class="admin-table"><thead><tr><th>When</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Price</th></tr></thead><tbody>
-      ${transactions.slice(0, 50).map(t => `<tr><td class="dim text-xs">${formatDateShort(t.ts)}</td><td><span class="pill ${t.side === "BUY" ? "pill-green" : "pill-red"}" style="font-size:10px;">${t.side}</span></td><td>${escapeHtml(t.symbol)}</td><td class="tabular">${t.qty}</td><td class="tabular">${formatRupees(t.price_paise || 0)}</td></tr>`).join("")}
-    </tbody></table>` : `<div class="muted text-sm">No trades.</div>`}
-  `;
+  host.querySelectorAll(".admin-table th[data-col]").forEach(th => {
+    th.addEventListener("click", () => {
+      const col = th.dataset.col;
+      if (state.sort.by === col) state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+      else { state.sort.by = col; state.sort.dir = "desc"; }
+      renderTabBody(main);
+    });
+  });
+  wireRowClicks(host, main);
 }
 
-function filterAndSort(users, q, by, dir) {
+// 27-column sortable user table
+function renderUsersTable(list) {
+  const cols = [
+    ["user", "User"],
+    ["createdAt", "Joined"],
+    ["onboarded", "OB"],
+    ["age", "Age"],
+    ["school", "School"],
+    ["riskProfile", "Risk"],
+    ["tradeCount", "Trades"],
+    ["coachMsgCount", "Coach"],
+    ["holdingCount", "Hold"],
+    ["friendCount", "Friends"],
+    ["watchlistCount", "WL"],
+    ["limitOrderCount", "LO"],
+    ["biasFlagCount", "Biases"],
+    ["transferInCount", "In"],
+    ["transferOutCount", "Out"],
+    ["cashRupees", "Cash"],
+    ["totalPortfolioRupees", "Portfolio"],
+    ["unrealizedPLPct", "P/L%"],
+    ["totalTradedValueRupees", "Vol"],
+    ["daysSinceLastTrade", "Idle"],
+    ["lastActive", "Active"],
+  ];
+  return `<table class="admin-table">
+    <thead><tr>${cols.map(([col, label]) => colHead(col, label)).join("")}<th>Act</th></tr></thead>
+    <tbody>${renderUsersRowsHtml(list)}</tbody>
+  </table>`;
+}
+function renderUsersRowsHtml(list) {
+  return list.slice(0, 500).map(u => `
+    <tr data-user-id="${escapeAttr(u.id)}">
+      <td><div class="font-semi">${escapeHtml(u.displayName || u.username)}</div>
+          <div class="dim text-xs">@${escapeHtml(u.username || "")} · ${escapeHtml(u.email || "")}</div></td>
+      <td class="dim text-xs">${formatDateShort(u.createdAt)}</td>
+      <td>${u.onboarded ? '<span class="pill pill-green" style="font-size:10px;">OB</span>' : '<span class="pill" style="font-size:10px;background:var(--bg-subtle);color:var(--text-dim);">NEW</span>'}</td>
+      <td class="dim">${u.age ?? "—"}</td>
+      <td class="dim text-xs">${escapeHtml(u.school || "—")}</td>
+      <td class="dim text-xs">${escapeHtml(u.riskProfile || "—")}</td>
+      <td class="tabular">${u.tradeCount}</td>
+      <td class="tabular">${u.coachMsgCount}</td>
+      <td class="tabular">${u.holdingCount}</td>
+      <td class="tabular">${u.friendCount}</td>
+      <td class="tabular">${u.watchlistCount}</td>
+      <td class="tabular">${u.limitOrderCount}</td>
+      <td class="tabular">${u.biasFlagCount}</td>
+      <td class="tabular">${u.transferInCount}</td>
+      <td class="tabular">${u.transferOutCount}</td>
+      <td class="tabular">${u.cashRupees != null ? formatRupees(u.cashRupees * 100, { compact: true }) : "—"}</td>
+      <td class="tabular">${u.totalPortfolioRupees ? formatRupees(u.totalPortfolioRupees * 100, { compact: true }) : "—"}</td>
+      <td class="tabular ${u.unrealizedPLPct >= 0 ? "positive" : "negative"}">${u.unrealizedPLPct >= 0 ? "+" : ""}${u.unrealizedPLPct.toFixed(1)}%</td>
+      <td class="tabular">${u.totalTradedValueRupees ? formatRupees(u.totalTradedValueRupees * 100, { compact: true }) : "—"}</td>
+      <td class="tabular">${u.daysSinceLastTrade != null ? u.daysSinceLastTrade + "d" : "—"}</td>
+      <td class="dim text-xs">${formatDateShort(u.lastActive)}</td>
+      <td><button class="btn btn-ghost btn-sm" data-quick-reset="${escapeAttr(u.id)}" title="Reset portfolio">⟲</button></td>
+    </tr>`).join("");
+}
+function colHead(col, label) {
+  const arrow = state.sort.by === col ? (state.sort.dir === "asc" ? " ↑" : " ↓") : "";
+  return `<th data-col="${col}" class="sortable">${escapeHtml(label)}${arrow}</th>`;
+}
+function wireRowClicks(host, main) {
+  host.querySelectorAll(".admin-table tbody tr").forEach(tr => {
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("[data-quick-reset]")) return;
+      openUserModal(tr.dataset.userId);
+    });
+  });
+  host.querySelectorAll("[data-quick-reset]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const userId = btn.dataset.quickReset;
+      const reason = prompt("Reason for reset (≥ 8 chars, logged to audit):");
+      if (!reason || reason.trim().length < 8) return;
+      adminPost("/api/ai?op=admin-user-reset", { userId, reason })
+        .then(() => { toast({ kind: "success", message: "User reset." }); loadOverview().then(() => renderTabBody(main)); })
+        .catch(e => toast({ kind: "error", message: e.message }));
+    });
+  });
+  host.querySelectorAll("[data-open-user]").forEach(el => {
+    el.addEventListener("click", (e) => { e.preventDefault(); openUserModal(el.dataset.openUser); });
+  });
+}
+
+function applyFiltersAndSort(users) {
+  const f = state.filters;
   let list = users;
-  if (q) {
-    const n = q.toLowerCase();
+  if (f.search) {
+    const q = f.search.toLowerCase();
     list = list.filter(u =>
-      (u.username || "").toLowerCase().includes(n) ||
-      (u.displayName || "").toLowerCase().includes(n) ||
-      (u.email || "").toLowerCase().includes(n) ||
-      (u.school || "").toLowerCase().includes(n) ||
-      (u.city || "").toLowerCase().includes(n)
-    );
+      (u.username || "").toLowerCase().includes(q) ||
+      (u.displayName || "").toLowerCase().includes(q) ||
+      (u.email || "").toLowerCase().includes(q) ||
+      (u.school || "").toLowerCase().includes(q) ||
+      (u.city || "").toLowerCase().includes(q));
   }
+  if (f.onboarded !== "any")      list = list.filter(u => f.onboarded === "yes" ? !!u.onboarded : !u.onboarded);
+  if (f.riskProfile !== "any")    list = list.filter(u => u.riskProfile === f.riskProfile);
+  if (f.consent !== "any")        list = list.filter(u => f.consent === "yes" ? u.parentConsented : !u.parentConsented);
+  if (f.traded !== "any")         list = list.filter(u => f.traded === "yes" ? u.tradeCount > 0 : u.tradeCount === 0);
+  if (f.coached !== "any")        list = list.filter(u => f.coached === "yes" ? u.coachMsgCount > 0 : u.coachMsgCount === 0);
+  if (f.ageBracket !== "any") {
+    list = list.filter(u => {
+      const a = u.age;
+      if (a == null) return false;
+      if (f.ageBracket === "13-15") return a >= 13 && a <= 15;
+      if (f.ageBracket === "16-17") return a >= 16 && a <= 17;
+      if (f.ageBracket === "18+")   return a >= 18;
+      return true;
+    });
+  }
+  if (f.tradeBucket !== "any") {
+    list = list.filter(u => {
+      const c = u.tradeCount;
+      if (f.tradeBucket === "0")    return c === 0;
+      if (f.tradeBucket === "1-5")  return c >= 1 && c <= 5;
+      if (f.tradeBucket === "6-20") return c >= 6 && c <= 20;
+      if (f.tradeBucket === "20+")  return c > 20;
+      return true;
+    });
+  }
+  if (f.activity !== "any") {
+    const now = Date.now();
+    list = list.filter(u => {
+      const diff = u.lastActive ? now - new Date(u.lastActive).getTime() : Infinity;
+      const days = diff / 86400000;
+      if (f.activity === "<1d")   return days < 1;
+      if (f.activity === "<7d")   return days < 7;
+      if (f.activity === "<30d")  return days < 30;
+      if (f.activity === "30d+")  return days >= 30;
+      return true;
+    });
+  }
+  if (f.school !== "any")         list = list.filter(u => u.school === f.school);
+  const { by, dir } = state.sort;
   list = list.slice().sort((a, b) => {
     const av = a[by], bv = b[by];
     if (av == null && bv == null) return 0;
@@ -419,17 +574,356 @@ function filterAndSort(users, q, by, dir) {
   return list;
 }
 
+// -----------------------------------------------------------------------------
+// User drill-down modal (14 sections)
+// -----------------------------------------------------------------------------
+async function openUserModal(userId) {
+  const host = document.getElementById("modal-root");
+  host.innerHTML = `
+    <div class="modal-overlay" id="admin-user-overlay">
+      <div class="modal" style="max-width: 880px; max-height: 90vh; overflow: auto;">
+        <div class="modal-head">
+          <h2>Loading…</h2>
+          <button class="btn btn-ghost btn-icon" id="admin-close-modal">✕</button>
+        </div>
+        <div class="modal-body" id="admin-user-body"><div class="muted">Fetching 11 parallel queries…</div></div>
+      </div>
+    </div>`;
+  document.getElementById("admin-close-modal").addEventListener("click", () => host.innerHTML = "");
+  document.getElementById("admin-user-overlay").addEventListener("click", e => {
+    if (e.target.id === "admin-user-overlay") host.innerHTML = "";
+  });
+  state.userDetailLoading = true;
+  try {
+    state.userDetail = await adminGet("/api/ai?op=admin-user&id=" + encodeURIComponent(userId));
+  } catch (e) {
+    state.userDetail = { error: e.message };
+  }
+  state.userDetailLoading = false;
+  paintUserModal();
+}
+function paintUserModal() {
+  const host = document.getElementById("modal-root");
+  const body = document.getElementById("admin-user-body");
+  const head = host?.querySelector(".modal-head h2");
+  if (!body || !head) return;
+  const d = state.userDetail;
+  if (d?.error) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(d.error)}</div>`; head.textContent = "Error"; return; }
+  const { profile, portfolio, holdings, transactions, coachMessages, portfolioHistory, watchlist, friends, transfers, limitOrders, adminActionHistory, reportCard, authMeta } = d;
+  head.innerHTML = `${escapeHtml(profile.display_name || profile.username)} <span class="dim text-sm">@${escapeHtml(profile.username)}</span>`;
+
+  const histValues = (portfolioHistory || []).map(h => (h.total_value_paise || 0) / 100);
+  const histSvg = histValues.length > 1
+    ? `<div style="height: 180px;">${areaChart(histValues, { height: 180, color: "var(--brand)", paddingLeft: 40 })}</div>`
+    : `<div class="muted text-sm" style="padding: var(--sp-3); border: 1px dashed var(--border); border-radius: var(--r); text-align:center;">No history yet. Kick off backfill from System tab.</div>`;
+
+  const totalHoldValue = (holdings || []).reduce((a, h) => a + (Number(h.qty) || 0) * (Number(h.avg_cost_paise) || 0), 0) / 100;
+  const cashRupees = (portfolio?.cash_paise || 0) / 100;
+  const totalValue = cashRupees + totalHoldValue;
+
+  body.innerHTML = `
+    <div class="admin-drill-nav">
+      ${["identity","money","history","holdings","transactions","orders","watchlist","friends","transfers","coach","report","auth","audit","raw"].map(s => `<a href="#sec-${s}" class="drill-jump">${s}</a>`).join("")}
+    </div>
+
+    <div id="sec-identity"><div class="admin-user-section-label">1. Identity</div>
+      <div class="admin-user-grid">
+        <div>
+          ${kv("Email", profile.email)}
+          ${kv("Age", profile.age)}
+          ${kv("School", profile.school)}
+          ${kv("Class code", profile.class_code)}
+          ${kv("City", profile.city)}
+          ${kv("Risk profile", profile.risk_profile)}
+          ${kv("Avatar color", profile.avatar_color)}
+        </div>
+        <div>
+          ${kv("Parent email", profile.parent_email)}
+          ${kv("Consent at", profile.parent_consent_at ? formatDateShort(profile.parent_consent_at) : "—")}
+          ${kv("Onboarded", profile.onboarded ? "Yes" : "No")}
+          ${kv("Joined", formatDateShort(profile.created_at))}
+          ${kv("Updated", formatDateShort(profile.updated_at))}
+          ${kv("ID", profile.id)}
+        </div>
+      </div>
+    </div>
+
+    <div id="sec-money"><div class="admin-user-section-label">2. Money</div>
+      <div class="admin-kv"><span>Cash</span><span>${formatRupees(cashRupees * 100)}</span></div>
+      <div class="admin-kv"><span>Holdings (cost-basis)</span><span>${formatRupees(totalHoldValue * 100)}</span></div>
+      <div class="admin-kv"><span>Starting cash</span><span>${formatRupees(portfolio?.starting_cash_paise || 10000000)}</span></div>
+      <div class="admin-kv" style="border-top:1px solid var(--divider); padding-top: 6px; margin-top: 6px;">
+        <span class="font-semi">Total portfolio</span><span class="font-semi">${formatRupees(totalValue * 100)}</span>
+      </div>
+    </div>
+
+    <div id="sec-history"><div class="admin-user-section-label">3. Portfolio value over time</div>${histSvg}</div>
+
+    <div id="sec-holdings"><div class="admin-user-section-label">4. Holdings (${holdings?.length || 0})</div>
+      ${holdings?.length ? `<table class="admin-table"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg cost</th><th>Cost basis</th><th>First bought</th></tr></thead><tbody>
+        ${holdings.map(h => `<tr><td>${escapeHtml(h.symbol)}</td><td class="tabular">${h.qty}</td><td class="tabular">${formatRupees(h.avg_cost_paise || 0)}</td><td class="tabular">${formatRupees((Number(h.qty) || 0) * (Number(h.avg_cost_paise) || 0))}</td><td class="dim text-xs">${formatDateShort(h.first_bought_at)}</td></tr>`).join("")}
+      </tbody></table>` : `<div class="muted text-sm">No holdings.</div>`}</div>
+
+    <div id="sec-transactions"><div class="admin-user-section-label">5. Transactions (last ${transactions?.length || 0})</div>
+      ${transactions?.length ? `<table class="admin-table"><thead><tr><th>When</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Biases</th><th>Act</th></tr></thead><tbody>
+        ${transactions.slice(0, 100).map(t => `<tr>
+          <td class="dim text-xs">${formatDateShort(t.created_at)}</td>
+          <td><span class="pill ${t.side === "BUY" ? "pill-green" : "pill-red"}" style="font-size:10px;">${t.side}</span></td>
+          <td>${escapeHtml(t.symbol)}</td>
+          <td class="tabular">${t.qty}</td>
+          <td class="tabular">${formatRupees(t.price_paise || 0)}</td>
+          <td class="tabular">${formatRupees(t.value_paise || 0)}</td>
+          <td class="dim text-xs">${Array.isArray(t.bias_flags) ? t.bias_flags.length : 0}</td>
+          <td><button class="btn btn-ghost btn-sm" data-delete-trade="${escapeAttr(t.id)}">reverse</button></td>
+        </tr>`).join("")}
+      </tbody></table>` : `<div class="muted text-sm">No trades.</div>`}</div>
+
+    <div id="sec-orders"><div class="admin-user-section-label">6. Limit orders (${limitOrders?.length || 0})</div>
+      ${limitOrders?.length ? `<table class="admin-table"><thead><tr><th>When</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Limit</th><th>Status</th><th>Act</th></tr></thead><tbody>
+        ${limitOrders.map(o => `<tr>
+          <td class="dim text-xs">${formatDateShort(o.created_at)}</td>
+          <td>${o.side}</td><td>${escapeHtml(o.symbol)}</td><td class="tabular">${o.qty}</td>
+          <td class="tabular">${formatRupees(o.limit_price_paise || 0)}</td>
+          <td>${o.status}</td>
+          <td>${o.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-cancel-order="${escapeAttr(o.id)}">cancel</button>` : "—"}</td>
+        </tr>`).join("")}
+      </tbody></table>` : `<div class="muted text-sm">No orders.</div>`}</div>
+
+    <div id="sec-watchlist"><div class="admin-user-section-label">7. Watchlist (${watchlist?.length || 0})</div>
+      ${watchlist?.length ? `<div class="flex gap-1 wrap">${watchlist.map(w => `<span class="pill">${escapeHtml(w.symbol)}</span>`).join("")}</div>` : `<div class="muted text-sm">Empty.</div>`}</div>
+
+    <div id="sec-friends"><div class="admin-user-section-label">8. Friends (${friends?.length || 0})</div>
+      ${friends?.length ? `<div class="dim text-sm">${friends.length} friend(s) — IDs: ${friends.map(f => escapeHtml((f.friend_id || "").slice(0, 8))).join(", ")}</div>` : `<div class="muted text-sm">No friends yet.</div>`}</div>
+
+    <div id="sec-transfers"><div class="admin-user-section-label">9. Transfers (${transfers?.length || 0})</div>
+      ${transfers?.length ? `<table class="admin-table"><thead><tr><th>When</th><th>Dir</th><th>Amount</th><th>Status</th><th>Act</th></tr></thead><tbody>
+        ${transfers.map(tf => `<tr>
+          <td class="dim text-xs">${formatDateShort(tf.created_at)}</td>
+          <td>${tf.sender_id === profile.id ? "OUT" : "IN"}</td>
+          <td class="tabular">${formatRupees(tf.amount_paise || 0)}</td>
+          <td>${tf.status}</td>
+          <td><button class="btn btn-ghost btn-sm" data-void-transfer="${escapeAttr(tf.id)}">void</button></td>
+        </tr>`).join("")}
+      </tbody></table>` : `<div class="muted text-sm">No transfers.</div>`}</div>
+
+    <div id="sec-coach"><div class="admin-user-section-label">10. Coach messages (${coachMessages?.length || 0})</div>
+      ${coachMessages?.length ? `<div class="flex-col gap-2">${coachMessages.slice(0, 50).map(m => `
+        <details class="admin-coach-row">
+          <summary><strong>${escapeHtml(m.event_type || "—")}</strong> · ${escapeHtml(m.trigger_symbol || "—")} · <span class="dim">${formatDateShort(m.created_at)}</span> · model=${escapeHtml(m.model || "—")}
+          <button class="btn btn-ghost btn-sm" data-delete-coach="${escapeAttr(m.id)}" style="float:right;">delete</button></summary>
+          <pre class="admin-coach-payload">${escapeHtml(JSON.stringify(m.payload || {}, null, 2))}</pre>
+        </details>`).join("")}</div>` : `<div class="muted text-sm">No coach messages.</div>`}</div>
+
+    <div id="sec-report"><div class="admin-user-section-label">11. Report card (server-computed)</div>
+      ${reportCard ? `<div class="admin-user-grid">
+        <div>
+          ${kv("Total trades", reportCard.totalTrades)}
+          ${kv("Closed trades", reportCard.closedTrades)}
+          ${kv("Wins / Losses", reportCard.wins + " / " + reportCard.losses)}
+          ${kv("Win rate", Math.round(reportCard.winRate * 100) + "%")}
+        </div>
+        <div>
+          ${kv("Biggest win", formatRupees(reportCard.biggestWinRupees * 100))}
+          ${kv("Biggest loss", formatRupees(reportCard.biggestLossRupees * 100))}
+          ${kv("Avg hold days", reportCard.avgHoldDays)}
+          ${kv("Bias flags", (reportCard.biasFlags || []).join(", ") || "—")}
+        </div>
+      </div>` : `<div class="muted text-sm">Not available.</div>`}</div>
+
+    <div id="sec-auth"><div class="admin-user-section-label">12. Supabase Auth metadata</div>
+      ${authMeta ? `<div class="admin-user-grid">
+        <div>
+          ${kv("Last sign-in", authMeta.lastSignInAt ? formatDateShort(authMeta.lastSignInAt) : "—")}
+          ${kv("Email confirmed", authMeta.emailConfirmedAt ? formatDateShort(authMeta.emailConfirmedAt) : "—")}
+          ${kv("Phone", authMeta.phone || "—")}
+          ${kv("Banned until", authMeta.bannedUntil || "—")}
+        </div>
+        <div>
+          ${kv("Created", formatDateShort(authMeta.createdAt))}
+          ${kv("Updated", formatDateShort(authMeta.updatedAt))}
+          <details><summary>Raw user metadata</summary><pre class="admin-coach-payload">${escapeHtml(JSON.stringify(authMeta.rawUserMetaData || {}, null, 2))}</pre></details>
+        </div>
+      </div>
+      <div class="flex gap-2 wrap" style="margin-top: var(--sp-3);">
+        <button class="btn btn-ghost btn-sm" data-auth-reset="${escapeAttr(profile.email)}">Send reset email</button>
+        <button class="btn btn-ghost btn-sm" data-auth-magic="${escapeAttr(profile.email)}">Magic link</button>
+        ${authMeta.bannedUntil ? `<button class="btn btn-ghost btn-sm" data-unban="${escapeAttr(profile.id)}">Unban</button>` : `<button class="btn btn-ghost btn-sm" data-ban="${escapeAttr(profile.id)}" style="color:var(--negative);">Ban</button>`}
+        <button class="btn btn-ghost btn-sm" data-delete-user="${escapeAttr(profile.id)}" data-username="${escapeAttr(profile.username)}" style="color:var(--negative);">Delete account</button>
+      </div>
+      ` : `<div class="muted text-sm">Unreachable (service-role needed).</div>`}</div>
+
+    <div id="sec-audit"><div class="admin-user-section-label">13. Admin action history (${adminActionHistory?.length || 0})</div>
+      ${adminActionHistory?.length ? `<table class="admin-table"><thead><tr><th>When</th><th>Action</th><th>Reason</th></tr></thead><tbody>
+        ${adminActionHistory.map(a => `<tr><td class="dim text-xs">${formatDateShort(a.ts)}</td><td>${escapeHtml(a.action)}</td><td class="dim text-xs">${escapeHtml(a.reason || "—")}</td></tr>`).join("")}
+      </tbody></table>` : `<div class="muted text-sm">None.</div>`}</div>
+
+    <div id="sec-raw"><div class="admin-user-section-label">14. Raw (collapsed)</div>
+      <details><summary>Expand every field as JSON</summary><pre class="admin-coach-payload">${escapeHtml(JSON.stringify(d, null, 2))}</pre></details>
+    </div>
+  `;
+  wireModalActions(profile);
+}
+function wireModalActions(profile) {
+  const host = document.getElementById("modal-root");
+  host.querySelectorAll("[data-delete-trade]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason for reversing this trade (≥ 8 chars):");
+    if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-trade-delete", { txnId: b.dataset.deleteTrade, reason }); toast({ kind: "success", message: "Trade reversed." }); openUserModal(profile.id); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-cancel-order]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason for cancelling (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-order-cancel", { orderId: b.dataset.cancelOrder, reason }); toast({ kind: "success", message: "Cancelled." }); openUserModal(profile.id); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-void-transfer]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason for voiding (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-transfer-void", { transferId: b.dataset.voidTransfer, reason }); toast({ kind: "success", message: "Voided." }); openUserModal(profile.id); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-delete-coach]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-coach-delete", { messageId: b.dataset.deleteCoach, reason }); toast({ kind: "success", message: "Deleted." }); openUserModal(profile.id); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-auth-reset]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-auth-reset", { email: b.dataset.authReset, reason }); toast({ kind: "success", message: "Reset email sent." }); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-auth-magic]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { const r = await adminPost("/api/ai?op=admin-auth-magiclink", { email: b.dataset.authMagic, reason }); toast({ kind: "success", message: "Link: " + (r.link || "generated.") }); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-ban]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason for ban (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-user-ban", { userId: b.dataset.ban, reason }); toast({ kind: "success", message: "Banned." }); openUserModal(profile.id); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-unban]").forEach(b => b.addEventListener("click", async () => {
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-user-unban", { userId: b.dataset.unban, reason }); toast({ kind: "success", message: "Unbanned." }); openUserModal(profile.id); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-delete-user]").forEach(b => b.addEventListener("click", async () => {
+    const username = b.dataset.username;
+    const confirm = prompt(`DESTRUCTIVE. Type the username (${username}) to confirm:`);
+    if (confirm !== username) return;
+    const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+    try { await adminPost("/api/ai?op=admin-user-delete", { userId: b.dataset.deleteUser, confirm: username, reason }); toast({ kind: "success", message: "Deleted." }); document.getElementById("modal-root").innerHTML = ""; } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+}
+
+// -----------------------------------------------------------------------------
+// Activity tab + Live tail (SSE)
+// -----------------------------------------------------------------------------
+function renderActivityTab(host, main) {
+  host.innerHTML = `
+    <div class="card" style="margin-bottom: var(--sp-3);">
+      <div class="card-head">
+        <h3>Live activity feed</h3>
+        <div class="flex gap-2 items-center">
+          <select id="act-filter" class="select">
+            <option value="all">All events</option>
+            <option value="trades">Trades</option>
+            <option value="coach">Coach</option>
+            <option value="transfers">Transfers</option>
+            <option value="orders">Orders</option>
+            <option value="signups">Signups</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" id="act-clear">Clear</button>
+        </div>
+      </div>
+      <div id="activity-list" class="activity-list">
+        <div class="muted text-sm" style="padding: var(--sp-3);">Open Live tail at the top to start streaming events.</div>
+      </div>
+    </div>`;
+  host.querySelector("#act-filter").addEventListener("change", e => {
+    state.activityFilter = e.target.value;
+    repaintActivity();
+  });
+  host.querySelector("#act-clear").addEventListener("click", () => {
+    state.activity = [];
+    repaintActivity();
+  });
+  // Also auto-fetch a recent batch of events so the feed isn't empty on open.
+  adminGet("/api/ai?op=admin-activity-feed&limit=100")
+    .then(d => { state.activity = (d?.events || []).reverse(); repaintActivity(); })
+    .catch(() => {});
+}
+
+function repaintActivity() {
+  const host = document.getElementById("activity-list");
+  if (!host) return;
+  const events = state.activity
+    .filter(e => state.activityFilter === "all" || matchesFilter(e.kind, state.activityFilter))
+    .slice(-500);
+  if (!events.length) {
+    host.innerHTML = `<div class="muted text-sm" style="padding: var(--sp-3);">No events yet.</div>`;
+    return;
+  }
+  host.innerHTML = events.slice().reverse().map(e => renderEventRow(e)).join("");
+}
+function matchesFilter(kind, filter) {
+  if (filter === "trades")    return kind === "trade";
+  if (filter === "coach")     return kind === "coach";
+  if (filter === "transfers") return kind === "transfer";
+  if (filter === "orders")    return kind === "order";
+  if (filter === "signups")   return kind === "signup";
+  return true;
+}
+function renderEventRow(ev) {
+  const icon = ({ trade: "🟢", coach: "💬", transfer: "💸", order: "📊", signup: "✨", admin: "🛠" })[ev.kind] || "•";
+  const payload = ev.payload?.row || ev.payload || {};
+  let summary = "";
+  if (ev.kind === "trade")    summary = `${payload.side} ${payload.qty} ${payload.symbol} @ ${formatRupees(payload.price_paise || 0, { compact: true })}`;
+  else if (ev.kind === "coach") summary = `${payload.event_type || ""} ${payload.trigger_symbol || ""}`;
+  else if (ev.kind === "transfer") summary = `${formatRupees(payload.amount_paise || 0, { compact: true })} (${payload.status})`;
+  else if (ev.kind === "order")    summary = `${payload.side} ${payload.qty} ${payload.symbol} — ${payload.status}`;
+  else if (ev.kind === "signup")   summary = `@${payload.username || (payload.id || "").slice(0, 8)}`;
+  else if (ev.kind === "admin")    summary = `${payload.action} · ${payload.reason || ""}`;
+  return `<div class="activity-row"><span class="act-icon">${icon}</span><span class="act-kind">${escapeHtml(ev.kind)}</span><span class="act-summary">${escapeHtml(summary)}</span><span class="act-ts dim">${formatDateShort(ev.ts)}</span></div>`;
+}
+
+function openTail(main) {
+  if (state.tail) return;
+  const token = getToken();
+  if (!token) { toast({ kind: "error", message: "No admin token." }); return; }
+  const url = `/api/ai?op=admin-tail&token=${encodeURIComponent(token)}`;
+  const es = new EventSource(url);
+  state.tail = es;
+  es.addEventListener("open", () => { state.tailConnected = true; updateTailBadge(main); });
+  es.addEventListener("error", () => { state.tailConnected = false; updateTailBadge(main); });
+  ["trade", "coach", "transfer", "order", "signup", "admin"].forEach(kind => {
+    es.addEventListener(kind, (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        state.activity.push(ev);
+        if (state.activity.length > 500) state.activity.shift();
+        if (currentTab === "activity") repaintActivity();
+      } catch {}
+    });
+  });
+  es.addEventListener("close", () => { state.tailConnected = false; state.tail = null; updateTailBadge(main); });
+}
+function closeTail() {
+  if (state.tail) { try { state.tail.close(); } catch {} state.tail = null; }
+  state.tailConnected = false;
+}
+function updateTailBadge(main) {
+  const el = main.querySelector("#tail-indicator");
+  const btn = main.querySelector("#tail-toggle");
+  if (el) { el.className = `tail-indicator ${state.tailConnected ? "live" : "off"}`; el.textContent = state.tailConnected ? "● LIVE" : "○ paused"; }
+  if (btn) btn.textContent = state.tailConnected ? "Pause tail" : "Live tail";
+}
+
+// -----------------------------------------------------------------------------
+// Utility renderers
+// -----------------------------------------------------------------------------
+function kv(k, v) { return `<div class="admin-kv"><span>${escapeHtml(k)}</span><span>${escapeHtml(v ?? "—")}</span></div>`; }
 function formatDateShort(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (isNaN(d)) return "—";
-  const diffMs = Date.now() - d.getTime();
-  if (diffMs < 60_000) return "just now";
-  if (diffMs < 3600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
-  if (diffMs < 86400_000) return `${Math.floor(diffMs / 3600_000)}h ago`;
-  if (diffMs < 7 * 86400_000) return `${Math.floor(diffMs / 86400_000)}d ago`;
+  const diff = Date.now() - d.getTime();
+  if (diff < 60_000) return "just now";
+  if (diff < 3600_000) return Math.floor(diff / 60_000) + "m";
+  if (diff < 86400_000) return Math.floor(diff / 3600_000) + "h";
+  if (diff < 7 * 86400_000) return Math.floor(diff / 86400_000) + "d";
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" });
 }
-
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
