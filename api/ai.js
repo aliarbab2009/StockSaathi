@@ -117,8 +117,11 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
   // (asia-south1) by default for lowest latency to Indian users.
   const vertexProject = env.GEMINI_VERTEX_PROJECT || "";
   const vertexRegion  = env.GEMINI_VERTEX_REGION  || "asia-south1";
+  // "global" location uses the non-prefixed subdomain. 3.x preview models
+  // have "Global" availability — set GEMINI_VERTEX_REGION=global to use them.
+  const subdomain = vertexRegion === "global" ? "" : `${vertexRegion}-`;
   const geminiUrl = vertexProject
-    ? `https://${vertexRegion}-aiplatform.googleapis.com/v1/projects/${vertexProject}/locations/${vertexRegion}/endpoints/openapi/chat/completions`
+    ? `https://${subdomain}aiplatform.googleapis.com/v1/projects/${vertexProject}/locations/${vertexRegion}/endpoints/openapi/chat/completions`
     : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
   // Order by profile — same logic as /api/chat.

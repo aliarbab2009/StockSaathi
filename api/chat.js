@@ -54,8 +54,13 @@ const PUBLIC_ORIGIN  = ((globalThis.process?.env?.PUBLIC_ORIGIN) || "").replace(
 // stays in-region. Override region via GEMINI_VERTEX_REGION.
 const GEMINI_VERTEX_PROJECT = globalThis.process?.env?.GEMINI_VERTEX_PROJECT || "";
 const GEMINI_VERTEX_REGION  = globalThis.process?.env?.GEMINI_VERTEX_REGION  || "asia-south1";
+// "global" location uses the non-prefixed subdomain. Regional locations
+// use <region>-aiplatform.googleapis.com. Gemini 3.x preview models have
+// "Global" availability — users who want them should set
+// GEMINI_VERTEX_REGION=global to hit the right endpoint.
+const GEMINI_SUBDOMAIN = GEMINI_VERTEX_REGION === "global" ? "" : `${GEMINI_VERTEX_REGION}-`;
 const GEMINI_URL = GEMINI_VERTEX_PROJECT
-  ? `https://${GEMINI_VERTEX_REGION}-aiplatform.googleapis.com/v1/projects/${GEMINI_VERTEX_PROJECT}/locations/${GEMINI_VERTEX_REGION}/endpoints/openapi/chat/completions`
+  ? `https://${GEMINI_SUBDOMAIN}aiplatform.googleapis.com/v1/projects/${GEMINI_VERTEX_PROJECT}/locations/${GEMINI_VERTEX_REGION}/endpoints/openapi/chat/completions`
   : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 const ALLOWED_ORIGINS = new Set([
@@ -270,11 +275,25 @@ export default async function handler(req) {
         });
       }
       last = r;
-      // Only fall over on throttling / upstream-down signals.
-      if (r.status === 429 || r.status >= 500) {
-        continue;
-      }
-      // 4xx other than 429 is a client-shape issue — return now, no fallback.
+      // Fall over on any infrastructure/config failure at the upstream:
+      //   - 5xx server-down
+      //   - 429 rate limited
+      //   - 401/403 auth or permission rejected (bad key, API not enabled)
+      //   - 404 model not found (e.g. 3.x preview not in this region)
+      //   - 408/409 timeout/conflict
+      // These all indicate "THIS upstream can't serve the request right now"
+      // but a different upstream might. The NEXT one in the chain gets a shot.
+      // Only pure client-shape errors (400 bad body, 413 too large, 415 unsupported
+      // content type) get returned directly — those would fail identically on
+      // every upstream.
+      const isFallover = r.status === 429
+                      || r.status >= 500
+                      || r.status === 401
+                      || r.status === 403
+                      || r.status === 404
+                      || r.status === 408
+                      || r.status === 409;
+      if (isFallover) continue;
       return new Response(r.text, {
         status: r.status,
         headers: corsHeaders(origin),
