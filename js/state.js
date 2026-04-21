@@ -229,17 +229,20 @@ export function switchUser() {
 // ---- profile mutations (DB-backed via auth/accounts.js:updateProfile) ----
 import { updateProfile } from "./auth/accounts.js";
 
-export async function completeOnboarding({ age, school, classCode, riskProfile }) {
-  try {
-    await updateProfile({
-      age, school, classCode, riskProfile,
-      onboarded: true,
-    });
-  } catch (e) { console.warn("onboarding profile update failed:", e); }
+export function completeOnboarding({ age, school, classCode, riskProfile }) {
+  // Update local state IMMEDIATELY so any route that checks `onboarded`
+  // (e.g. the portfolio route guard) sees true right away — otherwise a
+  // slow Supabase write can make navigate("/portfolio") bounce back to
+  // /onboarding (which resets step → 0 and the user sees "step 1" again).
   setState(s => ({
     ...s,
     user: { ...s.user, age, school, classCode, riskProfile, onboarded: true },
   }));
+  // Fire the DB write in the background. Errors get logged but never block
+  // the UI. On next login the server row is fetched fresh, so a transient
+  // failure here just means the write retries naturally next session.
+  updateProfile({ age, school, classCode, riskProfile, onboarded: true })
+    .catch(e => console.warn("onboarding profile update failed:", e));
 }
 
 export function recordCoachMessage(msg) {

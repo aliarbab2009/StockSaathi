@@ -141,24 +141,20 @@ function attachStepListeners(main) {
       render(main);
     });
   });
-  main.querySelector("[data-finish]")?.addEventListener("click", async (e) => {
+  main.querySelector("[data-finish]")?.addEventListener("click", (e) => {
     if (!form.riskProfile) { alert("Pick a style."); return; }
     const btn = e.currentTarget;
     btn.disabled = true;
     btn.textContent = "Opening portfolio…";
-    // Race the save against a 4 s timeout. If Supabase is slow/hung the save
-    // continues in the background while the UI moves on — the user never
-    // gets stuck on this screen waiting for a profile write. The state
-    // update inside completeOnboarding is synchronous, so the local experience
-    // stays consistent even if the DB write lags.
-    const savePromise = completeOnboarding({
+    // completeOnboarding is now synchronous for local state (so the route
+    // guard sees onboarded:true right away) and fires the DB write in the
+    // background. No race needed — navigation is always safe.
+    completeOnboarding({
       age: form.age,
       school: form.school || null,
       classCode: form.classCode || null,
       riskProfile: form.riskProfile,
-    }).catch(err => { console.warn("onboarding save:", err); });
-    const timeoutPromise = new Promise(resolve => setTimeout(resolve, 4000));
-    await Promise.race([savePromise, timeoutPromise]);
+    });
     toast({ kind: "success", message: "Welcome to StockSaathi. ₹1,00,000 ready to deploy." });
     navigate("/portfolio");
   });
