@@ -1289,7 +1289,10 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   box-sizing: border-box;
 }
 /* Mobile / narrow viewports — hover is flaky on touch and absolute-anchored
-   popovers clip off-screen. Pin as a bottom sheet with a scrim. */
+   popovers clip off-screen. Pin as a bottom sheet with a scrim. Show/hide
+   is controlled EXCLUSIVELY by the .ms-open class set by the popover JS;
+   :hover / :focus-within effects are neutralised so random focus events
+   don't half-show the sheet. */
 @media (max-width: 640px) {
   .market-status-pop {
     position: fixed !important;
@@ -1301,10 +1304,16 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
     min-width: 0 !important;
     width: auto !important;
     z-index: 9999 !important;
-    transform: translateY(20px);
+    transform: translateY(20px) !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
   }
   .market-status.ms-open .market-status-pop {
+    opacity: 1 !important;
+    visibility: visible !important;
     transform: translateY(0) !important;
+    pointer-events: auto !important;
   }
   .market-status.ms-open::before {
     content: "";
