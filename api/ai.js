@@ -584,6 +584,7 @@ export default async function handler(req) {
       case "command":             if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opCommand(req, origin);
       case "time":                return opTime(req, origin);
       case "signup-count":        return await opSignupCount(req, origin);
+      case "admin-path-check":    return opAdminPathCheck(req, origin, url);
       case "admin-overview":      return await opAdminOverview(req, origin);
       case "admin-user":          return await opAdminUser(req, origin, url);
       default: return j(400, { error: "unknown_op", op }, origin);
@@ -620,6 +621,20 @@ function checkAdmin(req) {
   let diff = 0;
   for (let i = 0; i < token.length; i++) diff |= token.charCodeAt(i) ^ expected.charCodeAt(i);
   return diff === 0 ? { ok: true } : { ok: false, reason: "bad_token" };
+}
+
+// Validates just the URL slug — does NOT reveal whether ADMIN_PATH is set.
+// Returns 404 for every miss so a scanner can't tell scans from misses.
+function opAdminPathCheck(req, origin, url) {
+  const env = globalThis.process?.env || {};
+  const expected = (env.ADMIN_PATH || "").trim();
+  const slug = String(url.searchParams.get("slug") || "").trim();
+  if (!expected || !slug) return j(404, { error: "not_found" }, origin);
+  if (slug.length !== expected.length) return j(404, { error: "not_found" }, origin);
+  let diff = 0;
+  for (let i = 0; i < slug.length; i++) diff |= slug.charCodeAt(i) ^ expected.charCodeAt(i);
+  if (diff !== 0) return j(404, { error: "not_found" }, origin);
+  return j(200, { ok: true }, origin);
 }
 
 async function sbAdminFetch(path, opts = {}) {

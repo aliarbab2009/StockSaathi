@@ -27,21 +27,46 @@ let sortBy = "createdAt";
 let sortDir = "desc";       // "desc" | "asc"
 let search = "";
 
-export function renderAdmin(main) {
+export function renderAdmin(main, params) {
   let cancelled = false;
   const onLeave = () => { cancelled = true; };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  const token = getToken();
-  if (!token) {
-    renderTokenForm(main);
-    return;
-  }
+  const slug = params?.slug || "";
+  if (!slug) return render404Like(main);
 
-  if (!overview && !overviewLoading) {
-    loadOverview().then(() => { if (!cancelled) render(main); });
-  }
-  render(main);
+  // First: ask the server whether this slug matches ADMIN_PATH.
+  // If it doesn't, render the same 404 shape the router would show — so
+  // scanners get the same response whether they typed /a/abc or /foo/bar.
+  renderLoadingShell(main);
+  fetch("/api/ai?op=admin-path-check&slug=" + encodeURIComponent(slug))
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (cancelled) return;
+      if (!data?.ok) return render404Like(main);
+      if (!getToken()) return renderTokenForm(main);
+      if (!overview && !overviewLoading) {
+        loadOverview().then(() => { if (!cancelled) render(main); });
+      }
+      render(main);
+    })
+    .catch(() => render404Like(main));
+}
+
+// 404 shape — mirrors the router's render404 so guessers can't distinguish.
+function render404Like(main) {
+  main.innerHTML = `
+    <div class="empty-state" style="padding: 12vh var(--sp-4);">
+      <span class="emoji">🔍</span>
+      <h3>Page not found</h3>
+      <p class="muted">The route you tried doesn't exist.</p>
+      <a href="#/" class="btn btn-primary">Back home</a>
+    </div>
+  `;
+}
+
+function renderLoadingShell(main) {
+  main.innerHTML = `<div class="card" style="max-width: 420px; margin: 10vh auto; text-align:center; padding: var(--sp-5);"><div class="muted">Loading…</div></div>`;
 }
 
 function getToken() {

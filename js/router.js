@@ -40,7 +40,12 @@ const ROUTES = [
   { name: "news",          match: /^\/news\/?$/,                           render: renderNews, public: true },
   { name: "chat",          match: /^\/chat\/?$/,                           render: renderChat, public: true },
   { name: "settings",      match: /^\/settings\/?$/,                       render: renderSettings, needsAuth: true },
-  { name: "admin",         match: /^\/admin\/?$/,                          render: renderAdmin, public: true },
+  // Admin path is NOT /admin — that 404s. Real path is /a/<slug> where
+  // <slug> must match ADMIN_PATH env var on the server. The server returns
+  // the same 404 shape for wrong slugs, so scanning the URL space gets you
+  // nothing. renderAdmin itself calls /api/ai?op=admin-path-check and
+  // short-circuits to 404 if the slug isn't valid.
+  { name: "admin-slug",    match: /^\/a\/([A-Za-z0-9_-]{1,64})\/?$/,       render: renderAdmin, param: "slug", public: true },
 ];
 
 export function currentRoute() {

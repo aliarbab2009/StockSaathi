@@ -1286,6 +1286,34 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   transition: opacity 140ms, transform 140ms, visibility 140ms;
   z-index: 100;
   pointer-events: none;
+  box-sizing: border-box;
+}
+/* Mobile / narrow viewports — hover is flaky on touch and absolute-anchored
+   popovers clip off-screen. Pin as a bottom sheet with a scrim. */
+@media (max-width: 640px) {
+  .market-status-pop {
+    position: fixed !important;
+    top: auto !important;
+    bottom: 16px !important;
+    left: 16px !important;
+    right: 16px !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    width: auto !important;
+    z-index: 9999 !important;
+    transform: translateY(20px);
+  }
+  .market-status.ms-open .market-status-pop {
+    transform: translateY(0) !important;
+  }
+  .market-status.ms-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 9998;
+    animation: cmdk-fade 150ms ease-out;
+  }
 }
 .market-status:hover .market-status-pop,
 .market-status:focus-visible .market-status-pop,

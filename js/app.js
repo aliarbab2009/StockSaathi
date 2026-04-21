@@ -12,6 +12,7 @@ import { startLimitMatcher } from "./features/limitOrders.js";
 import { mountAiExplainer } from "./features/aiExplainer.js";
 import { mountCommandPalette, openCommandPalette } from "./components/commandPalette.js";
 import { startServerTimeSync } from "./data/serverTime.js";
+import { mountMarketStatusPopover } from "./features/marketStatusPopover.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -31,6 +32,7 @@ mountNav();
 mountCoachPanel();
 mountAiExplainer();
 mountCommandPalette();
+mountMarketStatusPopover();
 mountRouter();
 
 // If Supabase is configured, boot cross-device sync + start the limit-order
