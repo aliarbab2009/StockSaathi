@@ -234,8 +234,8 @@ function renderTabBody(main) {
     case "database": return renderDatabaseTab(host, main);
     case "auth":     return renderAuthTab(host, main);
     case "markets":  return renderPlaceholder(host, "Markets / AI cache", "Coming in next commit.");
-    case "deploy":   return renderPlaceholder(host, "Deploy (Vercel)", "Coming in next commit.");
-    case "repo":     return renderPlaceholder(host, "Repo (GitHub)", "Coming in next commit.");
+    case "deploy":   return renderDeployTab(host, main);
+    case "repo":     return renderRepoTab(host, main);
     case "audit":    return renderPlaceholder(host, "Audit log", "Coming in next commit.");
     default:         return renderOverview(host, main);
   }
@@ -1261,6 +1261,230 @@ async function renderAuthTab(host, main) {
     const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
     try { await adminPost("/api/ai?op=admin-user-unban", { userId: b.dataset.unbanUser, reason }); toast({ kind: "success", message: "Unbanned." }); authState.users = null; renderTabBody(main); } catch (e) { toast({ kind: "error", message: e.message }); }
   }));
+}
+
+// -----------------------------------------------------------------------------
+// Deploy tab — Vercel
+// -----------------------------------------------------------------------------
+const deployState = { deployments: null, envs: null, domains: null, view: "deployments", selectedLogs: null };
+async function renderDeployTab(host, main) {
+  host.innerHTML = `
+    <div class="card" style="margin-bottom: var(--sp-3);">
+      <div class="card-head">
+        <h3>Vercel</h3>
+        <div class="flex gap-2">
+          ${["deployments","envs","domains"].map(v => `<button class="btn btn-ghost btn-sm ${deployState.view === v ? "active-btn" : ""}" data-dep-view="${v}">${v}</button>`).join("")}
+        </div>
+      </div>
+      <div id="dep-body"></div>
+    </div>`;
+  host.querySelectorAll("[data-dep-view]").forEach(b => b.addEventListener("click", () => { deployState.view = b.dataset.depView; renderDeployTab(host, main); }));
+  const body = host.querySelector("#dep-body");
+  if (deployState.view === "deployments") return renderDeployDeployments(body);
+  if (deployState.view === "envs") return renderDeployEnvs(body);
+  if (deployState.view === "domains") return renderDeployDomains(body);
+}
+async function renderDeployDeployments(body) {
+  body.innerHTML = `<div class="muted">Loading deployments…</div>`;
+  try {
+    const data = deployState.deployments || (deployState.deployments = await adminGet("/api/ai?op=admin-vercel-deployments&limit=30"));
+    const d = data.deployments || [];
+    body.innerHTML = `
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>When</th><th>Status</th><th>Target</th><th>Commit</th><th>Creator</th><th>URL</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${d.map(x => `<tr>
+              <td class="dim text-xs">${x.created ? formatDateShort(new Date(x.created).toISOString()) : "—"}</td>
+              <td><span class="pill ${x.state === "READY" ? "pill-green" : x.state === "ERROR" ? "pill-red" : "pill-neutral"}" style="font-size:10px;">${escapeHtml(x.state || x.readyState || "?")}</span></td>
+              <td class="dim text-xs">${escapeHtml(x.target || "preview")}</td>
+              <td class="dim text-xs">${escapeHtml((x.meta?.githubCommitSha || "").slice(0, 7) || "—")}</td>
+              <td class="dim text-xs">${escapeHtml(x.creator?.username || "—")}</td>
+              <td><a href="https://${escapeAttr(x.url || "")}" target="_blank" class="btn-link">${escapeHtml((x.url || "").slice(0, 40))}</a></td>
+              <td>
+                <button class="btn btn-ghost btn-sm" data-view-logs="${escapeAttr(x.uid || x.id)}">logs</button>
+                <button class="btn btn-ghost btn-sm" data-redeploy="${escapeAttr(x.uid || x.id)}">redeploy</button>
+                ${x.target !== "production" && x.state === "READY" ? `<button class="btn btn-ghost btn-sm" data-promote="${escapeAttr(x.uid || x.id)}" style="color:var(--warning);">promote</button>` : ""}
+              </td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div id="dep-logs" style="margin-top: var(--sp-3);"></div>`;
+    body.querySelectorAll("[data-view-logs]").forEach(b => b.addEventListener("click", async () => {
+      const id = b.dataset.viewLogs;
+      const logsHost = body.querySelector("#dep-logs");
+      logsHost.innerHTML = `<div class="muted">Loading logs for ${escapeHtml(id)}…</div>`;
+      try {
+        const logs = await adminGet("/api/ai?op=admin-vercel-logs&id=" + encodeURIComponent(id));
+        logsHost.innerHTML = `<div class="card"><div class="card-head"><h3>Logs · ${escapeHtml(id)}</h3></div><pre class="admin-coach-payload" style="max-height: 500px;">${escapeHtml(JSON.stringify(logs.events || logs, null, 2))}</pre></div>`;
+      } catch (e) { logsHost.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; }
+    }));
+    body.querySelectorAll("[data-redeploy]").forEach(b => b.addEventListener("click", async () => {
+      const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+      try { await adminPost("/api/ai?op=admin-vercel-redeploy", { deploymentId: b.dataset.redeploy, reason }); toast({ kind: "success", message: "Redeploy triggered." }); }
+      catch (e) { toast({ kind: "error", message: e.message }); }
+    }));
+    body.querySelectorAll("[data-promote]").forEach(b => b.addEventListener("click", async () => {
+      const id = b.dataset.promote;
+      const confirm = prompt(`DESTRUCTIVE. Type last 8 chars of deployment ID (${id.slice(-8)}) to confirm:`);
+      if (confirm !== id.slice(-8)) return;
+      const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+      try { await adminPost("/api/ai?op=admin-vercel-rollback", { deploymentId: id, confirm: id.slice(-8), reason }); toast({ kind: "success", message: "Promoted." }); }
+      catch (e) { toast({ kind: "error", message: e.message }); }
+    }));
+  } catch (e) {
+    body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div><div class="muted text-sm" style="margin-top: 8px;">Add <code>VERCEL_TOKEN</code> + <code>VERCEL_PROJECT_ID</code> to Vercel env vars to enable this tab.</div>`;
+  }
+}
+async function renderDeployEnvs(body) {
+  body.innerHTML = `<div class="muted">Loading env vars…</div>`;
+  try {
+    const data = await adminGet("/api/ai?op=admin-vercel-envs");
+    body.innerHTML = `
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Key</th><th>Target</th><th>Value (masked)</th><th>Length</th><th>Updated</th><th>Act</th></tr></thead>
+          <tbody>
+            ${(data.envs || []).map(e => `<tr>
+              <td class="font-semi">${escapeHtml(e.key)}</td>
+              <td class="dim text-xs">${Array.isArray(e.target) ? e.target.join(", ") : "—"}</td>
+              <td class="dim text-xs font-mono">${escapeHtml(e.maskedValue || "—")}</td>
+              <td class="tabular">${e.valueLength}</td>
+              <td class="dim text-xs">${formatDateShort(e.updatedAt)}</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" data-env-update="${escapeAttr(e.id)}" data-env-key="${escapeAttr(e.key)}">edit</button>
+                <button class="btn btn-ghost btn-sm" data-env-delete="${escapeAttr(e.id)}" data-env-key="${escapeAttr(e.key)}" style="color:var(--negative);">del</button>
+              </td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-top: var(--sp-3);">
+        <h3>Create new env var</h3>
+        <div class="flex gap-2 wrap">
+          <input class="input" id="env-new-key" placeholder="KEY" />
+          <input class="input" id="env-new-value" placeholder="value" type="password" />
+          <input class="input" id="env-new-reason" placeholder="reason" />
+          <button class="btn btn-primary btn-sm" id="env-create">Create</button>
+        </div>
+        <p class="dim text-xs" style="margin-top: 6px;">New env vars apply on next function cold start (~30s).</p>
+      </div>`;
+    body.querySelectorAll("[data-env-update]").forEach(b => b.addEventListener("click", async () => {
+      const key = b.dataset.envKey;
+      const confirm = prompt(`DESTRUCTIVE. Type env var name (${key}) to confirm edit:`);
+      if (confirm !== key) return;
+      const newVal = prompt(`New value for ${key}:`); if (newVal == null) return;
+      const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+      try { await adminPost("/api/ai?op=admin-vercel-env-patch", { action: "update", envId: b.dataset.envUpdate, key, confirm: key, value: newVal, reason }); toast({ kind: "success", message: "Updated. Apply on next cold start." }); }
+      catch (e) { toast({ kind: "error", message: e.message }); }
+    }));
+    body.querySelectorAll("[data-env-delete]").forEach(b => b.addEventListener("click", async () => {
+      const key = b.dataset.envKey;
+      const confirm = prompt(`DESTRUCTIVE. Type env var name (${key}) to confirm delete:`);
+      if (confirm !== key) return;
+      const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+      try { await adminPost("/api/ai?op=admin-vercel-env-patch", { action: "delete", envId: b.dataset.envDelete, key, confirm: key, reason }); toast({ kind: "success", message: "Deleted." }); }
+      catch (e) { toast({ kind: "error", message: e.message }); }
+    }));
+    body.querySelector("#env-create").addEventListener("click", async () => {
+      const key = body.querySelector("#env-new-key").value.trim();
+      const value = body.querySelector("#env-new-value").value;
+      const reason = body.querySelector("#env-new-reason").value.trim();
+      if (!key || !value) return;
+      if (reason.length < 8) { toast({ kind: "error", message: "Reason ≥ 8 chars." }); return; }
+      const confirm = prompt(`Confirm creation. Type env var name (${key}):`);
+      if (confirm !== key) return;
+      try { await adminPost("/api/ai?op=admin-vercel-env-patch", { action: "create", key, confirm: key, value, reason }); toast({ kind: "success", message: "Created." }); }
+      catch (e) { toast({ kind: "error", message: e.message }); }
+    });
+  } catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; }
+}
+async function renderDeployDomains(body) {
+  body.innerHTML = `<div class="muted">Loading domains…</div>`;
+  try {
+    const data = await adminGet("/api/ai?op=admin-vercel-domains");
+    const domains = data.domains || data || [];
+    body.innerHTML = `<pre class="admin-coach-payload">${escapeHtml(JSON.stringify(domains, null, 2))}</pre>`;
+  } catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div>`; }
+}
+
+// -----------------------------------------------------------------------------
+// Repo tab — GitHub
+// -----------------------------------------------------------------------------
+const repoState = { commits: null, prs: null, issues: null, runs: null, branches: null, contributors: null, view: "commits" };
+async function renderRepoTab(host, main) {
+  host.innerHTML = `
+    <div class="card" style="margin-bottom: var(--sp-3);">
+      <div class="card-head">
+        <h3>GitHub</h3>
+        <div class="flex gap-2">
+          ${["commits","prs","issues","runs","branches","contributors"].map(v => `<button class="btn btn-ghost btn-sm ${repoState.view === v ? "active-btn" : ""}" data-repo-view="${v}">${v}</button>`).join("")}
+        </div>
+      </div>
+      <div id="repo-body"></div>
+    </div>`;
+  host.querySelectorAll("[data-repo-view]").forEach(b => b.addEventListener("click", () => { repoState.view = b.dataset.repoView; renderRepoTab(host, main); }));
+  const body = host.querySelector("#repo-body");
+  try {
+    if (repoState.view === "commits") {
+      repoState.commits = repoState.commits || await adminGet("/api/ai?op=admin-gh-commits&limit=30");
+      body.innerHTML = `<div class="flex-col gap-2">${(repoState.commits.commits || []).map(c => `
+        <div class="card" style="padding: 10px 12px;">
+          <div class="font-semi">${escapeHtml(c.message)}</div>
+          <div class="dim text-xs">${escapeHtml(c.shortSha)} · ${escapeHtml(c.author || "?")} · ${formatDateShort(c.date)} · <a href="${escapeAttr(c.url)}" target="_blank">view on GitHub</a></div>
+        </div>`).join("")}</div>`;
+    } else if (repoState.view === "prs") {
+      repoState.prs = repoState.prs || await adminGet("/api/ai?op=admin-gh-prs&state=open&limit=30");
+      const prs = repoState.prs.prs || [];
+      body.innerHTML = prs.length ? prs.map(pr => `
+        <div class="card" style="padding: 10px 12px; margin-bottom: 6px;">
+          <div class="font-semi">#${pr.number} · ${escapeHtml(pr.title)}</div>
+          <div class="dim text-xs">${escapeHtml(pr.user?.login || "?")} · ${escapeHtml(pr.state)} · ${formatDateShort(pr.created_at)}
+            <button class="btn btn-ghost btn-sm" data-pr-merge="${pr.number}" style="float:right;">merge</button>
+          </div>
+        </div>`).join("") : `<div class="muted text-sm">No open PRs.</div>`;
+      body.querySelectorAll("[data-pr-merge]").forEach(b => b.addEventListener("click", async () => {
+        const id = b.dataset.prMerge;
+        const confirm = prompt(`Type PR number (${id}) to confirm merge:`);
+        if (confirm !== id) return;
+        const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+        try { await adminPost("/api/ai?op=admin-gh-pr-merge", { prId: id, confirm: id, reason }); toast({ kind: "success", message: "Merged." }); repoState.prs = null; renderRepoTab(host, main); }
+        catch (e) { toast({ kind: "error", message: e.message }); }
+      }));
+    } else if (repoState.view === "issues") {
+      repoState.issues = repoState.issues || await adminGet("/api/ai?op=admin-gh-issues&state=open&limit=30");
+      const issues = repoState.issues.issues || [];
+      body.innerHTML = issues.length ? issues.map(i => `
+        <div class="card" style="padding: 10px 12px; margin-bottom: 6px;">
+          <div class="font-semi">#${i.number} · ${escapeHtml(i.title)}</div>
+          <div class="dim text-xs">${escapeHtml(i.user?.login || "?")} · ${escapeHtml(i.state)} · ${formatDateShort(i.created_at)}
+            <button class="btn btn-ghost btn-sm" data-issue-close="${i.number}" style="float:right;">close</button>
+          </div>
+        </div>`).join("") : `<div class="muted text-sm">No open issues.</div>`;
+      body.querySelectorAll("[data-issue-close]").forEach(b => b.addEventListener("click", async () => {
+        const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
+        try { await adminPost("/api/ai?op=admin-gh-issue-close", { issueId: b.dataset.issueClose, reason }); toast({ kind: "success", message: "Closed." }); repoState.issues = null; renderRepoTab(host, main); }
+        catch (e) { toast({ kind: "error", message: e.message }); }
+      }));
+    } else if (repoState.view === "runs") {
+      repoState.runs = repoState.runs || await adminGet("/api/ai?op=admin-gh-actions-runs&limit=20");
+      const runs = repoState.runs.workflow_runs || [];
+      body.innerHTML = runs.length ? runs.map(r => `
+        <div class="card" style="padding: 10px 12px; margin-bottom: 6px;">
+          <div class="font-semi">${escapeHtml(r.name)} · ${escapeHtml(r.head_branch)}</div>
+          <div class="dim text-xs">${escapeHtml(r.status)}/${escapeHtml(r.conclusion || "—")} · ${formatDateShort(r.created_at)} · <a href="${escapeAttr(r.html_url)}" target="_blank">view</a></div>
+        </div>`).join("") : `<div class="muted text-sm">No workflow runs yet.</div>`;
+    } else if (repoState.view === "branches") {
+      repoState.branches = repoState.branches || await adminGet("/api/ai?op=admin-gh-branches");
+      const branches = repoState.branches.branches || [];
+      body.innerHTML = `<div class="flex gap-1 wrap">${branches.map(b => `<span class="pill">${escapeHtml(b.name)}</span>`).join("")}</div>`;
+    } else if (repoState.view === "contributors") {
+      repoState.contributors = repoState.contributors || await adminGet("/api/ai?op=admin-gh-contributors");
+      const cs = repoState.contributors.contributors || [];
+      body.innerHTML = `<ol class="admin-lb">${cs.map(c => `<li><a href="${escapeAttr(c.html_url)}" target="_blank">@${escapeHtml(c.login)}</a><span class="tabular">${c.contributions}</span></li>`).join("")}</ol>`;
+    }
+  } catch (e) { body.innerHTML = `<div style="color:var(--negative);">${escapeHtml(e.message)}</div><div class="muted text-sm" style="margin-top:8px;">Add <code>GITHUB_TOKEN</code> + <code>GITHUB_REPO</code> to Vercel env vars to enable this tab.</div>`; }
 }
 
 // -----------------------------------------------------------------------------
