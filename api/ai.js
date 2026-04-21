@@ -610,16 +610,30 @@ async function opSignupCount(req, origin) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     return j(501, { error: "supabase_not_configured" }, origin);
   }
+
+  const url = new URL(req.url);
+  const detailed = url.searchParams.get("detailed") === "1";
+  const days = Math.max(1, Math.min(60, parseInt(url.searchParams.get("days") || "14", 10)));
+
   // IST day-start for "today" in UTC
   const nowIst = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
   const istDayStartIso = `${nowIst.year}-${nowIst.month}-${nowIst.day}T00:00:00+05:30`;
   const weekAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
+  const sinceIso = new Date(Date.now() - days * 86400000).toISOString();
+
+  async function sbFetch(path) {
+    return fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}${path}`, {
+      headers: {
+        "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+    });
+  }
 
   async function count(filter) {
-    const url = `${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/profiles?select=id${filter ? "&" + filter : ""}`;
-    const r = await fetch(url, {
+    const r = await fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/profiles?select=id${filter ? "&" + filter : ""}`, {
       headers: {
         "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
         "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
@@ -628,7 +642,6 @@ async function opSignupCount(req, origin) {
         "Range": "0-0",
       },
     });
-    // Content-Range: items 0-0/N
     const cr = r.headers.get("content-range") || "";
     const m = cr.match(/\/(\d+)$/);
     return m ? parseInt(m[1], 10) : 0;
@@ -640,7 +653,68 @@ async function opSignupCount(req, origin) {
       count(`created_at=gte.${encodeURIComponent(weekAgoIso)}`),
       count(""),
     ]);
-    return j(200, { today, week, total, asOf: new Date().toISOString() }, origin);
+
+    // Day-by-day breakdown (last N days, IST-bucketed)
+    const recentRes = await sbFetch(`/rest/v1/profiles?select=id,created_at&created_at=gte.${encodeURIComponent(sinceIso)}&order=created_at.desc&limit=2000`);
+    const recentRows = recentRes.ok ? await recentRes.json() : [];
+    const byDay = {};
+    for (let i = 0; i < days; i++) {
+      const d = new Date(Date.now() - i * 86400000);
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+      }).formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
+      byDay[`${parts.year}-${parts.month}-${parts.day}`] = 0;
+    }
+    for (const row of recentRows) {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+      }).formatToParts(new Date(row.created_at)).reduce((a, p) => (a[p.type] = p.value, a), {});
+      const k = `${parts.year}-${parts.month}-${parts.day}`;
+      if (k in byDay) byDay[k]++;
+    }
+    const byDayArr = Object.entries(byDay)
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([day, count]) => ({ day, count }));
+
+    const base = { today, week, total, byDay: byDayArr, asOf: new Date().toISOString() };
+    if (!detailed) return j(200, base, origin);
+
+    // Detailed mode — include the actual user rows (capped) + aggregate
+    // stats per user. Server-role only; anyone hitting ?detailed=1 gets
+    // real PII, so consider gating with a shared admin token before you
+    // expose this beyond your own dashboard.
+    const profilesRes = await sbFetch(`/rest/v1/profiles?select=id,username,display_name,email,age,school,city,risk_profile,onboarded,created_at,parent_consent_at&order=created_at.desc&limit=200`);
+    const profiles = profilesRes.ok ? await profilesRes.json() : [];
+
+    const portRes = await sbFetch(`/rest/v1/portfolios?select=user_id,cash_paise,starting_cash_paise,updated_at&limit=2000`);
+    const ports = portRes.ok ? await portRes.json() : [];
+    const portByUser = {};
+    for (const p of ports) portByUser[p.user_id] = p;
+
+    const txRes = await sbFetch(`/rest/v1/transactions?select=user_id&limit=5000`);
+    const txs = txRes.ok ? await txRes.json() : [];
+    const tradeCountByUser = {};
+    for (const t of txs) tradeCountByUser[t.user_id] = (tradeCountByUser[t.user_id] || 0) + 1;
+
+    const users = profiles.map(p => ({
+      id: p.id,
+      username: p.username,
+      displayName: p.display_name,
+      email: p.email,
+      age: p.age,
+      school: p.school,
+      city: p.city,
+      riskProfile: p.risk_profile,
+      onboarded: p.onboarded,
+      parentConsented: !!p.parent_consent_at,
+      createdAt: p.created_at,
+      cashRupees: portByUser[p.id] ? Math.round((portByUser[p.id].cash_paise || 0) / 100) : null,
+      startingCashRupees: portByUser[p.id] ? Math.round((portByUser[p.id].starting_cash_paise || 100000) / 100) : 100000,
+      tradeCount: tradeCountByUser[p.id] || 0,
+      lastActive: portByUser[p.id]?.updated_at || p.created_at,
+    }));
+
+    return j(200, { ...base, users }, origin);
   } catch (e) {
     return j(502, { error: "query_failed", detail: String(e.message).slice(0, 100) }, origin);
   }

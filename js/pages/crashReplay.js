@@ -228,9 +228,18 @@ function renderReplay(main, scenario) {
       </div>
     </div>
 
-    <details class="replay-context-details">
-      <summary class="muted">What this scenario is</summary>
-      <p class="muted" style="margin-top: var(--sp-3); font-size: var(--text-base); line-height: 1.6;">${scenario.description}</p>
+    <details class="replay-context-details" open>
+      <summary>What this scenario is</summary>
+      <div class="replay-context-body">
+        ${renderDescriptionParagraphs(scenario.description)}
+        ${scenario.indexDrop != null ? `<div class="replay-context-stats">
+          <div><span class="rc-key">Peak drop</span><span class="rc-val negative">${Math.abs(scenario.indexDrop).toFixed(1)}%</span></div>
+          <div><span class="rc-key">Recovery</span><span class="rc-val">${scenario.recoveryDays ? scenario.recoveryDays + " trading days" : "within the plotted window"}</span></div>
+          <div><span class="rc-key">Window</span><span class="rc-val">${escapeHtml(scenario.startLabel)} → ${escapeHtml(scenario.endLabel)}</span></div>
+          <div><span class="rc-key">Held vs panic delta</span><span class="rc-val ${scenario.finalDelta >= 0 ? "positive" : "negative"}">${scenario.finalDelta >= 0 ? "+" : ""}${scenario.finalDelta.toFixed(1)}%</span></div>
+        </div>` : ""}
+        ${renderKeyMomentsTimeline(scenario)}
+      </div>
     </details>
 
     <div class="grid" style="grid-template-columns: 1fr 1fr; gap: var(--sp-4); margin-top: var(--sp-6);">
@@ -510,6 +519,62 @@ function buildMarkers(scenario) {
 }
 
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
+
+// Render description as separate <p> tags on blank-line / double-newline
+// paragraph breaks. Tolerates single-paragraph inputs too.
+function renderDescriptionParagraphs(desc) {
+  const s = String(desc || "").trim();
+  if (!s) return "";
+  const paragraphs = s.split(/\n\s*\n|\.\s+(?=[A-Z])/).reduce((acc, chunk, i, arr) => {
+    // We split on period-then-capital to catch prose that uses single newlines.
+    // Re-attach the trailing period we consumed in the split, but only when the
+    // next chunk starts with a capital.
+    if (i === arr.length - 1) acc.push(chunk);
+    else acc.push(chunk.endsWith(".") || chunk.endsWith("!") || chunk.endsWith("?") ? chunk : chunk + ".");
+    return acc;
+  }, []);
+  // Merge short fragments to keep paragraphs meaningful (>= 3 sentences each).
+  const merged = [];
+  let buf = "";
+  for (const p of paragraphs) {
+    buf = buf ? buf + " " + p : p;
+    if (buf.split(/[.!?]\s/).length >= 3) {
+      merged.push(buf);
+      buf = "";
+    }
+  }
+  if (buf) {
+    if (merged.length === 0) merged.push(buf);
+    else merged[merged.length - 1] += " " + buf;
+  }
+  return merged.map(p => `<p class="replay-context-para">${escapeHtml(p.trim())}</p>`).join("");
+}
+
+// Render the scenario's key moments as a mini timeline beneath the prose.
+function renderKeyMomentsTimeline(scenario) {
+  const frames = scenario.frames || [];
+  if (!frames.length) return "";
+  // A key moment is any frame carrying an `n` (narration id)
+  const moments = frames
+    .filter(f => f.n && scenario.narrations?.[f.n])
+    .map(f => ({
+      day: f.day,
+      narration: scenario.narrations[f.n],
+      heldDelta: (f.held - frames[0].held) / frames[0].held,
+    }));
+  if (!moments.length) return "";
+  return `
+    <div class="replay-timeline">
+      <div class="replay-timeline-head">Key moments in this replay</div>
+      ${moments.map(m => `
+        <div class="replay-timeline-row">
+          <div class="replay-timeline-day">Day ${m.day}${m.heldDelta !== 0 ? ` · <span class="${m.heldDelta >= 0 ? "positive" : "negative"}">${m.heldDelta >= 0 ? "+" : ""}${(m.heldDelta * 100).toFixed(1)}%</span>` : ""}</div>
+          <div class="replay-timeline-body">${escapeHtml(m.narration)}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
 
 function indianNumber(n) {
   if (n == null) return "0";

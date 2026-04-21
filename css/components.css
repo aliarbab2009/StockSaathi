@@ -1709,8 +1709,64 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 }
 .replay-context-details summary {
   cursor: pointer;
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--text-strong);
   user-select: none;
+  list-style-position: outside;
+}
+.replay-context-body { margin-top: var(--sp-3); }
+.replay-context-para {
+  font-size: var(--text-base);
+  line-height: 1.7;
+  color: var(--text);
+  margin: 0 0 var(--sp-3) 0;
+}
+.replay-context-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--r);
+  margin: var(--sp-3) 0;
+}
+.replay-context-stats > div { display: flex; flex-direction: column; gap: 2px; }
+.rc-key { font-size: var(--text-10); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 700; }
+.rc-val { font-size: var(--text-md); font-weight: 600; color: var(--text-strong); }
+.rc-val.positive { color: var(--positive); }
+.rc-val.negative { color: var(--negative); }
+.replay-timeline {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--r);
+}
+.replay-timeline-head {
+  font-size: var(--text-10);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 800;
+  margin-bottom: var(--sp-3);
+}
+.replay-timeline-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px dashed var(--divider);
+  line-height: 1.5;
+}
+.replay-timeline-row:first-of-type { border-top: none; }
+.replay-timeline-day { font-size: var(--text-sm); font-weight: 700; color: var(--text-strong); }
+.replay-timeline-body { font-size: var(--text-sm); color: var(--text); }
+.replay-timeline .positive { color: var(--positive); }
+.replay-timeline .negative { color: var(--negative); }
+@media (max-width: 620px) {
+  .replay-timeline-row { grid-template-columns: 1fr; }
 }
 @media (max-width: 680px) {
   .replay-topbar { top: 56px; flex-direction: column; align-items: stretch; }
