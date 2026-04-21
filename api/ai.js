@@ -603,6 +603,15 @@ export default async function handler(req) {
       case "admin-coach-delete":  return await opAdminCoachDelete(req, origin);
       case "admin-cache-invalidate": return await opAdminCacheInvalidate(req, origin);
       case "admin-backfill-history": return await opAdminBackfillHistory(req, origin);
+      case "admin-db-tables":     return await opAdminDbTables(req, origin);
+      case "admin-db-browse":     return await opAdminDbBrowse(req, origin, url);
+      case "admin-db-row-patch":  return await opAdminDbRowPatch(req, origin);
+      case "admin-db-row-delete": return await opAdminDbRowDelete(req, origin);
+      case "admin-db-row-insert": return await opAdminDbRowInsert(req, origin);
+      case "admin-db-sql":        return await opAdminDbSql(req, origin);
+      case "admin-db-rpc":        return await opAdminDbRpc(req, origin);
+      case "admin-db-schema":     return await opAdminDbSchema(req, origin);
+      case "admin-db-stats":      return await opAdminDbStats(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -1533,6 +1542,243 @@ async function opAdminBackfillHistory(req, origin) {
   });
   if (!result.ok) return j(502, { error: "backfill_failed", detail: result.afterState }, origin);
   return j(200, { ok: true, result: result.afterState }, origin);
+}
+
+// =============================================================================
+// SUPABASE GOD MODE — SQL editor, table browser, RPC runner, schema, stats
+// Everything you'd normally do in Supabase Studio, via service-role key.
+// =============================================================================
+
+// Execute arbitrary SQL via the admin_exec_sql(text) RPC we created.
+async function execSql(sql) {
+  const r = await sbAdminFetch(`/rest/v1/rpc/admin_exec_sql`, {
+    method: "POST",
+    body: JSON.stringify({ p_sql: sql }),
+  });
+  if (!r.ok) return { error: `rpc_http_${r.status}`, detail: await r.text() };
+  const result = await r.json();
+  if (result?.error) return { error: result.error, sqlstate: result.sqlstate };
+  return { rows: result?.rows || [], count: result?.count || 0 };
+}
+
+// List every table in `public` schema with size + row-count estimate.
+async function opAdminDbTables(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const sql = `
+    select
+      schemaname, relname as table_name,
+      n_live_tup as approx_row_count,
+      pg_size_pretty(pg_total_relation_size(('"'||schemaname||'"."'||relname||'"')::regclass)) as total_size,
+      pg_total_relation_size(('"'||schemaname||'"."'||relname||'"')::regclass) as total_size_bytes
+    from pg_stat_user_tables
+    where schemaname = 'public'
+    order by pg_total_relation_size(('"'||schemaname||'"."'||relname||'"')::regclass) desc
+  `;
+  const result = await execSql(sql);
+  if (result.error) return j(502, result, origin);
+  return j(200, { tables: result.rows }, origin);
+}
+
+// Paginated browse of arbitrary table.
+// GET ?table=X&limit=&offset=&orderBy=&orderDir=&filter=col.eq.val
+async function opAdminDbBrowse(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const table = String(url.searchParams.get("table") || "").trim();
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(table)) return j(400, { error: "bad_table" }, origin);
+  const limit = Math.max(1, Math.min(1000, parseInt(url.searchParams.get("limit") || "100", 10)));
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0", 10));
+  const orderBy = String(url.searchParams.get("orderBy") || "").trim();
+  const orderDir = url.searchParams.get("orderDir") === "asc" ? "asc" : "desc";
+  const filter = url.searchParams.get("filter") || "";
+
+  let path = `/rest/v1/${table}?select=*&limit=${limit}&offset=${offset}`;
+  if (orderBy && /^[a-z_][a-z0-9_]{0,40}$/.test(orderBy)) path += `&order=${orderBy}.${orderDir}`;
+  if (filter) path += `&${filter}`;
+
+  try {
+    const r = await sbAdminFetch(path, {
+      headers: { "Prefer": "count=exact", "Range-Unit": "items", "Range": `${offset}-${offset + limit - 1}` },
+    });
+    const rows = r.ok ? await r.json() : [];
+    const cr = r.headers.get("content-range") || "";
+    const m = cr.match(/\/(\d+)$/);
+    const total = m ? parseInt(m[1], 10) : rows.length;
+    return j(200, { rows, total, offset, limit }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+// Update a single row in arbitrary table. Requires { table, filter, patch, reason }.
+async function opAdminDbRowPatch(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const table = String(body?.table || "").trim();
+  const filter = String(body?.filter || "").trim();
+  const patch = body?.patch;
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(table)) return j(400, { error: "bad_table" }, origin);
+  if (!filter) return j(400, { error: "missing_filter" }, origin);
+  if (!patch || typeof patch !== "object") return j(400, { error: "missing_patch" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "db_row_patch", targetKind: table, targetId: filter, reason,
+    note: `fields=${Object.keys(patch).join(",")}`,
+  }, async () => {
+    const before = await sbAdminFetch(`/rest/v1/${table}?${filter}&select=*`);
+    const beforeRows = before.ok ? await before.json() : [];
+    const r = await sbAdminFetch(`/rest/v1/${table}?${filter}`, {
+      method: "PATCH",
+      headers: { "Prefer": "return=representation" },
+      body: JSON.stringify(patch),
+    });
+    const afterRows = r.ok ? await r.json() : [];
+    return { beforeState: beforeRows, afterState: afterRows, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "patch_failed" }, origin);
+  return j(200, { ok: true, rows: result.afterState }, origin);
+}
+
+async function opAdminDbRowDelete(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const table = String(body?.table || "").trim();
+  const filter = String(body?.filter || "").trim();
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(table)) return j(400, { error: "bad_table" }, origin);
+  if (!filter) return j(400, { error: "missing_filter" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "db_row_delete", targetKind: table, targetId: filter, reason,
+  }, async () => {
+    const before = await sbAdminFetch(`/rest/v1/${table}?${filter}&select=*`);
+    const beforeRows = before.ok ? await before.json() : [];
+    const r = await sbAdminFetch(`/rest/v1/${table}?${filter}`, {
+      method: "DELETE",
+      headers: { "Prefer": "return=minimal" },
+    });
+    return { beforeState: beforeRows, afterState: { deleted: beforeRows.length }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "delete_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminDbRowInsert(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const table = String(body?.table || "").trim();
+  const row = body?.row;
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(table)) return j(400, { error: "bad_table" }, origin);
+  if (!row || typeof row !== "object") return j(400, { error: "missing_row" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "db_row_insert", targetKind: table, targetId: null, reason,
+    note: `cols=${Object.keys(row).join(",")}`,
+  }, async () => {
+    const r = await sbAdminFetch(`/rest/v1/${table}`, {
+      method: "POST",
+      headers: { "Prefer": "return=representation" },
+      body: JSON.stringify(row),
+    });
+    const afterRows = r.ok ? await r.json() : [];
+    return { beforeState: null, afterState: afterRows, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "insert_failed" }, origin);
+  return j(200, { ok: true, rows: result.afterState }, origin);
+}
+
+// Execute arbitrary SQL via admin_exec_sql RPC. This IS a footgun; the
+// frontend should double-confirm on any mutating query.
+async function opAdminDbSql(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const sql = String(body?.sql || "").trim();
+  if (!sql) return j(400, { error: "missing_sql" }, origin);
+  if (sql.length > 50000) return j(413, { error: "sql_too_long" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "db_sql_exec", targetKind: "sql", targetId: sql.slice(0, 80), reason,
+    note: `sql_len=${sql.length}`,
+  }, async () => {
+    const r = await execSql(sql);
+    return { beforeState: { sql: sql.slice(0, 500) }, afterState: r, ok: !r.error };
+  });
+  if (result.afterState?.error) return j(400, result.afterState, origin);
+  return j(200, result.afterState, origin);
+}
+
+// Invoke an arbitrary Supabase RPC. { rpcName, params, reason }.
+async function opAdminDbRpc(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const rpcName = String(body?.rpcName || "").trim();
+  const params = body?.params && typeof body.params === "object" ? body.params : {};
+  if (!/^[a-z_][a-z0-9_]{0,60}$/.test(rpcName)) return j(400, { error: "bad_rpc_name" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "db_rpc_call", targetKind: "rpc", targetId: rpcName, reason,
+    note: `params_keys=${Object.keys(params).join(",")}`,
+  }, async () => {
+    const r = await sbAdminFetch(`/rest/v1/rpc/${rpcName}`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+    const rpcBody = r.ok ? await r.json() : await r.text();
+    return { beforeState: { rpcName, params }, afterState: rpcBody, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "rpc_failed", detail: result.afterState }, origin);
+  return j(200, { ok: true, result: result.afterState }, origin);
+}
+
+// Schema introspection — tables, columns, policies, indexes, RPC signatures.
+async function opAdminDbSchema(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+
+  const [columnsRes, policiesRes, indexesRes, functionsRes] = await Promise.all([
+    execSql(`select table_name, column_name, data_type, is_nullable, column_default from information_schema.columns where table_schema = 'public' order by table_name, ordinal_position`),
+    execSql(`select schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check from pg_policies where schemaname = 'public' order by tablename, policyname`),
+    execSql(`select schemaname, tablename, indexname, indexdef from pg_indexes where schemaname = 'public' order by tablename, indexname`),
+    execSql(`select routine_name, routine_type, data_type as return_type from information_schema.routines where specific_schema = 'public' and routine_type = 'FUNCTION' order by routine_name`),
+  ]);
+
+  return j(200, {
+    columns: columnsRes.rows || [],
+    policies: policiesRes.rows || [],
+    indexes: indexesRes.rows || [],
+    functions: functionsRes.rows || [],
+  }, origin);
+}
+
+// DB size + connection stats.
+async function opAdminDbStats(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const [sizeRes, connsRes, hitRes] = await Promise.all([
+    execSql(`select pg_size_pretty(pg_database_size(current_database())) as size, pg_database_size(current_database()) as bytes`),
+    execSql(`select state, count(*)::int from pg_stat_activity where datname = current_database() group by state`),
+    execSql(`select sum(blks_hit)::bigint as hits, sum(blks_read)::bigint as reads, (sum(blks_hit)::float / nullif(sum(blks_hit) + sum(blks_read), 0)::float) as hit_ratio from pg_stat_database where datname = current_database()`),
+  ]);
+  return j(200, {
+    size: sizeRes.rows?.[0] || null,
+    connections: connsRes.rows || [],
+    cacheHitRatio: hitRes.rows?.[0] || null,
+  }, origin);
 }
 
 // -----------------------------------------------------------------------------
