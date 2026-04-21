@@ -45,7 +45,7 @@ const ROUTES = [
   // the same 404 shape for wrong slugs, so scanning the URL space gets you
   // nothing. renderAdmin itself calls /api/ai?op=admin-path-check and
   // short-circuits to 404 if the slug isn't valid.
-  { name: "admin-slug",    match: /^\/a\/([A-Za-z0-9_-]{1,2048})\/?$/,     render: renderAdmin, param: "slug", public: true },
+  { name: "admin-slug",    match: /^\/a\/([A-Za-z0-9_-]{1,16384})\/?$/,    render: renderAdmin, param: "slug", public: true },
 ];
 
 export function currentRoute() {
