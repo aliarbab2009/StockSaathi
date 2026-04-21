@@ -161,7 +161,7 @@ async function submit() {
   state.error = null;
   render();
   try {
-    const res = await fetch("/api/command", {
+    const res = await fetch("/api/ai?op=command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: q, context: location.hash.slice(1) || "/" }),

@@ -64,7 +64,7 @@ async function fetchExplanation(term) {
   if (inflight.has(term)) return inflight.get(term);
   const p = (async () => {
     try {
-      const r = await fetch("/api/explain?term=" + encodeURIComponent(term), { cache: "default" });
+      const r = await fetch("/api/ai?op=explain&term=" + encodeURIComponent(term), { cache: "default" });
       if (!r.ok) throw new Error("http_" + r.status);
       const j = await r.json();
       const text = j?.explanation || "";

@@ -210,7 +210,7 @@ async function runAiSearch(query, render) {
         dayPct: q?.changePct != null ? q.changePct * 100 : null,
       };
     });
-    const res = await fetch("/api/market-search", {
+    const res = await fetch("/api/ai?op=market-search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, candidates }),
@@ -248,7 +248,7 @@ async function fetchMarketMood() {
     .sort((a, b) => Math.abs(b.avgPct) - Math.abs(a.avgPct))
     .slice(0, 10);
   if (!sectors.length) return null;
-  const r = await fetch("/api/market-mood", {
+  const r = await fetch("/api/ai?op=market-mood", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sectors, asOf: Date.now() }),

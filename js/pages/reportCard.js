@@ -330,7 +330,7 @@ async function maybeFetchAiCard(state) {
   }
 
   try {
-    const res = await fetch("/api/report-card", {
+    const res = await fetch("/api/ai?op=report-card", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -349,7 +349,7 @@ async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
       changePct: (changePct || 0) * 100,
       newsItems: (newsItems || []).slice(0, 8).map(n => ({ headline: n.headline, source: n.source })),
     };
-    const r = await fetch("/api/stock-why", {
+    const r = await fetch("/api/ai?op=stock-why", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -596,7 +596,7 @@ async function fetchTradeNudge(modalRoot, inst, symbol, side, qty, curPricePaise
   const totalTradeCountInSymbol = (state.transactions || []).filter(t => t.symbol === symbol).length;
 
   try {
-    const res = await fetch("/api/trade-nudge", {
+    const res = await fetch("/api/ai?op=trade-nudge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -168,7 +168,7 @@ async function pumpAiQueue() {
 
 async function fetchAiTag({ main, n, hk }) {
   try {
-    const r = await fetch("/api/news-tldr", {
+    const r = await fetch("/api/ai?op=news-tldr", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ headline: n.headline, source: n.source, symbols: n.symbols || [] }),

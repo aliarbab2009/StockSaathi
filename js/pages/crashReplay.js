@@ -126,7 +126,7 @@ function renderSelector(main) {
   // Populate AI-generated suggestion chips. One LLM call per week for the
   // whole site — cached server-side.
   const suggHost = main.querySelector("#custom-crash-suggestions");
-  fetch("/api/crash-suggestions").then(r => r.ok ? r.json() : null).then(d => {
+  fetch("/api/ai?op=crash-suggestions").then(r => r.ok ? r.json() : null).then(d => {
     if (!d?.suggestions?.length || !suggHost) return;
     suggHost.innerHTML = d.suggestions.slice(0, 8).map(s =>
       `<button class="crash-sugg-chip" data-sugg="${escapeAttr(s)}">${escapeHtml(s)}</button>`

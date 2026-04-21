@@ -55,7 +55,7 @@ export async function fetchDigest(userId, payload) {
     }
   } catch {}
 
-  const res = await fetch("/api/portfolio-digest", {
+  const res = await fetch("/api/ai?op=portfolio-digest", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
