@@ -1,0 +1,122 @@
+name: backup-deploy
+
+# Deploys the failover stack on every push to main. Vercel deploys the
+# primary via its own GitHub integration; this workflow only handles the
+# backup tiers (Fly.io + CF Pages + CF Worker).
+#
+# Required GitHub secrets:
+#   - CLOUDFLARE_API_TOKEN     (scopes: Pages:Edit, Workers:Edit, KV:Edit)
+#   - CLOUDFLARE_ACCOUNT_ID
+#   - FLY_API_TOKEN            (flyctl auth token)
+#
+# Required GitHub variables (non-secret):
+#   - FLY_APP_NAME             (default "stocksaathi-backup" if unset)
+#   - CF_PAGES_PROJECT_NAME    (default "stocksaathi")
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: backup-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  parity-check:
+    name: Handler parity check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: pip install pytest fastapi uvicorn
+      - name: Verify every app/api/*.py is registered in api-backup/main.py
+        working-directory: .
+        run: pytest api-backup/tests/ -v
+
+  deploy-pages:
+    name: Deploy Cloudflare Pages (static backup)
+    needs: parity-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage Pages publish directory
+        run: |
+          mkdir -p ./_pages_publish
+          rsync -a \
+            --exclude='api/' \
+            --exclude='api-backup/' \
+            --exclude='edge/' \
+            --exclude='.github/' \
+            --exclude='.git/' \
+            --exclude='supabase/' \
+            --exclude='__pycache__/' \
+            --exclude='.pytest_cache/' \
+            --exclude='node_modules/' \
+            --exclude='*.pyc' \
+            --exclude='backend.py' \
+            --exclude='run.sh' \
+            --exclude='run.bat' \
+            --exclude='.env*' \
+            --exclude='SUPABASE_SETUP.md' \
+            --exclude='AGENTS.md' \
+            ./ ./_pages_publish/
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy ./_pages_publish --project-name=${{ vars.CF_PAGES_PROJECT_NAME || 'stocksaathi' }} --branch=main
+
+  deploy-fly:
+    name: Deploy Fly.io (Python API backup)
+    needs: parity-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: flyctl deploy
+        run: flyctl deploy --config api-backup/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-worker:
+    name: Deploy Cloudflare Worker (front-door)
+    needs: [deploy-pages, deploy-fly]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install wrangler
+        working-directory: edge/front-door
+        run: npm ci || npm install
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: edge/front-door
+          command: deploy
+
+  verify:
+    name: Health-gate verify (both origins)
+    needs: [deploy-pages, deploy-fly, deploy-worker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check primary (Vercel)
+        run: |
+          body=$(curl -fsS --max-time 10 https://stock-saathi-jtmn.vercel.app/api/health)
+          echo "primary: $body"
+          echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['ok'] is True, d; assert d['runtime']=='vercel', d"
+      - name: Check backup (Fly)
+        run: |
+          app_name="${{ vars.FLY_APP_NAME || 'stocksaathi-backup' }}"
+          body=$(curl -fsS --max-time 15 "https://${app_name}.fly.dev/api/health")
+          echo "backup: $body"
+          echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['ok'] is True, d; assert d['runtime']=='fly', d"

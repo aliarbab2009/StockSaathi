@@ -1,0 +1,12 @@
+# Cloudflare Pages headers — mirrors vercel.json's global block so the
+# backup static origin serves the exact same security posture as Vercel.
+# /api/* is handled by the front-door Worker (proxied to Vercel/Fly); Pages
+# never serves API routes, so no /api/* block here.
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' https://esm.sh; connect-src 'self' https: wss:; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'

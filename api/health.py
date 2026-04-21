@@ -19,7 +19,7 @@ class handler(BaseHTTPRequestHandler):
                       and os.environ.get("SUPABASE_ANON_KEY"))
         body = json.dumps({
             "ok": True,
-            "runtime": "vercel",
+            "runtime": os.environ.get("RUNTIME", "vercel"),
             "email_configured": any_email,
             "llm_configured": any_llm,
             "db_configured": any_db,

@@ -1,0 +1,37 @@
+# Front-door Worker — intercepts all stocksaathi.co.in traffic, steers between
+# Vercel (primary) and Fly.io / CF Pages (backup).
+#
+# Deploy:   wrangler deploy  (from app/edge/front-door/)
+# Secrets:  wrangler secret put <NAME>
+#
+# Bindings needed at deploy time:
+#   - KV: HEALTH_KV (for the 30 s circuit-breaker)
+#   - vars: all the LLM keys that chat.js + ai.js read via globalThis.process.env
+#           (OPENAI_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, GROQ_API_KEY,
+#            SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY,
+#            optionally OPENAI_MODEL, GEMINI_FAST_MODEL, GEMINI_PRO_MODEL,
+#            PUBLIC_ORIGIN, TEST_IP_ALLOWLIST)
+
+name = "stocksaathi-front-door"
+main = "src/index.js"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Bind Vercel's own compatible behavior for fetch
+# (no workers_dev deployment — this worker ships straight to the prod route)
+workers_dev = false
+
+# Bind to the apex and www hostnames. Both must be orange-clouded in CF DNS.
+routes = [
+  { pattern = "stocksaathi.co.in/*", zone_name = "stocksaathi.co.in" },
+  { pattern = "www.stocksaathi.co.in/*", zone_name = "stocksaathi.co.in" },
+]
+
+# HEALTH_KV namespace ID — user must replace after `wrangler kv:namespace create HEALTH_KV`.
+[[kv_namespaces]]
+binding = "HEALTH_KV"
+id = "REPLACE_WITH_KV_ID_AFTER_wrangler_kv_namespace_create"
+
+# Observability — cheap and invaluable during a real outage.
+[observability]
+enabled = true

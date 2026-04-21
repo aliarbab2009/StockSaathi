@@ -11,3 +11,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+api-backup/
+edge/
+_headers
+.github/
