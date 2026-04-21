@@ -625,6 +625,16 @@ export default async function handler(req) {
       case "admin-vercel-redeploy":    return await opAdminVercelRedeploy(req, origin);
       case "admin-vercel-rollback":    return await opAdminVercelRollback(req, origin);
       case "admin-vercel-domains":     return await opAdminVercelDomains(req, origin);
+      case "admin-gh-commits":    return await opAdminGhCommits(req, origin, url);
+      case "admin-gh-prs":         return await opAdminGhPrs(req, origin, url);
+      case "admin-gh-pr":          return await opAdminGhPr(req, origin, url);
+      case "admin-gh-issues":      return await opAdminGhIssues(req, origin, url);
+      case "admin-gh-actions-runs": return await opAdminGhActionsRuns(req, origin, url);
+      case "admin-gh-branches":    return await opAdminGhBranches(req, origin);
+      case "admin-gh-contributors": return await opAdminGhContributors(req, origin);
+      case "admin-gh-issue-close": return await opAdminGhIssueClose(req, origin);
+      case "admin-gh-pr-merge":    return await opAdminGhPrMerge(req, origin);
+      case "admin-gh-workflow-trigger": return await opAdminGhWorkflowTrigger(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -2166,6 +2176,222 @@ async function opAdminVercelDomains(req, origin) {
   } catch (e) {
     return j(502, { error: "vercel_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
   }
+}
+
+// =============================================================================
+// GITHUB PROXY — commits, PRs, issues, Actions, workflow dispatch.
+// Requires GITHUB_TOKEN + GITHUB_REPO (literal 'owner/repo').
+// https://docs.github.com/en/rest
+// =============================================================================
+
+const GH_BASE = "https://api.github.com";
+
+async function ghFetch(path, opts = {}) {
+  const env = globalThis.process?.env || {};
+  if (!env.GITHUB_TOKEN) throw new Error("github_not_configured");
+  return fetch(`${GH_BASE}${path}`, {
+    ...opts,
+    headers: {
+      "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+function ghRepo() {
+  const env = globalThis.process?.env || {};
+  return env.GITHUB_REPO || "aliarbab2009/StockSaathi";
+}
+
+async function opAdminGhCommits(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const branch = url.searchParams.get("branch") || "main";
+  const per = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "30", 10)));
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/commits?sha=${encodeURIComponent(branch)}&per_page=${per}`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    const rows = await r.json();
+    return j(200, {
+      commits: rows.map(c => ({
+        sha: c.sha,
+        shortSha: c.sha.slice(0, 7),
+        message: (c.commit?.message || "").split("\n")[0],
+        fullMessage: c.commit?.message,
+        author: c.commit?.author?.name,
+        authorEmail: c.commit?.author?.email,
+        authorLogin: c.author?.login,
+        date: c.commit?.author?.date,
+        url: c.html_url,
+      })),
+    }, origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhPrs(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const state = url.searchParams.get("state") || "open";
+  const per = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "30", 10)));
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/pulls?state=${encodeURIComponent(state)}&per_page=${per}`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, { prs: await r.json() }, origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhPr(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!id) return j(400, { error: "missing_id" }, origin);
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/pulls/${encodeURIComponent(id)}`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, await r.json(), origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhIssues(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const state = url.searchParams.get("state") || "open";
+  const per = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "30", 10)));
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/issues?state=${encodeURIComponent(state)}&per_page=${per}&filter=all`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    // GitHub includes PRs in /issues — filter out ones with pull_request set.
+    const rows = (await r.json()).filter(i => !i.pull_request);
+    return j(200, { issues: rows }, origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhActionsRuns(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const per = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "30", 10)));
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/actions/runs?per_page=${per}`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, await r.json(), origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhBranches(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/branches?per_page=100`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, { branches: await r.json() }, origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhContributors(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  try {
+    const r = await ghFetch(`/repos/${ghRepo()}/contributors?per_page=100`);
+    if (!r.ok) return j(502, { error: `gh_http_${r.status}`, detail: await r.text() }, origin);
+    return j(200, { contributors: await r.json() }, origin);
+  } catch (e) {
+    return j(502, { error: "gh_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminGhIssueClose(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const id = String(body?.issueId || "").trim();
+  if (!id) return j(400, { error: "missing_issueId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "gh_issue_close", targetKind: "issue", targetId: id, reason,
+  }, async () => {
+    const r = await ghFetch(`/repos/${ghRepo()}/issues/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: "closed" }),
+    });
+    return { beforeState: { issueId: id, state: "open" }, afterState: { ok: r.ok }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "close_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminGhPrMerge(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const id = String(body?.prId || "").trim();
+  const confirm = String(body?.confirm || "").trim();
+  if (!id) return j(400, { error: "missing_prId" }, origin);
+  // Destructive-tier: confirm must equal pr number
+  if (confirm !== id) return j(400, { error: "confirm_mismatch", expected: "confirm must equal the PR number" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "gh_pr_merge", targetKind: "pull_request", targetId: id, reason,
+  }, async () => {
+    const r = await ghFetch(`/repos/${ghRepo()}/pulls/${encodeURIComponent(id)}/merge`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        merge_method: body?.mergeMethod || "squash",
+        commit_title: body?.commitTitle,
+        commit_message: body?.commitMessage,
+      }),
+    });
+    const rb = r.ok ? await r.json() : await r.text();
+    return { beforeState: { prId: id }, afterState: rb, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "merge_failed", detail: result.afterState }, origin);
+  return j(200, { ok: true, merged: result.afterState }, origin);
+}
+
+async function opAdminGhWorkflowTrigger(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const workflow = String(body?.workflow || "").trim();
+  const ref = body?.ref || "main";
+  const inputs = body?.inputs || {};
+  if (!workflow) return j(400, { error: "missing_workflow" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "gh_workflow_trigger", targetKind: "workflow", targetId: workflow, reason,
+    note: `ref=${ref}`,
+  }, async () => {
+    const r = await ghFetch(`/repos/${ghRepo()}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref, inputs }),
+    });
+    // 204 is success per GH docs.
+    return { beforeState: { workflow, ref }, afterState: { ok: r.ok, status: r.status }, ok: r.status === 204 || r.ok };
+  });
+  if (!result.ok) return j(502, { error: "dispatch_failed" }, origin);
+  return j(200, { ok: true }, origin);
 }
 
 // -----------------------------------------------------------------------------
