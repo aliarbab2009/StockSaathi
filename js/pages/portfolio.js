@@ -42,7 +42,6 @@ export function renderPortfolio(main) {
   refreshData();
 
   // Poll live quotes for user's holdings every 15s
-  const state0 = getState();
   const holdingSyms = Object.keys(state0.holdings || {});
   if (holdingSyms.length) {
     pollUnsub = subscribeToQuotes(holdingSyms, (q) => {
