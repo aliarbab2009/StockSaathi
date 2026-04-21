@@ -204,10 +204,11 @@ async function sendAndReply(userText) {
       apiKey: state.settings.llmApiKey || null,
       system,
       messages,
-      // "fast" profile = Gemini Flash. ~3× faster than Pro on chit-chat,
-      // plenty smart for finance Q&A. Crash-replay generation and other
-      // heavy JSON tasks still use profile:"reasoning" via /api/ai.
-      profile: "fast",
+      // "chat" profile = Gemini 2.5 Flash Lite — the fastest Gemini model,
+      // ~400 tok/s, no internal thinking overhead. Gets replies under 1s.
+      // Crash-replay and other structured-output tasks still use the
+      // heavier fast/reasoning profiles via /api/ai.
+      profile: "chat",
     });
   } catch (e) {
     console.warn("coach chat error:", e);

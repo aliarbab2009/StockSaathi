@@ -43,6 +43,11 @@ const OPENAI_MODEL   = (globalThis.process?.env?.OPENAI_MODEL)    || "gpt-5.4";
 // version or to test the 3.x preview.
 const GEMINI_FAST    = (globalThis.process?.env?.GEMINI_FAST_MODEL) || "gemini-2.5-flash";
 const GEMINI_PRO     = (globalThis.process?.env?.GEMINI_PRO_MODEL)  || "gemini-2.5-pro";
+// Dedicated model for the live coach chat. Defaults to 2.5 Flash Lite which
+// is Google's fastest Gemini model (~400 tok/s) with no internal thinking
+// overhead. Keeps the coach chat response <1s end-to-end even when the
+// fast/reasoning lanes run heavier 3.x preview models for structured tasks.
+const GEMINI_CHAT    = (globalThis.process?.env?.GEMINI_CHAT_MODEL) || "gemini-2.5-flash-lite";
 const CEREBRAS_MODEL = (globalThis.process?.env?.CEREBRAS_MODEL)  || "llama3.3-70b";
 const GROQ_MODEL     = (globalThis.process?.env?.GROQ_MODEL)      || "llama-3.3-70b-versatile";
 const PUBLIC_ORIGIN  = ((globalThis.process?.env?.PUBLIC_ORIGIN) || "").replace(/\/$/, "");
@@ -116,6 +121,13 @@ function providerDescriptors() {
       key: env.OPENAI_API_KEY,
       model: OPENAI_MODEL,
     },
+    gemini_chat: {
+      label: "gemini_chat",
+      enabled: () => !!env.GEMINI_API_KEY,
+      url: GEMINI_URL,
+      key: env.GEMINI_API_KEY,
+      model: GEMINI_CHAT,
+    },
     gemini_fast: {
       label: "gemini_fast",
       enabled: () => !!env.GEMINI_API_KEY,
@@ -155,6 +167,10 @@ function providerDescriptors() {
 // GPT sits behind it as the escalation for anything Pro can't handle.
 function chainFor(profile) {
   switch (profile) {
+    case "chat":
+      // Live-typing coach chat. Leads with 2.5 Flash Lite for sub-second
+      // feel; Flash / Pro sit behind it as escalation if Lite errors.
+      return ["gemini_chat", "gemini_fast", "gemini_pro", "openai"];
     case "fast":
       return ["gemini_fast", "cerebras", "gemini_pro", "openai"];
     case "creative":
