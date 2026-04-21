@@ -147,6 +147,10 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
       const authHeaders = isVertex
         ? { "x-goog-api-key": p.key }
         : { "Authorization": `Bearer ${p.key}` };
+      // Vertex wants model as publisher/model (e.g. "google/gemini-2.5-flash").
+      if (isVertex && body.model && !body.model.includes("/")) {
+        body.model = `google/${body.model}`;
+      }
       const res = await fetch(p.url, {
         method: "POST",
         headers: {

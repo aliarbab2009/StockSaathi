@@ -173,10 +173,15 @@ async function callUpstream(desc, payload) {
   };
   if (isVertex) headers["x-goog-api-key"] = desc.key;
   else headers["Authorization"] = `Bearer ${desc.key}`;
+  // Vertex OpenAI-compat requires the model in publisher/model form, e.g.
+  // "google/gemini-2.5-flash". AI Studio takes the bare model name.
+  const modelForApi = isVertex && !desc.model.includes("/")
+    ? `google/${desc.model}`
+    : desc.model;
   const res = await fetch(desc.url, {
     method: "POST",
     headers,
-    body: JSON.stringify({ ...payload, model: desc.model }),
+    body: JSON.stringify({ ...payload, model: modelForApi }),
   });
   const text = await res.text();
   return { status: res.status, text, upstream: desc.label };
