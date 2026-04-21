@@ -612,6 +612,11 @@ export default async function handler(req) {
       case "admin-db-rpc":        return await opAdminDbRpc(req, origin);
       case "admin-db-schema":     return await opAdminDbSchema(req, origin);
       case "admin-db-stats":      return await opAdminDbStats(req, origin);
+      case "admin-auth-users":    return await opAdminAuthUsers(req, origin, url);
+      case "admin-auth-reset":    return await opAdminAuthReset(req, origin);
+      case "admin-auth-magiclink": return await opAdminAuthMagicLink(req, origin);
+      case "admin-auth-update-email": return await opAdminAuthUpdateEmail(req, origin);
+      case "admin-auth-force-confirm": return await opAdminAuthForceConfirm(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -1779,6 +1784,155 @@ async function opAdminDbStats(req, origin) {
     connections: connsRes.rows || [],
     cacheHitRatio: hitRes.rows?.[0] || null,
   }, origin);
+}
+
+// =============================================================================
+// SUPABASE AUTH ADMIN — auth.users CRUD via /auth/v1/admin/*
+// All use SUPABASE_SERVICE_ROLE_KEY on the Supabase Auth Admin API.
+// =============================================================================
+
+// Shared helper for Supabase Admin API calls.
+async function supabaseAuthAdmin(path, opts = {}) {
+  const env = globalThis.process?.env || {};
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("supabase_not_configured");
+  return fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}${path}`, {
+    ...opts,
+    headers: {
+      "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+      "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+async function opAdminAuthUsers(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+  const perPage = Math.max(1, Math.min(1000, parseInt(url.searchParams.get("perPage") || "200", 10)));
+  try {
+    const r = await supabaseAuthAdmin(`/auth/v1/admin/users?page=${page}&per_page=${perPage}`);
+    if (!r.ok) return j(502, { error: `auth_http_${r.status}`, detail: await r.text() }, origin);
+    const body = await r.json();
+    // Supabase returns { users: [...], aud, nextPage, ... } or just an array.
+    const users = Array.isArray(body?.users) ? body.users : Array.isArray(body) ? body : [];
+    return j(200, {
+      users: users.map(u => ({
+        id: u.id,
+        email: u.email,
+        phone: u.phone,
+        emailConfirmedAt: u.email_confirmed_at,
+        phoneConfirmedAt: u.phone_confirmed_at,
+        lastSignInAt: u.last_sign_in_at,
+        bannedUntil: u.banned_until,
+        invitedAt: u.invited_at,
+        createdAt: u.created_at,
+        updatedAt: u.updated_at,
+        rawUserMetaData: u.raw_user_meta_data,
+        rawAppMetaData: u.raw_app_meta_data,
+        role: u.role,
+        aud: u.aud,
+        isAnonymous: u.is_anonymous,
+      })),
+      page, perPage, count: users.length,
+    }, origin);
+  } catch (e) {
+    return j(502, { error: "auth_query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminAuthReset(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const email = String(body?.email || "").trim().toLowerCase();
+  if (!email) return j(400, { error: "missing_email" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "auth_reset_password", targetKind: "auth_user", targetId: email, reason,
+  }, async () => {
+    const r = await supabaseAuthAdmin(`/auth/v1/recover`, {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    return { beforeState: { email }, afterState: { sent: r.ok, status: r.status }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "reset_send_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminAuthMagicLink(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const email = String(body?.email || "").trim().toLowerCase();
+  if (!email) return j(400, { error: "missing_email" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "auth_magic_link", targetKind: "auth_user", targetId: email, reason,
+  }, async () => {
+    // Generate a magic link via the admin API.
+    const r = await supabaseAuthAdmin(`/auth/v1/admin/generate_link`, {
+      method: "POST",
+      body: JSON.stringify({ type: "magiclink", email }),
+    });
+    const rb = r.ok ? await r.json() : await r.text();
+    return { beforeState: { email }, afterState: rb, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "magic_link_failed", detail: result.afterState }, origin);
+  return j(200, { ok: true, link: result.afterState?.action_link || null }, origin);
+}
+
+async function opAdminAuthUpdateEmail(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  const email = String(body?.email || "").trim().toLowerCase();
+  if (!userId || !email) return j(400, { error: "missing_fields" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "auth_update_email", targetKind: "auth_user", targetUserId: userId, targetId: userId, reason,
+    note: `new_email=${email}`,
+  }, async () => {
+    const r = await supabaseAuthAdmin(`/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ email }),
+    });
+    const rb = r.ok ? await r.json() : await r.text();
+    return { beforeState: { userId }, afterState: rb, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "update_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+async function opAdminAuthForceConfirm(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "auth_force_confirm", targetKind: "auth_user", targetUserId: userId, targetId: userId, reason,
+  }, async () => {
+    const r = await supabaseAuthAdmin(`/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ email_confirm: true }),
+    });
+    return { beforeState: { userId }, afterState: { confirmed: r.ok }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "confirm_failed" }, origin);
+  return j(200, { ok: true }, origin);
 }
 
 // -----------------------------------------------------------------------------
