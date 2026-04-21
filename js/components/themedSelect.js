@@ -138,8 +138,16 @@ export function mountThemedSelect(hostEl, config) {
     positionMenu();
     menu.classList.add("open");
     document.addEventListener("click", handleOutsideClick, true);
-    window.addEventListener("scroll", closeMenu, true);
+    // capture:true catches scrolls on elements that don't bubble scroll — but
+    // that means our own menu's inner scroll also triggers this. Filter it so
+    // only *outside* scrolls (page scroll, ancestor panel) close the menu.
+    window.addEventListener("scroll", onScrollOutside, true);
     window.addEventListener("resize", closeMenu);
+  }
+
+  function onScrollOutside(e) {
+    if (menu.contains(e.target)) return; // scrolling inside the menu itself — keep it open
+    closeMenu();
   }
 
   function closeMenu() {
@@ -149,7 +157,7 @@ export function mountThemedSelect(hostEl, config) {
     menu.style.display = "none";
     menu.classList.remove("open");
     document.removeEventListener("click", handleOutsideClick, true);
-    window.removeEventListener("scroll", closeMenu, true);
+    window.removeEventListener("scroll", onScrollOutside, true);
     window.removeEventListener("resize", closeMenu);
   }
 
