@@ -113,7 +113,15 @@ export function renderRegister(main) {
       btn.disabled = true;
       btn.textContent = "Creating account…";
       try {
-        const res = await registerAccount({ username, email, password: pw, displayName: name });
+        // Race against a 15s timeout — Supabase signUp occasionally hangs
+        // silently on free tier, leaving the button stuck forever. If we
+        // time out, surface a real error so the user can retry instead of
+        // staring at "Creating account…" indefinitely.
+        const signupPromise = registerAccount({ username, email, password: pw, displayName: name });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Sign-up is taking too long — check your connection and try again.")), 15000)
+        );
+        const res = await Promise.race([signupPromise, timeoutPromise]);
 
         if (res && res.needsConfirmation) {
           // Switch to OTP entry
