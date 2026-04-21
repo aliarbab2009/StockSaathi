@@ -1329,6 +1329,21 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   line-height: 1.5;
 }
 
+/* Stock-card CLOSED/PRE-OPEN pill: use the same rich hover card as the
+   nav + stock-detail. Because the pill is tiny and lives inside a
+   layout-constrained card, anchor the popover to the pill itself and
+   make it zoom toward the card edges on narrow widths. */
+.stock-card-ms-pill { cursor: help; }
+.stock-card-ms-pill .market-status-pop {
+  top: calc(100% + 6px);
+  right: auto;
+  left: 0;
+  min-width: 240px;
+}
+@media (max-width: 520px) {
+  .stock-card-ms-pill .market-status-pop { left: auto; right: 0; }
+}
+
 /* ============================== STOCK DETAIL ======================== */
 .stock-detail-grid {
   display: grid;

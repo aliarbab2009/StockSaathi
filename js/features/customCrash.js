@@ -14,7 +14,15 @@
 // returned JSON through a shape validator before accepting.
 // =============================================================================
 
-const SYSTEM_PROMPT = `You are a financial-history data extractor. Given a description of a market event that affected Indian equities (anywhere in India, any sector or instrument — retail listed stocks, scams, regulatory shocks, regional events, black-market / unaccounted-money episodes, demerger panics, anything), return a single JSON object with this EXACT shape:
+const SYSTEM_PROMPT = `You are a financial-history data extractor. Given a description of a DOWNWARD market event (crash, correction, scam, regulatory shock, panic — specifically anything where Indian equities FELL), return a single JSON object.
+
+IMPORTANT — REJECT non-crashes:
+If the user described a BULL RUN, RALLY, SURGE, BOOM, IPO pop, positive news, or any event where the market went UP, return:
+  { "error": "not_a_crash", "message": "<one short sentence explaining that the replay tool is for drops, and suggesting a comparable crash: e.g. 'Diwali 2008 correction' instead of 'Diwali rally'>" }
+
+Also return the same error for events with drops smaller than 3% (too small to be instructive).
+
+If it IS a genuine crash/drop, return a JSON object with this EXACT shape:
 
 {
   "title": "<short event name, ≤ 50 chars>",
@@ -57,16 +65,70 @@ const ATTEMPTS = [
   { profile: "reasoning", temperature: 0.3  },
 ];
 
+// Normalised query key used for dedup lookup + as a stable alias that points
+// at whichever scenario id was generated for this query first.
+function queryKey(desc) {
+  return String(desc || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").slice(0, 100);
+}
+
+const QUERY_INDEX_STORAGE_KEY = "ss.customCrashes.queryIndex.v1";
+function queryIndex() {
+  try { return JSON.parse(localStorage.getItem(QUERY_INDEX_STORAGE_KEY) || "{}") || {}; }
+  catch { return {}; }
+}
+function rememberQuery(key, scenarioId) {
+  try {
+    const idx = queryIndex();
+    idx[key] = scenarioId;
+    localStorage.setItem(QUERY_INDEX_STORAGE_KEY, JSON.stringify(idx));
+  } catch {}
+}
+
+// Public: return scenario id for a query string if we've generated one before
+// AND it still exists in the custom-crash cache. Lets the UI avoid calling
+// the LLM twice for the same user query.
+export function existingScenarioForQuery(description) {
+  const key = queryKey(description);
+  if (!key) return null;
+  const id = queryIndex()[key];
+  if (!id) return null;
+  try {
+    const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
+    return all[id] ? id : null;
+  } catch { return null; }
+}
+
 export async function generateCustomCrash(description) {
+  // Dedup: already generated? Reuse.
+  const cachedId = existingScenarioForQuery(description);
+  if (cachedId) {
+    try {
+      const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
+      if (all[cachedId]) return all[cachedId];
+    } catch {}
+  }
+
   let lastErr = null;
   for (const { profile, temperature } of ATTEMPTS) {
     try {
       const meta = await callLlmForMeta(description, temperature, profile);
+      // LLM may refuse non-crash queries (rallies, tiny moves) — surface cleanly.
+      if (meta && meta.error === "not_a_crash") {
+        const msg = typeof meta.message === "string" && meta.message.trim()
+          ? meta.message.trim()
+          : "That event was a rally, not a crash. The time-travel replay is built for market drops — try something like 'Diwali 2008 correction' instead.";
+        const err = new Error(msg);
+        err.kind = "not_a_crash";
+        throw err;
+      }
       reshape(meta);
       const valid = validate(meta);
       if (!valid.ok) { lastErr = valid.error; continue; }
-      return buildScenario(meta);
+      const scenario = buildScenario(meta);
+      rememberQuery(queryKey(description), scenario.id);
+      return scenario;
     } catch (e) {
+      if (e?.kind === "not_a_crash") throw e;   // don't retry on a deliberate refusal
       lastErr = e?.message || String(e);
     }
   }

@@ -345,10 +345,24 @@ function renderStockCard(inst, state) {
     badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV — refreshed once per day after market close">NAV</span>`;
   } else if (ms.state !== "open") {
     const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
-    const hint = ms.state === "pre-open"
-      ? `Pre-open session · opens ${ms.istTime}`
-      : (ms.lastCloseLabel || "Market closed");
-    badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="${escapeAttr(hint)}">${lbl}</span>`;
+    // Rich hover popover rather than a native title= tooltip.
+    const pop = `
+      <div class="market-status-pop" role="tooltip">
+        <div class="ms-pop-head">
+          <span class="ms-pop-label">NSE · ${ms.state === "pre-open" ? "Pre-open" : "Closed"}</span>
+        </div>
+        <div class="ms-pop-row"><span class="ms-pop-key">Now</span><span>${escapeHtml(ms.istDate)} · ${escapeHtml(ms.istTime)}</span></div>
+        ${ms.state === "pre-open"
+          ? `<div class="ms-pop-row"><span class="ms-pop-key">Opens</span><span>9:15 AM IST today</span></div>`
+          : `<div class="ms-pop-row"><span class="ms-pop-key">Last close</span><span>${escapeHtml(ms.lastCloseLabel || "—")}</span></div>`
+        }
+        ${ms.nextOpenLabel ? `<div class="ms-pop-row"><span class="ms-pop-key">Next open</span><span>${escapeHtml(ms.nextOpenLabel)}</span></div>` : ""}
+        ${ms.isHoliday ? `<div class="ms-pop-row"><span class="ms-pop-key">Holiday</span><span>Yes</span></div>` : ""}
+        <div class="ms-pop-row"><span class="ms-pop-key">Hours</span><span>Mon–Fri · 9:15–3:30 IST</span></div>
+        <div class="ms-pop-foot">Clock is server-trusted.</div>
+      </div>
+    `;
+    badge = `<span class="pill stock-card-ms-pill market-status" tabindex="0" data-ms-state="${ms.state}" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim); position: relative;">${lbl}${pop}</span>`;
   } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
     if (quote.stale) {
       const ageLabel = quote.staleAgeMinutes >= 60
