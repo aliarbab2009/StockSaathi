@@ -202,13 +202,37 @@ export const CRASHES = [COVID_2020, GFC_2008, DEMO_2016];
 export const CRASH_BY_ID = Object.fromEntries(CRASHES.map(c => [c.id, c]));
 
 // Custom scenarios generated at runtime from free-text user descriptions.
-// Stored in memory only (not persisted) so they don't outlive the session
-// — the replay UI looks them up via getCrashById() below.
-const CUSTOM_CRASHES = {};
+// Persisted in localStorage so a reload, shared link, or fresh tab still
+// resolves the generated URL. Capped at 50 to avoid localStorage bloat —
+// oldest generations fall off the end.
+const CUSTOM_STORAGE_KEY = "ss.customCrashes.v1";
+const CUSTOM_CRASHES = (function hydrate() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch { return {}; }
+})();
+
+function persistCustom() {
+  try {
+    const entries = Object.entries(CUSTOM_CRASHES);
+    if (entries.length > 50) {
+      // Trim oldest by id timestamp suffix (ids end in toString(36) of Date.now()
+      // -> sortable). Keep the 50 newest.
+      entries.sort((a, b) => (a[0] < b[0] ? 1 : -1));
+      const kept = Object.fromEntries(entries.slice(0, 50));
+      for (const k of Object.keys(CUSTOM_CRASHES)) if (!(k in kept)) delete CUSTOM_CRASHES[k];
+    }
+    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(CUSTOM_CRASHES));
+  } catch {}
+}
 
 export function registerCustomCrash(scenario) {
   if (!scenario?.id) return;
   CUSTOM_CRASHES[scenario.id] = scenario;
+  persistCustom();
 }
 
 export function getCrashById(id) {
