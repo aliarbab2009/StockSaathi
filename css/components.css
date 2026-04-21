@@ -1329,6 +1329,98 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   line-height: 1.5;
 }
 
+/* ================== ADMIN PANEL ================================== */
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.admin-day-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: var(--sp-3);
+  height: 72px;
+}
+.admin-day-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.admin-day-bar .bar {
+  width: 100%;
+  min-height: 2px;
+  background: color-mix(in srgb, var(--brand) 45%, transparent);
+  border-radius: 2px 2px 0 0;
+  transition: background var(--dur-1);
+}
+.admin-day-bar:hover .bar { background: var(--brand); }
+.admin-day-bar .label {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  letter-spacing: -0.02em;
+}
+.admin-table-wrap {
+  overflow-x: auto;
+  margin: var(--sp-3) calc(var(--sp-4) * -1) 0;
+  padding: 0 var(--sp-4);
+}
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.admin-table th {
+  text-align: left;
+  padding: 10px 8px;
+  font-size: var(--text-10);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--divider);
+  white-space: nowrap;
+}
+.admin-table th.sortable { cursor: pointer; user-select: none; }
+.admin-table th.sortable:hover { color: var(--text-strong); }
+.admin-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--divider);
+  vertical-align: top;
+}
+.admin-table tbody tr { cursor: pointer; transition: background var(--dur-1); }
+.admin-table tbody tr:hover { background: var(--bg-soft); }
+.admin-user-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4);
+}
+@media (max-width: 640px) { .admin-user-grid { grid-template-columns: 1fr; } }
+.admin-user-section-label {
+  font-size: var(--text-10);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 800;
+  margin-bottom: var(--sp-2);
+}
+.admin-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 4px 0;
+  font-size: var(--text-sm);
+}
+.admin-kv > span:first-child { color: var(--text-muted); }
+.admin-kv > span:last-child { color: var(--text-strong); font-weight: 500; text-align: right; }
+
 /* Stock-card CLOSED/PRE-OPEN pill: use the same rich hover card as the
    nav + stock-detail. Because the pill is tiny and lives inside a
    layout-constrained card, anchor the popover to the pill itself and

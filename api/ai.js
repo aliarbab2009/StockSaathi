@@ -584,6 +584,8 @@ export default async function handler(req) {
       case "command":             if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opCommand(req, origin);
       case "time":                return opTime(req, origin);
       case "signup-count":        return await opSignupCount(req, origin);
+      case "admin-overview":      return await opAdminOverview(req, origin);
+      case "admin-user":          return await opAdminUser(req, origin, url);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -598,6 +600,162 @@ export default async function handler(req) {
 // -----------------------------------------------------------------------------
 function opTime(req, origin) {
   return j(200, { ms: Date.now() }, origin);
+}
+
+// -----------------------------------------------------------------------------
+// Admin gate — the admin ops require a bearer token that matches the
+// ADMIN_TOKEN env var set on Vercel. Set once, paste into the admin
+// panel, stored in localStorage. Treats unset ADMIN_TOKEN as
+// 'admin disabled' to prevent an empty-token bypass.
+// -----------------------------------------------------------------------------
+function checkAdmin(req) {
+  const env = globalThis.process?.env || {};
+  const expected = (env.ADMIN_TOKEN || "").trim();
+  if (!expected) return { ok: false, reason: "admin_disabled" };
+  const hdr = req.headers.get("Authorization") || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7).trim() : hdr.trim();
+  if (!token) return { ok: false, reason: "missing_token" };
+  // Constant-time-ish compare.
+  if (token.length !== expected.length) return { ok: false, reason: "bad_token" };
+  let diff = 0;
+  for (let i = 0; i < token.length; i++) diff |= token.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0 ? { ok: true } : { ok: false, reason: "bad_token" };
+}
+
+async function sbAdminFetch(path, opts = {}) {
+  const env = globalThis.process?.env || {};
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("supabase_not_configured");
+  return fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}${path}`, {
+    ...opts,
+    headers: {
+      "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+      "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+async function opAdminOverview(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+
+  // IST day-buckets for 30-day chart
+  const days = 30;
+  const buckets = {};
+  for (let i = 0; i < days; i++) {
+    const d = new Date(Date.now() - i * 86400000);
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
+    buckets[`${parts.year}-${parts.month}-${parts.day}`] = 0;
+  }
+
+  try {
+    const [profilesRes, portsRes, txsRes, coachRes] = await Promise.all([
+      sbAdminFetch(`/rest/v1/profiles?select=id,username,display_name,email,age,school,city,risk_profile,onboarded,parent_consent_at,created_at&order=created_at.desc&limit=500`),
+      sbAdminFetch(`/rest/v1/portfolios?select=user_id,cash_paise,starting_cash_paise,updated_at&limit=2000`),
+      sbAdminFetch(`/rest/v1/transactions?select=user_id,symbol,side,qty,price_paise,ts&order=ts.desc&limit=5000`),
+      sbAdminFetch(`/rest/v1/coach_messages?select=user_id&limit=10000`),
+    ]);
+    const profiles = profilesRes.ok ? await profilesRes.json() : [];
+    const ports = portsRes.ok ? await portsRes.json() : [];
+    const txs = txsRes.ok ? await txsRes.json() : [];
+    const coachMessages = coachRes.ok ? await coachRes.json() : [];
+
+    const portByUser = {};
+    for (const p of ports) portByUser[p.user_id] = p;
+    const tradeCountByUser = {};
+    const lastTradeByUser = {};
+    for (const t of txs) {
+      tradeCountByUser[t.user_id] = (tradeCountByUser[t.user_id] || 0) + 1;
+      if (!lastTradeByUser[t.user_id]) lastTradeByUser[t.user_id] = t.ts;
+    }
+    const coachCountByUser = {};
+    for (const m of coachMessages) coachCountByUser[m.user_id] = (coachCountByUser[m.user_id] || 0) + 1;
+
+    // Populate 30-day sign-up chart
+    for (const p of profiles) {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+      }).formatToParts(new Date(p.created_at)).reduce((a, pp) => (a[pp.type] = pp.value, a), {});
+      const k = `${parts.year}-${parts.month}-${parts.day}`;
+      if (k in buckets) buckets[k]++;
+    }
+    const byDay = Object.entries(buckets).sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([day, count]) => ({ day, count }));
+
+    const users = profiles.map(p => {
+      const port = portByUser[p.id];
+      return {
+        id: p.id,
+        username: p.username,
+        displayName: p.display_name,
+        email: p.email,
+        age: p.age,
+        school: p.school,
+        city: p.city,
+        riskProfile: p.risk_profile,
+        onboarded: p.onboarded,
+        parentConsented: !!p.parent_consent_at,
+        createdAt: p.created_at,
+        cashRupees: port ? Math.round((port.cash_paise || 0) / 100) : null,
+        startingCashRupees: port ? Math.round((port.starting_cash_paise || 10000000) / 100) : 100000,
+        lastActive: port?.updated_at || p.created_at,
+        tradeCount: tradeCountByUser[p.id] || 0,
+        coachMsgCount: coachCountByUser[p.id] || 0,
+        lastTradeAt: lastTradeByUser[p.id] || null,
+      };
+    });
+
+    const totalCash = users.reduce((a, u) => a + (u.cashRupees || 0), 0);
+    const onboardedCount = users.filter(u => u.onboarded).length;
+    const activeCount = users.filter(u => u.tradeCount > 0).length;
+
+    return j(200, {
+      aggregates: {
+        users: users.length,
+        onboarded: onboardedCount,
+        onboardedPct: users.length ? Math.round((onboardedCount / users.length) * 100) : 0,
+        active: activeCount,
+        totalCashRupees: totalCash,
+        totalTrades: txs.length,
+        totalCoachMessages: coachMessages.length,
+      },
+      byDay,
+      users,
+      asOf: new Date().toISOString(),
+    }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
+async function opAdminUser(req, origin, url) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const userId = url.searchParams.get("id");
+  if (!userId) return j(400, { error: "missing_id" }, origin);
+
+  try {
+    const [profRes, portRes, holdRes, txRes, coachRes, histRes] = await Promise.all([
+      sbAdminFetch(`/rest/v1/profiles?select=*&id=eq.${encodeURIComponent(userId)}&limit=1`),
+      sbAdminFetch(`/rest/v1/portfolios?select=*&user_id=eq.${encodeURIComponent(userId)}&limit=1`),
+      sbAdminFetch(`/rest/v1/holdings?select=symbol,qty,avg_cost_paise,first_bought_at&user_id=eq.${encodeURIComponent(userId)}&limit=200`),
+      sbAdminFetch(`/rest/v1/transactions?select=*&user_id=eq.${encodeURIComponent(userId)}&order=ts.desc&limit=200`),
+      sbAdminFetch(`/rest/v1/coach_messages?select=ts,event_type,trigger_symbol,model&user_id=eq.${encodeURIComponent(userId)}&order=ts.desc&limit=200`),
+      sbAdminFetch(`/rest/v1/portfolio_history?select=ts,value_paise&user_id=eq.${encodeURIComponent(userId)}&order=ts.asc&limit=500`),
+    ]);
+    const profile = profRes.ok ? (await profRes.json())[0] : null;
+    const portfolio = portRes.ok ? (await portRes.json())[0] : null;
+    const holdings = holdRes.ok ? await holdRes.json() : [];
+    const transactions = txRes.ok ? await txRes.json() : [];
+    const coachMessages = coachRes.ok ? await coachRes.json() : [];
+    const portfolioHistory = histRes.ok ? await histRes.json() : [];
+    if (!profile) return j(404, { error: "not_found" }, origin);
+    return j(200, { profile, portfolio, holdings, transactions, coachMessages, portfolioHistory }, origin);
+  } catch (e) {
+    return j(502, { error: "query_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
 }
 
 // -----------------------------------------------------------------------------

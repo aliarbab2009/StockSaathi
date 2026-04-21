@@ -5,7 +5,7 @@
 // Bump this on every deploy so old cached JS/HTML isn't served forever. The
 // activate step below deletes any cache whose name doesn't match. Include a
 // date so it is obvious in DevTools which build is live.
-const CACHE_NAME = "stocksaathi-v47-20260421x";
+const CACHE_NAME = "stocksaathi-v48-20260421y";
 const STATIC = [
   "./",
   "./index.html",
@@ -63,6 +63,7 @@ const STATIC = [
   "./js/pages/resetPassword.js",
   "./js/pages/friends.js",
   "./js/pages/news.js",
+  "./js/pages/admin.js",
 ];
 
 self.addEventListener("install", (event) => {

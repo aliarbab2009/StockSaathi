@@ -18,6 +18,7 @@ import { renderResetPassword } from "./pages/resetPassword.js";
 import { renderFriends } from "./pages/friends.js";
 import { renderNews } from "./pages/news.js";
 import { renderChat } from "./pages/chat.js";
+import { renderAdmin } from "./pages/admin.js";
 import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
 import { getState, subscribe } from "./state.js";
 
@@ -39,6 +40,7 @@ const ROUTES = [
   { name: "news",          match: /^\/news\/?$/,                           render: renderNews, public: true },
   { name: "chat",          match: /^\/chat\/?$/,                           render: renderChat, public: true },
   { name: "settings",      match: /^\/settings\/?$/,                       render: renderSettings, needsAuth: true },
+  { name: "admin",         match: /^\/admin\/?$/,                          render: renderAdmin, public: true },
 ];
 
 export function currentRoute() {
