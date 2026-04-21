@@ -635,6 +635,7 @@ export default async function handler(req) {
       case "admin-gh-issue-close": return await opAdminGhIssueClose(req, origin);
       case "admin-gh-pr-merge":    return await opAdminGhPrMerge(req, origin);
       case "admin-gh-workflow-trigger": return await opAdminGhWorkflowTrigger(req, origin);
+      case "admin-tail":           return await opAdminTail(req, origin);
       default: return j(400, { error: "unknown_op", op }, origin);
     }
   } catch (e) {
@@ -2392,6 +2393,101 @@ async function opAdminGhWorkflowTrigger(req, origin) {
   });
   if (!result.ok) return j(502, { error: "dispatch_failed" }, origin);
   return j(200, { ok: true }, origin);
+}
+
+// =============================================================================
+// SSE LIVE TAIL — unified event stream of trades / coach / transfers / orders
+// / signups / admin-actions, emitted as Server-Sent Events.
+//
+// Why poll-based, not Supabase-realtime-proxied:
+// A clean SSE from realtime would require a persistent server connection and
+// Vercel Edge runtime has short-lived request limits. Instead, this endpoint
+// is a long-polling SSE that wakes up every 2 seconds, asks Supabase for any
+// rows newer than the last seen watermark across every relevant table, and
+// emits them as SSE events. Connection auto-closes after 4 minutes; client
+// reconnects (EventSource does this for free) with the last-seen watermark.
+//
+// Client must connect with ?token=<ADMIN_TOKEN> (query arg; EventSource
+// doesn't let you set headers). Treated with same constant-time compare as
+// the bearer path.
+// =============================================================================
+
+function checkAdminQuery(url) {
+  const env = globalThis.process?.env || {};
+  const expected = (env.ADMIN_TOKEN || "").trim();
+  const token = String(url.searchParams.get("token") || "").trim();
+  if (!expected || !token) return { ok: false, reason: "missing_token" };
+  if (token.length !== expected.length) return { ok: false, reason: "bad_token" };
+  let diff = 0;
+  for (let i = 0; i < token.length; i++) diff |= token.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0 ? { ok: true } : { ok: false, reason: "bad_token" };
+}
+
+async function opAdminTail(req, origin) {
+  const url = new URL(req.url);
+  const gate = checkAdminQuery(url);
+  if (!gate.ok) return new Response("not_authorised", { status: 401 });
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      // Watermark: where each table left off. Start from "now" unless the
+      // client sent a ?since=<iso> to resume from a specific timestamp.
+      let since = url.searchParams.get("since") || new Date().toISOString();
+      const endAt = Date.now() + 4 * 60 * 1000;
+
+      function send(event, data) {
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {}
+      }
+
+      send("open", { since, ts: new Date().toISOString() });
+
+      const tables = [
+        { name: "transactions",   kind: "trade",   timeCol: "created_at" },
+        { name: "coach_messages", kind: "coach",   timeCol: "created_at" },
+        { name: "transfers",      kind: "transfer",timeCol: "created_at" },
+        { name: "limit_orders",   kind: "order",   timeCol: "created_at" },
+        { name: "profiles",       kind: "signup",  timeCol: "created_at" },
+        { name: "admin_audit_log",kind: "admin",   timeCol: "ts" },
+      ];
+
+      while (Date.now() < endAt) {
+        try {
+          const results = await Promise.all(tables.map(async t => {
+            try {
+              const path = `/rest/v1/${t.name}?select=*&${t.timeCol}=gt.${encodeURIComponent(since)}&order=${t.timeCol}.asc&limit=100`;
+              const r = await sbAdminFetch(path);
+              if (!r.ok) return [];
+              const rows = await r.json();
+              return rows.map(row => ({ kind: t.kind, table: t.name, ts: row[t.timeCol], row }));
+            } catch { return []; }
+          }));
+          const events = results.flat().sort((a, b) => (a.ts < b.ts ? -1 : 1));
+          if (events.length) {
+            for (const ev of events) send(ev.kind, ev);
+            since = events[events.length - 1].ts;
+          }
+        } catch {}
+        // Heartbeat every iteration so clients know we're alive.
+        send("hb", { ts: new Date().toISOString(), since });
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      send("close", { reason: "duration_exceeded", since });
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store, no-transform",
+      "Connection": "keep-alive",
+      "Access-Control-Allow-Origin": allowed(origin) || "*",
+    },
+  });
 }
 
 // -----------------------------------------------------------------------------
