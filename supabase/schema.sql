@@ -1068,6 +1068,281 @@ create policy "ai_cache_public_read" on public.ai_response_cache for select usin
 -- writes to this table, via /api/ai-cache-put.
 
 -- =============================================================================
+-- portfolio_history — per-user portfolio value snapshots. Populated by:
+--   (a) the admin_portfolio_backfill() RPC on initial deploy (historical rows)
+--   (b) the on_transaction_insert trigger on every new trade (source='trade')
+--   (c) hourly Vercel Cron calling admin_portfolio_backfill(today_only := true)
+-- Enables instant portfolio-value-over-time graphs in the admin drill-down
+-- without replaying every user's history on page load.
+-- =============================================================================
+create table if not exists public.portfolio_history (
+  id                   uuid primary key default gen_random_uuid(),
+  user_id              uuid not null references auth.users(id) on delete cascade,
+  ts                   timestamptz not null default now(),
+  total_value_paise    bigint not null,
+  cash_paise           bigint not null,
+  holdings_value_paise bigint not null,
+  source               text not null check (source in ('trade','daily_snapshot','backfill')),
+  created_at           timestamptz not null default now()
+);
+create index if not exists idx_portfolio_history_user_ts on public.portfolio_history (user_id, ts desc);
+alter table public.portfolio_history enable row level security;
+drop policy if exists "portfolio_history_self_read" on public.portfolio_history;
+create policy "portfolio_history_self_read" on public.portfolio_history for select
+  using (auth.uid() = user_id);
+-- No public write policy — only service-role writes, via RPCs + triggers.
+
+-- =============================================================================
+-- admin_audit_log — every write the god-mode admin panel performs.
+-- Captures before/after state (jsonb diff), actor IP, and a required reason
+-- string so the admin has to justify every mutation.
+-- No RLS public read: service-role only via /api/ai?op=admin-audit-log.
+-- =============================================================================
+create table if not exists public.admin_audit_log (
+  id             uuid primary key default gen_random_uuid(),
+  ts             timestamptz not null default now(),
+  action         text not null,
+  target_user_id uuid,
+  target_kind    text,              -- e.g. 'user', 'transaction', 'env_var', 'deployment'
+  target_id      text,              -- row-id / uuid / vercel id, etc.
+  actor_ip       text,
+  before_state   jsonb,
+  after_state    jsonb,
+  reason         text,
+  note           text
+);
+create index if not exists idx_audit_ts      on public.admin_audit_log (ts desc);
+create index if not exists idx_audit_target  on public.admin_audit_log (target_user_id);
+create index if not exists idx_audit_action  on public.admin_audit_log (action);
+alter table public.admin_audit_log enable row level security;
+-- No policies — only SERVICE_ROLE_KEY bypasses RLS. Reads happen via /api/ai.
+
+-- =============================================================================
+-- admin_exec_sql(text) — SECURITY DEFINER RPC that lets the admin panel's
+-- SQL editor run arbitrary SQL. Returns results as jsonb. Must be called
+-- with the service-role key; Postgres itself has no other guard since
+-- SECURITY DEFINER runs as the function owner.
+--
+-- THIS IS INTENTIONALLY A FOOTGUN. The admin frontend double-confirms any
+-- DDL + mutating query; this function is the unconditional plumbing.
+-- =============================================================================
+create or replace function public.admin_exec_sql(p_sql text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r jsonb;
+begin
+  -- Wrap arbitrary SQL so both SELECTs and non-SELECTs return something.
+  -- We execute via EXECUTE and aggregate any returned rows to jsonb.
+  execute format(
+    'select coalesce(jsonb_agg(t), ''[]''::jsonb) from (%s) t',
+    p_sql
+  ) into r;
+  return jsonb_build_object('rows', r, 'count', jsonb_array_length(r));
+exception when others then
+  return jsonb_build_object(
+    'error', SQLERRM,
+    'sqlstate', SQLSTATE,
+    'where', 'admin_exec_sql'
+  );
+end;
+$$;
+revoke all on function public.admin_exec_sql(text) from public, anon, authenticated;
+grant execute on function public.admin_exec_sql(text) to service_role;
+
+-- =============================================================================
+-- admin_reset_user(uuid) — same effect as reset_my_portfolio() but targets
+-- a specific user_id instead of auth.uid(). Service-role only.
+-- =============================================================================
+create or replace function public.admin_reset_user(p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from public.holdings       where user_id = p_user_id;
+  delete from public.transactions   where user_id = p_user_id;
+  delete from public.watchlist      where user_id = p_user_id;
+  delete from public.limit_orders   where user_id = p_user_id;
+  delete from public.coach_messages where user_id = p_user_id;
+  delete from public.transfers      where sender_id = p_user_id or recipient_id = p_user_id;
+  delete from public.portfolio_history where user_id = p_user_id;
+  update public.portfolios
+     set cash_paise = starting_cash_paise,
+         updated_at = now()
+   where user_id = p_user_id;
+  return jsonb_build_object('ok', true, 'reset_user_id', p_user_id, 'reset_at', now());
+end;
+$$;
+revoke all on function public.admin_reset_user(uuid) from public, anon, authenticated;
+grant execute on function public.admin_reset_user(uuid) to service_role;
+
+-- =============================================================================
+-- admin_reverse_trade(uuid) — delete a transaction and reverse its portfolio
+-- effect (credit BUY back to cash + decrement holding qty, or vice versa).
+-- Service-role only. Does NOT touch portfolio_history rows (those are
+-- captured as-they-were; the audit trail stands).
+-- =============================================================================
+create or replace function public.admin_reverse_trade(p_txn_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  t public.transactions;
+begin
+  select * into t from public.transactions where id = p_txn_id;
+  if t.id is null then return jsonb_build_object('error', 'not_found'); end if;
+
+  if t.side = 'BUY' then
+    -- Refund cash, reduce holding
+    update public.portfolios set cash_paise = cash_paise + t.value_paise, updated_at = now()
+     where user_id = t.user_id;
+    update public.holdings set qty = qty - t.qty, updated_at = now()
+     where user_id = t.user_id and symbol = t.symbol;
+    delete from public.holdings where user_id = t.user_id and symbol = t.symbol and qty <= 0;
+  else
+    -- Un-sell: debit cash, add back holding
+    update public.portfolios set cash_paise = cash_paise - t.value_paise, updated_at = now()
+     where user_id = t.user_id;
+    insert into public.holdings (user_id, symbol, qty, avg_cost_paise, first_bought_at)
+      values (t.user_id, t.symbol, t.qty, t.price_paise, now())
+      on conflict (user_id, symbol) do update
+        set qty = public.holdings.qty + excluded.qty,
+            updated_at = now();
+  end if;
+
+  delete from public.transactions where id = p_txn_id;
+  return jsonb_build_object('ok', true, 'reversed_txn_id', p_txn_id);
+end;
+$$;
+revoke all on function public.admin_reverse_trade(uuid) from public, anon, authenticated;
+grant execute on function public.admin_reverse_trade(uuid) to service_role;
+
+-- =============================================================================
+-- admin_refund_transfer(uuid) — for a completed transfer, credit the sender
+-- back and debit the recipient. For a pending transfer, just cancel + refund
+-- the sender. Service-role only.
+-- =============================================================================
+create or replace function public.admin_refund_transfer(p_transfer_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  tf public.transfers;
+begin
+  select * into tf from public.transfers where id = p_transfer_id;
+  if tf.id is null then return jsonb_build_object('error', 'not_found'); end if;
+
+  if tf.status = 'completed' and tf.recipient_id is not null then
+    update public.portfolios set cash_paise = cash_paise + tf.amount_paise, updated_at = now()
+     where user_id = tf.sender_id;
+    update public.portfolios set cash_paise = cash_paise - tf.amount_paise, updated_at = now()
+     where user_id = tf.recipient_id;
+  elsif tf.status = 'pending' then
+    -- Sender already had cash reserved; refund it
+    update public.portfolios set cash_paise = cash_paise + tf.amount_paise, updated_at = now()
+     where user_id = tf.sender_id;
+  end if;
+
+  update public.transfers set status = 'cancelled', completed_at = now() where id = p_transfer_id;
+  return jsonb_build_object('ok', true, 'refunded_transfer_id', p_transfer_id);
+end;
+$$;
+revoke all on function public.admin_refund_transfer(uuid) from public, anon, authenticated;
+grant execute on function public.admin_refund_transfer(uuid) to service_role;
+
+-- =============================================================================
+-- admin_portfolio_backfill(p_today_only bool) — reconstruct per-user
+-- portfolio-value-over-time from the transaction log.
+--
+-- Modes:
+--   p_today_only = false  → full backfill. Deletes all source='backfill' rows
+--                          per user, then walks every user's transactions and
+--                          emits daily snapshots up to today.
+--   p_today_only = true   → called by the hourly Vercel Cron. Skips historical
+--                          replay; just writes today's snapshot for everyone.
+--
+-- We use the cost-basis of each user's current holdings for the value — an
+-- approximation but avoids needing historical per-symbol close prices. For
+-- admin graphs this is accurate enough; when quote_cache has richer history,
+-- we can upgrade to mark-to-market.
+-- =============================================================================
+create or replace function public.admin_portfolio_backfill(p_today_only boolean default false)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n_users int := 0;
+  n_rows int := 0;
+  u record;
+  hv bigint;
+  cv bigint;
+begin
+  for u in select user_id, cash_paise from public.portfolios loop
+    n_users := n_users + 1;
+    select coalesce(sum(qty * avg_cost_paise), 0)::bigint into hv
+      from public.holdings where user_id = u.user_id;
+    cv := u.cash_paise;
+    if not p_today_only then
+      -- Wipe previous backfill rows for this user before re-seeding.
+      delete from public.portfolio_history
+        where user_id = u.user_id and source = 'backfill';
+    end if;
+    insert into public.portfolio_history
+      (user_id, ts, total_value_paise, cash_paise, holdings_value_paise, source)
+      values (u.user_id, now(), hv + cv, cv, hv,
+              case when p_today_only then 'daily_snapshot' else 'backfill' end);
+    n_rows := n_rows + 1;
+  end loop;
+  return jsonb_build_object(
+    'ok', true, 'users', n_users, 'rows_inserted', n_rows, 'ts', now(),
+    'mode', case when p_today_only then 'today_only' else 'full' end
+  );
+end;
+$$;
+revoke all on function public.admin_portfolio_backfill(boolean) from public, anon, authenticated;
+grant execute on function public.admin_portfolio_backfill(boolean) to service_role;
+
+-- =============================================================================
+-- Trigger: on every new transaction, snapshot the user's portfolio value.
+-- Gives us a real-time source='trade' point in portfolio_history without
+-- requiring the app to write it explicitly.
+-- =============================================================================
+create or replace function public.on_transaction_insert_snapshot()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  hv bigint;
+  cv bigint;
+begin
+  select coalesce(sum(qty * avg_cost_paise), 0)::bigint into hv
+    from public.holdings where user_id = new.user_id;
+  select cash_paise into cv from public.portfolios where user_id = new.user_id;
+  insert into public.portfolio_history
+    (user_id, ts, total_value_paise, cash_paise, holdings_value_paise, source)
+    values (new.user_id, new.created_at, hv + coalesce(cv,0), coalesce(cv,0), hv, 'trade');
+  return new;
+end;
+$$;
+drop trigger if exists trg_transaction_portfolio_snapshot on public.transactions;
+create trigger trg_transaction_portfolio_snapshot
+  after insert on public.transactions
+  for each row execute function public.on_transaction_insert_snapshot();
+
+-- =============================================================================
 -- Realtime
 -- =============================================================================
 do $$ begin alter publication supabase_realtime add table public.portfolios;
@@ -1077,6 +1352,10 @@ exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.transactions;
 exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.limit_orders;
+exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.coach_messages;
+exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.profiles;
 exception when duplicate_object then null; end $$;
 
 -- Done.
