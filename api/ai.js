@@ -146,7 +146,7 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
       if (response_format) body.response_format = response_format;
       // Vertex AI OpenAI-compat uses x-goog-api-key for API-key auth.
       // Everything else (OpenAI/Groq/AI Studio/Cerebras) takes Bearer.
-      const isVertex = /-aiplatform\.googleapis\.com/.test(p.url);
+      const isVertex = /aiplatform\.googleapis\.com/.test(p.url);
       const authHeaders = isVertex
         ? { "x-goog-api-key": p.key }
         : { "Authorization": `Bearer ${p.key}` };

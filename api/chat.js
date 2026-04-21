@@ -172,7 +172,7 @@ async function callUpstream(desc, payload) {
   // NOT Authorization: Bearer (which is reserved for OAuth access tokens on
   // that endpoint). Every other upstream (OpenAI, Groq, Cerebras, AI Studio
   // via generativelanguage.googleapis.com) takes Bearer just fine.
-  const isVertex = /-aiplatform\.googleapis\.com/.test(desc.url);
+  const isVertex = /aiplatform\.googleapis\.com/.test(desc.url);
   const headers = {
     "Content-Type": "application/json",
     "User-Agent": "StockSaathi-Edge/1.0",
