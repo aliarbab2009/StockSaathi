@@ -24,6 +24,7 @@
 import { formatRupees } from "../money.js";
 import { areaChart } from "../components/charts.js";
 import { toast } from "../components/toast.js";
+import { mountThemedSelect } from "../components/themedSelect.js";
 
 const TOKEN_KEY = "ss.adminToken.v1";
 const LAST_TAB_KEY = "ss.adminLastTab.v1";
@@ -333,56 +334,15 @@ function renderUsersTab(host, main) {
   host.innerHTML = `
     <div class="admin-filter-bar card" style="margin-bottom: var(--sp-3);">
       <input id="u-search" class="input" placeholder="Search username / name / email / school / city" value="${escapeAttr(state.filters.search)}" style="flex:1; min-width: 240px;" />
-      <select id="u-onboarded" class="select">
-        <option value="any">Onboarded: any</option>
-        <option value="yes" ${state.filters.onboarded === "yes" ? "selected" : ""}>Onboarded: yes</option>
-        <option value="no"  ${state.filters.onboarded === "no"  ? "selected" : ""}>Onboarded: no</option>
-      </select>
-      <select id="u-risk" class="select">
-        <option value="any">Risk: any</option>
-        <option value="cautious">Cautious</option>
-        <option value="balanced">Balanced</option>
-        <option value="bold">Bold</option>
-      </select>
-      <select id="u-consent" class="select">
-        <option value="any">Consent: any</option>
-        <option value="yes">Consented</option>
-        <option value="no">No consent</option>
-      </select>
-      <select id="u-traded" class="select">
-        <option value="any">Trading: any</option>
-        <option value="yes">Has traded</option>
-        <option value="no">Zero trades</option>
-      </select>
-      <select id="u-coached" class="select">
-        <option value="any">Coach msgs: any</option>
-        <option value="yes">Has coach msgs</option>
-        <option value="no">No coach msgs</option>
-      </select>
-      <select id="u-age" class="select">
-        <option value="any">Age: any</option>
-        <option value="13-15">13–15</option>
-        <option value="16-17">16–17</option>
-        <option value="18+">18+</option>
-      </select>
-      <select id="u-trades" class="select">
-        <option value="any">Trade count: any</option>
-        <option value="0">0</option>
-        <option value="1-5">1–5</option>
-        <option value="6-20">6–20</option>
-        <option value="20+">20+</option>
-      </select>
-      <select id="u-activity" class="select">
-        <option value="any">Activity: any</option>
-        <option value="<1d">Active &lt; 1d</option>
-        <option value="<7d">Active &lt; 7d</option>
-        <option value="<30d">Active &lt; 30d</option>
-        <option value="30d+">Stale 30d+</option>
-      </select>
-      <select id="u-school" class="select">
-        <option value="any">School: any</option>
-        ${schools.map(s => `<option ${state.filters.school === s ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
-      </select>
+      <div id="u-onboarded" class="u-filter-slot"></div>
+      <div id="u-risk"      class="u-filter-slot"></div>
+      <div id="u-consent"   class="u-filter-slot"></div>
+      <div id="u-traded"    class="u-filter-slot"></div>
+      <div id="u-coached"   class="u-filter-slot"></div>
+      <div id="u-age"       class="u-filter-slot"></div>
+      <div id="u-trades"    class="u-filter-slot"></div>
+      <div id="u-activity"  class="u-filter-slot"></div>
+      <div id="u-school"    class="u-filter-slot"></div>
     </div>
 
     <div class="card">
@@ -406,15 +366,63 @@ function renderUsersTab(host, main) {
     if (tbody) tbody.innerHTML = renderUsersRowsHtml(applyFiltersAndSort(users));
     wireRowClicks(host, main);
   });
-  host.querySelector("#u-onboarded").addEventListener("change", e => setF("onboarded", e.target.value));
-  host.querySelector("#u-risk").addEventListener("change", e => setF("riskProfile", e.target.value));
-  host.querySelector("#u-consent").addEventListener("change", e => setF("consent", e.target.value));
-  host.querySelector("#u-traded").addEventListener("change", e => setF("traded", e.target.value));
-  host.querySelector("#u-coached").addEventListener("change", e => setF("coached", e.target.value));
-  host.querySelector("#u-age").addEventListener("change", e => setF("ageBracket", e.target.value));
-  host.querySelector("#u-trades").addEventListener("change", e => setF("tradeBucket", e.target.value));
-  host.querySelector("#u-activity").addEventListener("change", e => setF("activity", e.target.value));
-  host.querySelector("#u-school").addEventListener("change", e => setF("school", e.target.value));
+  mountThemedSelect(host.querySelector("#u-onboarded"), {
+    value: state.filters.onboarded,
+    options: [{ value: "any", label: "Onboarded: any" }, { value: "yes", label: "Onboarded · yes" }, { value: "no", label: "Onboarded · no" }],
+    onChange: v => setF("onboarded", v),
+  });
+  mountThemedSelect(host.querySelector("#u-risk"), {
+    value: state.filters.riskProfile,
+    options: [{ value: "any", label: "Risk: any" }, { value: "cautious", label: "Cautious" }, { value: "balanced", label: "Balanced" }, { value: "bold", label: "Bold" }],
+    onChange: v => setF("riskProfile", v),
+  });
+  mountThemedSelect(host.querySelector("#u-consent"), {
+    value: state.filters.consent,
+    options: [{ value: "any", label: "Consent: any" }, { value: "yes", label: "Consented" }, { value: "no", label: "No consent" }],
+    onChange: v => setF("consent", v),
+  });
+  mountThemedSelect(host.querySelector("#u-traded"), {
+    value: state.filters.traded,
+    options: [{ value: "any", label: "Trading: any" }, { value: "yes", label: "Has traded" }, { value: "no", label: "Zero trades" }],
+    onChange: v => setF("traded", v),
+  });
+  mountThemedSelect(host.querySelector("#u-coached"), {
+    value: state.filters.coached,
+    options: [{ value: "any", label: "Coach: any" }, { value: "yes", label: "Has coach msgs" }, { value: "no", label: "No coach msgs" }],
+    onChange: v => setF("coached", v),
+  });
+  mountThemedSelect(host.querySelector("#u-age"), {
+    value: state.filters.ageBracket,
+    options: [{ value: "any", label: "Age: any" }, { value: "13-15", label: "13–15" }, { value: "16-17", label: "16–17" }, { value: "18+", label: "18+" }],
+    onChange: v => setF("ageBracket", v),
+  });
+  mountThemedSelect(host.querySelector("#u-trades"), {
+    value: state.filters.tradeBucket,
+    options: [
+      { value: "any", label: "Trades: any" },
+      { value: "0", label: "Zero trades" },
+      { value: "1-5", label: "1–5" },
+      { value: "6-20", label: "6–20" },
+      { value: "20+", label: "20+" },
+    ],
+    onChange: v => setF("tradeBucket", v),
+  });
+  mountThemedSelect(host.querySelector("#u-activity"), {
+    value: state.filters.activity,
+    options: [
+      { value: "any", label: "Activity: any" },
+      { value: "<1d", label: "Active < 1 day" },
+      { value: "<7d", label: "Active < 7 days" },
+      { value: "<30d", label: "Active < 30 days" },
+      { value: "30d+", label: "Stale 30d+" },
+    ],
+    onChange: v => setF("activity", v),
+  });
+  mountThemedSelect(host.querySelector("#u-school"), {
+    value: state.filters.school,
+    options: [{ value: "any", label: "School: any" }, ...schools.map(s => ({ value: s, label: s }))],
+    onChange: v => setF("school", v),
+  });
 
   host.querySelectorAll(".admin-table th[data-col]").forEach(th => {
     th.addEventListener("click", () => {
@@ -816,14 +824,7 @@ function renderActivityTab(host, main) {
       <div class="card-head">
         <h3>Live activity feed</h3>
         <div class="flex gap-2 items-center">
-          <select id="act-filter" class="select">
-            <option value="all">All events</option>
-            <option value="trades">Trades</option>
-            <option value="coach">Coach</option>
-            <option value="transfers">Transfers</option>
-            <option value="orders">Orders</option>
-            <option value="signups">Signups</option>
-          </select>
+          <div id="act-filter" style="min-width: 180px;"></div>
           <button class="btn btn-ghost btn-sm" id="act-clear">Clear</button>
         </div>
       </div>
@@ -831,9 +832,17 @@ function renderActivityTab(host, main) {
         <div class="muted text-sm" style="padding: var(--sp-3);">Open Live tail at the top to start streaming events.</div>
       </div>
     </div>`;
-  host.querySelector("#act-filter").addEventListener("change", e => {
-    state.activityFilter = e.target.value;
-    repaintActivity();
+  mountThemedSelect(host.querySelector("#act-filter"), {
+    value: state.activityFilter,
+    options: [
+      { value: "all", label: "All events" },
+      { value: "trades", label: "🟢 Trades" },
+      { value: "coach", label: "💬 Coach" },
+      { value: "transfers", label: "💸 Transfers" },
+      { value: "orders", label: "📊 Orders" },
+      { value: "signups", label: "✨ Signups" },
+    ],
+    onChange: v => { state.activityFilter = v; repaintActivity(); },
   });
   host.querySelector("#act-clear").addEventListener("click", () => {
     state.activity = [];
@@ -957,29 +966,41 @@ async function renderDbBrowser(body) {
   const t = dbState.browseTable;
   body.innerHTML = `
     <div class="flex gap-2 wrap" style="margin-bottom: var(--sp-3);">
-      <select class="select" id="db-table-picker" style="max-width: 280px;">
-        <option value="">-- pick a table --</option>
-        ${dbState.tables.map(x => `<option value="${escapeAttr(x.table_name)}" ${t === x.table_name ? "selected" : ""}>${escapeHtml(x.table_name)} (${x.approx_row_count} rows · ${x.total_size})</option>`).join("")}
-      </select>
+      <div id="db-table-picker" style="min-width: 280px; max-width: 380px;"></div>
       ${t ? `
         <input class="input" id="db-order" placeholder="order by col" value="${escapeAttr(dbState.browseOrderBy)}" style="max-width: 140px;" />
-        <select class="select" id="db-order-dir" style="max-width: 80px;">
-          <option value="desc" ${dbState.browseOrderDir === "desc" ? "selected" : ""}>desc</option>
-          <option value="asc" ${dbState.browseOrderDir === "asc" ? "selected" : ""}>asc</option>
-        </select>
+        <div id="db-order-dir" style="min-width: 120px;"></div>
         <input class="input" id="db-filter" placeholder="filter (e.g. age=gte.13)" value="${escapeAttr(dbState.browseFilter)}" style="flex:1;" />
         <button class="btn btn-primary btn-sm" id="db-browse-go">Apply</button>
       ` : ""}
     </div>
     <div id="db-browse-result"></div>`;
-  body.querySelector("#db-table-picker").addEventListener("change", (e) => {
-    dbState.browseTable = e.target.value || null;
-    dbState.browseOffset = 0;
-    renderDbBrowser(body);
-    if (dbState.browseTable) fetchBrowserRows(body);
+  mountThemedSelect(body.querySelector("#db-table-picker"), {
+    value: dbState.browseTable || "",
+    placeholder: "pick a table…",
+    options: [
+      { value: "", label: "— pick a table —" },
+      ...dbState.tables.map(x => ({
+        value: x.table_name,
+        label: x.table_name,
+        hint: `${x.approx_row_count} rows · ${x.total_size}`,
+      })),
+    ],
+    onChange: v => {
+      dbState.browseTable = v || null;
+      dbState.browseOffset = 0;
+      renderDbBrowser(body);
+      if (dbState.browseTable) fetchBrowserRows(body);
+    },
   });
+  if (t) {
+    mountThemedSelect(body.querySelector("#db-order-dir"), {
+      value: dbState.browseOrderDir,
+      options: [{ value: "desc", label: "Desc ↓" }, { value: "asc", label: "Asc ↑" }],
+      onChange: v => { dbState.browseOrderDir = v; },
+    });
+  }
   body.querySelector("#db-order")?.addEventListener("change", e => { dbState.browseOrderBy = e.target.value; });
-  body.querySelector("#db-order-dir")?.addEventListener("change", e => { dbState.browseOrderDir = e.target.value; });
   body.querySelector("#db-filter")?.addEventListener("change", e => { dbState.browseFilter = e.target.value; });
   body.querySelector("#db-browse-go")?.addEventListener("click", () => fetchBrowserRows(body));
   if (t && dbState.browseRows.length === 0) fetchBrowserRows(body);
@@ -1230,10 +1251,11 @@ async function renderAuthTab(host, main) {
               <td>${u.bannedUntil ? '<span class="pill pill-red" style="font-size:10px;">banned</span>' : "—"}</td>
               <td class="dim text-xs">${formatDateShort(u.createdAt)}</td>
               <td>
-                <button class="btn btn-ghost btn-sm" data-auth-reset-email="${escapeAttr(u.email)}">reset pw</button>
-                <button class="btn btn-ghost btn-sm" data-auth-magic-email="${escapeAttr(u.email)}">magic</button>
-                ${!u.emailConfirmedAt ? `<button class="btn btn-ghost btn-sm" data-force-confirm="${escapeAttr(u.id)}">confirm</button>` : ""}
+                <button class="btn btn-ghost btn-sm" data-auth-reset-email="${escapeAttr(u.email)}" title="Send password reset email">reset pw</button>
+                <button class="btn btn-ghost btn-sm" data-auth-magic-email="${escapeAttr(u.email)}" title="Generate magic-link">magic</button>
+                ${!u.emailConfirmedAt ? `<button class="btn btn-ghost btn-sm" data-force-confirm="${escapeAttr(u.id)}" title="Force email_confirmed_at = now() without requiring the user to click">confirm</button>` : ""}
                 ${u.bannedUntil ? `<button class="btn btn-ghost btn-sm" data-unban-user="${escapeAttr(u.id)}">unban</button>` : `<button class="btn btn-ghost btn-sm" data-ban-user="${escapeAttr(u.id)}" style="color:var(--negative);">ban</button>`}
+                <button class="btn btn-ghost btn-sm" data-delete-auth-user="${escapeAttr(u.id)}" data-auth-email="${escapeAttr(u.email)}" style="color:var(--negative); font-weight: 700;" title="Cascade delete auth.users + profile + holdings + transactions + coach_messages + everything else">delete</button>
               </td>
             </tr>`).join("")}
           </tbody>
@@ -1260,6 +1282,29 @@ async function renderAuthTab(host, main) {
   host.querySelectorAll("[data-unban-user]").forEach(b => b.addEventListener("click", async () => {
     const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
     try { await adminPost("/api/ai?op=admin-user-unban", { userId: b.dataset.unbanUser, reason }); toast({ kind: "success", message: "Unbanned." }); authState.users = null; renderTabBody(main); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-delete-auth-user]").forEach(b => b.addEventListener("click", async () => {
+    const email = b.dataset.authEmail;
+    // Need the profile username as the confirm token — opAdminUserDelete requires confirm === username.
+    // Fetch the user's profile row first to get it.
+    let username = "";
+    try {
+      const res = await adminGet("/api/ai?op=admin-user&id=" + encodeURIComponent(b.dataset.deleteAuthUser));
+      username = res?.profile?.username || "";
+    } catch {}
+    if (!username) {
+      toast({ kind: "error", message: "Couldn't resolve profile for this auth user — they may have a row in auth.users but no profile row. Cannot delete safely via this flow." });
+      return;
+    }
+    const confirm = prompt(`DESTRUCTIVE: this cascades through profile + holdings + transactions + coach_messages + transfers + watchlist + limit_orders.\n\nType the username (${username}) to confirm:`);
+    if (confirm !== username) return;
+    const reason = prompt("Reason (≥ 8 chars, logged to audit):"); if (!reason || reason.trim().length < 8) return;
+    try {
+      await adminPost("/api/ai?op=admin-user-delete", { userId: b.dataset.deleteAuthUser, confirm: username, reason });
+      toast({ kind: "success", message: `Deleted @${username} (${email}).` });
+      authState.users = null;
+      renderTabBody(main);
+    } catch (e) { toast({ kind: "error", message: e.message }); }
   }));
 }
 
@@ -1518,10 +1563,7 @@ async function renderAiCacheView(body) {
   const buckets = Object.keys(bucketStats).sort();
   body.innerHTML = `
     <div class="flex gap-2 wrap" style="margin-bottom: var(--sp-3);">
-      <select class="select" id="mkt-bucket">
-        <option value="">All buckets</option>
-        ${buckets.map(b => `<option value="${escapeAttr(b)}" ${marketsState.aiBucket === b ? "selected" : ""}>${escapeHtml(b)} (${bucketStats[b].count} rows, ${bucketStats[b].totalHits} hits)</option>`).join("")}
-      </select>
+      <div id="mkt-bucket" style="min-width: 280px;"></div>
       <button class="btn btn-ghost btn-sm" id="mkt-purge-bucket" ${marketsState.aiBucket ? "" : "disabled"}>Purge bucket</button>
     </div>
     <div class="flex-col gap-2">
@@ -1538,7 +1580,18 @@ async function renderAiCacheView(body) {
       `).join("")}
     </div>
     ${rows.length === 0 ? '<div class="muted text-sm">No cache entries yet.</div>' : ""}`;
-  body.querySelector("#mkt-bucket").addEventListener("change", e => { marketsState.aiBucket = e.target.value; marketsState.aiCache = null; renderAiCacheView(body); });
+  mountThemedSelect(body.querySelector("#mkt-bucket"), {
+    value: marketsState.aiBucket,
+    options: [
+      { value: "", label: "All buckets" },
+      ...buckets.map(b => ({
+        value: b,
+        label: b,
+        hint: `${bucketStats[b].count} rows · ${bucketStats[b].totalHits} hits`,
+      })),
+    ],
+    onChange: v => { marketsState.aiBucket = v; marketsState.aiCache = null; renderAiCacheView(body); },
+  });
   body.querySelector("#mkt-purge-bucket")?.addEventListener("click", async () => {
     const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
     const confirm = prompt(`Type bucket name (${marketsState.aiBucket}) to purge all rows:`); if (confirm !== marketsState.aiBucket) return;

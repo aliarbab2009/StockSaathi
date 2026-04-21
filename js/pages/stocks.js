@@ -113,12 +113,7 @@ export function renderStocks(main) {
           <input type="search" id="stocks-search" placeholder="Search, or try &quot;cheap IT stocks with low debt&quot;..." value="${escapeAttr(filter.q)}" />
         </div>
         <button class="btn btn-ghost btn-sm" id="ask-saathi-btn" title="Filter the universe with natural language" ${aiSearchLoading ? "disabled" : ""}>${aiSearchLoading ? "…" : "✨ Ask Saathi"}</button>
-        <select class="select" id="stocks-sort" style="max-width: 200px;">
-          <option value="marketCap" ${filter.sort === "marketCap" ? "selected" : ""}>Top by size</option>
-          <option value="gainers" ${filter.sort === "gainers" ? "selected" : ""}>Top gainers today</option>
-          <option value="losers" ${filter.sort === "losers" ? "selected" : ""}>Top losers today</option>
-          <option value="name" ${filter.sort === "name" ? "selected" : ""}>Name A-Z</option>
-        </select>
+        <div id="stocks-sort" style="min-width: 200px;"></div>
       </div>
 
       <div class="filter-pills" style="margin-bottom: var(--sp-3);">
@@ -143,7 +138,18 @@ export function renderStocks(main) {
       try { searchEl.setSelectionRange(restore.start, restore.end); } catch {}
     }
     searchEl.addEventListener("input", e => { filter.q = e.target.value; render(); });
-    main.querySelector("#stocks-sort").addEventListener("change", e => { filter.sort = e.target.value; render(); });
+    import("../components/themedSelect.js").then(({ mountThemedSelect }) => {
+      mountThemedSelect(main.querySelector("#stocks-sort"), {
+        value: filter.sort,
+        options: [
+          { value: "marketCap", label: "Top by size" },
+          { value: "gainers",   label: "Top gainers today" },
+          { value: "losers",    label: "Top losers today" },
+          { value: "name",      label: "Name A–Z" },
+        ],
+        onChange: v => { filter.sort = v; render(); },
+      });
+    });
     main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; render(); }));
     main.querySelectorAll("[data-kind]").forEach(btn => btn.addEventListener("click", () => { filter.kind = btn.dataset.kind; render(); }));
     main.querySelectorAll(".stock-card").forEach(card => {
