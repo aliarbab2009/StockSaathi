@@ -2345,6 +2345,82 @@
 .lb-name { font-weight: 600; color: var(--text-strong); }
 .lb-school { font-size: var(--text-xs); color: var(--text-dim); }
 
+/* Chat session picker menu — dropdown that lists past conversations. */
+.chat-session-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--r);
+  padding: 4px;
+  box-shadow: var(--sh-lg);
+  z-index: 30;
+}
+.chat-session-menu[hidden] { display: none !important; }
+.chat-session-row {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  border-radius: 6px;
+  margin-bottom: 2px;
+}
+.chat-session-row:last-child { margin-bottom: 0; }
+.chat-session-row:hover { background: var(--bg-soft); }
+.chat-session-row.active { background: var(--brand-soft); }
+.chat-session-row-main {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 0;
+}
+.chat-session-row-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-session-row-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.chat-session-row-del {
+  flex-shrink: 0;
+  width: 32px;
+  height: auto;
+  align-self: stretch;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  font-family: inherit;
+  padding: 0;
+}
+.chat-session-row-del:hover {
+  background: var(--negative-soft);
+  color: var(--negative);
+}
+@media (max-width: 520px) {
+  /* Full-width dropdown on small phones so long session titles don't get cut off */
+  .chat-session-menu { left: 0; right: 0; min-width: 0; max-width: none; }
+}
+
 /* Leaderboard skeleton loader — shown while the first DB poll is in flight.
    Shimmering grey bars mimic the real row layout so the transition to
    actual data doesn't cause layout shift. */

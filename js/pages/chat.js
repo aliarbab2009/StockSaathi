@@ -8,19 +8,29 @@ import { getState } from "../state.js";
 import { getInstrument } from "../data/universe.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
 import { runAgent, streamChat, needsLiveData, logChatTurn } from "../coach/agent.js";
+import {
+  loadSessions, saveSessions, getActiveSession, setActiveSession,
+  createNewSession, deleteSessionById, touchActive, clearActiveMessages,
+  formatRelative,
+} from "../features/chatSessions.js";
 
-const CHAT_KEY = "ss.chatlog.v1";
+// sessionsData is the persistent envelope { activeId, sessions: [...] }.
+// chatLog is ALWAYS a live reference to the active session's messages array
+// so existing push/pop/splice logic throughout this file keeps working —
+// the array is mutated in place and chatSessions.saveSessions persists it.
+let sessionsData = loadSessions();
+let chatLog = getActiveSession(sessionsData).messages;
 
-let chatLog = loadChat();
-
-function loadChat() {
-  try {
-    const raw = localStorage.getItem(CHAT_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
-}
 function saveChat() {
-  try { localStorage.setItem(CHAT_KEY, JSON.stringify(chatLog.slice(-100))); } catch {}
+  // Session's messages array is `chatLog` itself (same reference), so any
+  // push/pop done by the renderers is already reflected. We just touch the
+  // timestamp + title and persist the whole envelope.
+  touchActive(sessionsData);
+  saveSessions(sessionsData);
+}
+
+function rebindActiveChatLog() {
+  chatLog = getActiveSession(sessionsData).messages;
 }
 
 function replyFor(text) {
@@ -37,14 +47,26 @@ export function renderChat(main) {
 
   function render() {
     const state = getState();
+    const active = getActiveSession(sessionsData);
 
     main.innerHTML = `
       <div style="max-width: 760px; margin: 0 auto;">
         <div style="margin-bottom: var(--sp-4);">
-          <div class="flex items-center gap-3">
-            <h1>Saathi</h1>
+          <div class="flex items-center gap-3 wrap">
+            <h1 style="margin: 0;">Saathi</h1>
+            <div class="chat-session-bar" style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+              <div class="chat-session-picker-wrap" style="position: relative;">
+                <button id="chat-session-picker" class="btn btn-ghost btn-sm" type="button" aria-haspopup="listbox" aria-expanded="false" style="max-width: 220px; display: inline-flex; align-items: center; gap: 6px;" title="Switch chat session">
+                  <span aria-hidden="true">🗂</span>
+                  <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(active.title || "New chat")}</span>
+                  <span aria-hidden="true">▾</span>
+                </button>
+                <div id="chat-session-menu" class="chat-session-menu" hidden role="listbox"></div>
+              </div>
+              <button id="chat-new-btn" class="btn btn-primary btn-sm" type="button" title="Start a new chat (previous chats are kept)">+ New</button>
+            </div>
           </div>
-          <p class="muted">I'm Saathi — your finance coach. Ask anything about money, investing, Indian markets, taxes, behavioral econ, or how a past crash played out. Out of scope: everything else.</p>
+          <p class="muted" style="margin-top: var(--sp-2);">I'm Saathi — your finance coach. Ask anything about money, investing, Indian markets, taxes, behavioral econ, or how a past crash played out. Out of scope: everything else.</p>
         </div>
 
         <div class="card" style="padding: 0; overflow: hidden;">
@@ -110,10 +132,104 @@ export function renderChat(main) {
     });
 
     main.querySelector("#chat-clear").addEventListener("click", () => {
-      if (confirm("Clear chat history?")) {
-        chatLog = [];
-        saveChat();
+      if (confirm("Clear THIS chat's history? Previous sessions in the 🗂 menu stay.")) {
+        // Wipe only the active session's messages (not all sessions).
+        clearActiveMessages(sessionsData);
+        // Re-bind chatLog to the (now empty) same session's messages array.
+        chatLog = getActiveSession(sessionsData).messages;
         rerender();
+      }
+    });
+
+    // Session picker + new-chat + session switch / delete handlers.
+    main.querySelector("#chat-new-btn")?.addEventListener("click", () => {
+      // Abort any in-flight stream before swapping sessions so tokens from
+      // the previous session don't leak into the new one.
+      if (m_abortController) { try { m_abortController.abort(); } catch {} }
+      m_abortController = null;
+      m_pending = false;
+      createNewSession(sessionsData);
+      rebindActiveChatLog();
+      render();
+    });
+
+    const pickerBtn = main.querySelector("#chat-session-picker");
+    const pickerMenu = main.querySelector("#chat-session-menu");
+    pickerBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = !pickerMenu.hidden;
+      if (open) {
+        pickerMenu.hidden = true;
+        pickerBtn.setAttribute("aria-expanded", "false");
+        return;
+      }
+      // Build the menu lazily so timestamps are fresh every open.
+      pickerMenu.innerHTML = sessionsData.sessions.map(s => {
+        const isActive = s.id === sessionsData.activeId;
+        const title = escapeHtml(s.title || "New chat");
+        const rel = escapeHtml(formatRelative(s.updatedAt || s.createdAt));
+        const count = (s.messages || []).length;
+        return `
+          <div class="chat-session-row ${isActive ? "active" : ""}" data-session-id="${escapeAttr(s.id)}" role="option" aria-selected="${isActive ? "true" : "false"}">
+            <button type="button" class="chat-session-row-main" data-switch-session="${escapeAttr(s.id)}">
+              <div class="chat-session-row-title">${title}</div>
+              <div class="chat-session-row-meta">${count} msg${count === 1 ? "" : "s"} · ${rel}</div>
+            </button>
+            <button type="button" class="chat-session-row-del" data-delete-session="${escapeAttr(s.id)}" aria-label="Delete this chat" title="Delete this chat">×</button>
+          </div>
+        `;
+      }).join("");
+      pickerMenu.hidden = false;
+      pickerBtn.setAttribute("aria-expanded", "true");
+    });
+
+    // Outside-click closes the picker. One listener added per render —
+    // cleaned up on next render via innerHTML replacement (implicit).
+    const closePicker = (e) => {
+      if (!pickerMenu || pickerMenu.hidden) return;
+      if (e.target.closest("#chat-session-picker") || e.target.closest("#chat-session-menu")) return;
+      pickerMenu.hidden = true;
+      pickerBtn?.setAttribute("aria-expanded", "false");
+    };
+    document.addEventListener("click", closePicker, { once: false });
+    // We rely on document listeners getting cleaned up naturally when the
+    // hash changes (chat page unmounts); no explicit removal needed for now.
+
+    pickerMenu?.addEventListener("click", (e) => {
+      const switchBtn = e.target.closest("[data-switch-session]");
+      const delBtn = e.target.closest("[data-delete-session]");
+      if (delBtn) {
+        e.stopPropagation();
+        const id = delBtn.dataset.deleteSession;
+        const s = sessionsData.sessions.find(x => x.id === id);
+        const label = s?.title || "this chat";
+        if (!confirm(`Delete "${label}"? This can't be undone.`)) return;
+        // If we're aborting the current session, cancel its stream.
+        if (sessionsData.activeId === id && m_abortController) {
+          try { m_abortController.abort(); } catch {}
+          m_abortController = null;
+          m_pending = false;
+        }
+        deleteSessionById(sessionsData, id);
+        rebindActiveChatLog();
+        pickerMenu.hidden = true;
+        render();
+        return;
+      }
+      if (switchBtn) {
+        const id = switchBtn.dataset.switchSession;
+        if (id === sessionsData.activeId) {
+          pickerMenu.hidden = true;
+          pickerBtn.setAttribute("aria-expanded", "false");
+          return;
+        }
+        if (m_abortController) { try { m_abortController.abort(); } catch {} }
+        m_abortController = null;
+        m_pending = false;
+        setActiveSession(sessionsData, id);
+        rebindActiveChatLog();
+        pickerMenu.hidden = true;
+        render();
       }
     });
   }
@@ -210,6 +326,16 @@ async function sendAndReply(userText) {
   m_pending = true;
   m_abortController = new AbortController();
 
+  // Capture the OWNER session at send time. If the user switches sessions
+  // or hits + New while the stream is running, we still write tokens into
+  // the session that owns the user's message — avoiding cross-session
+  // corruption. Re-renders, on the other hand, only fire if the owner is
+  // still the active session.
+  const ownerSession = getActiveSession(sessionsData);
+  const ownerMessages = ownerSession.messages;
+  const ownerSessionId = ownerSession.id;
+  const isOwnerActive = () => sessionsData.activeId === ownerSessionId;
+
   // Manually toggle the form DOM so the input disables + Send becomes Stop
   // without a full re-render (a full re-render would re-attach listeners
   // and move focus, disrupting the user's typing rhythm).
@@ -217,9 +343,6 @@ async function sendAndReply(userText) {
   const input = outer?.querySelector("#chat-input");
   const sendBtn = outer?.querySelector("#chat-send");
   if (input) {
-    // readonly (not disabled) — keeps the caret blinking + focus on the
-    // input, just blocks typing. Feels natural: user still sees where
-    // they'll type the next message the moment Saathi finishes.
     input.setAttribute("readonly", "readonly");
     input.placeholder = "Saathi is responding…";
     input.focus();
@@ -232,13 +355,13 @@ async function sendAndReply(userText) {
   }
 
   const reRenderOuter = () => {
-    // Only re-renders the messages region; the form swap above handles the
-    // input + button state transitions without touching message content.
+    // Only re-render if the owner session is still the visible one.
+    if (!isOwnerActive()) return;
     const messagesEl = outer?.querySelector("#chat-messages");
     if (messagesEl) {
       messagesEl.innerHTML = "";
-      for (const m of chatLog) messagesEl.innerHTML += renderBubble(m);
-      if (m_pending && !chatLog.at(-1)?.streaming) messagesEl.innerHTML += renderTyping();
+      for (const m of ownerMessages) messagesEl.innerHTML += renderBubble(m);
+      if (m_pending && !ownerMessages.at(-1)?.streaming) messagesEl.innerHTML += renderTyping();
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
   };
@@ -278,11 +401,6 @@ async function sendAndReply(userText) {
         apiKey: state.settings.llmApiKey || null,
         system,
         messages,
-        // Tool-use path: "fast" maps to Gemini 3 Flash Preview which is
-        // considerably more reliable than the Lite chat model at function
-        // calling. Pays ~500ms extra latency but drops the "Saathi couldn't
-        // answer that" failures on queries like "what's TCS at?" from ~80%
-        // to near zero. Lite is kept for pure conversational chat only.
         profile: "fast",
       });
     } catch (e) {
@@ -291,20 +409,31 @@ async function sendAndReply(userText) {
     }
     m_pending = false;
     m_abortController = null;
-    if (replyText && replyText.trim()) {
-      pushAssistant(replyText);
-      logChatTurn({ userText, assistantText: replyText, model: "gemini-chat" });
-    } else {
-      pushAssistant(errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
+    // Write into the OWNER session's messages directly so a mid-stream
+    // session switch doesn't land the reply in the wrong chat.
+    const finalText = (replyText && replyText.trim()) ? replyText : (errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
+    ownerMessages.push({ role: "assistant", text: finalText, ts: Date.now() });
+    // Title/timestamp refresh on the owner session
+    ownerSession.updatedAt = Date.now();
+    if (!ownerSession.title || ownerSession.title === "New chat") {
+      // Re-derive title from first user message
+      const firstUser = ownerMessages.find(m => m.role === "user" && m.text);
+      if (firstUser) ownerSession.title = String(firstUser.text).slice(0, 42).replace(/\s+/g, " ").trim();
     }
+    saveSessions(sessionsData);
+    if (replyText && replyText.trim()) {
+      logChatTurn({ userText, assistantText: replyText, model: "gemini-chat" });
+    }
+    if (isOwnerActive()) reRenderOuter();
     restoreForm();
     return;
   }
 
-  // Streaming path: push an empty placeholder bubble, then append each
-  // token as it arrives. Gives an instant-feel first character.
-  const placeholderIdx = chatLog.length;
-  chatLog.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
+  // Streaming path: push an empty placeholder bubble INTO THE OWNER
+  // SESSION, then append each token as it arrives. Even if the user
+  // switches sessions mid-stream, tokens land in the right chat.
+  const placeholderIdx = ownerMessages.length;
+  ownerMessages.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
   reRenderOuter();
 
   const system = `${SYSTEM_PROMPT}\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
@@ -317,8 +446,8 @@ async function sendAndReply(userText) {
       profile: "chat",
       signal: m_abortController.signal,
       onToken: (delta) => {
-        if (!chatLog[placeholderIdx]) return;
-        chatLog[placeholderIdx].text += delta;
+        if (!ownerMessages[placeholderIdx]) return;
+        ownerMessages[placeholderIdx].text += delta;
         // Perf: coalesce token updates to ≤60fps. Gemini streams 100+
         // tokens/sec; without this the main thread spends more time in
         // innerHTML rebuild than in user code, which is what mid-range
@@ -337,7 +466,7 @@ async function sendAndReply(userText) {
   }
   m_pending = false;
   m_abortController = null;
-  const entry = chatLog[placeholderIdx];
+  const entry = ownerMessages[placeholderIdx];
   if (entry) {
     entry.streaming = false;
     if (result?.aborted) {
@@ -354,8 +483,14 @@ async function sendAndReply(userText) {
     } else if (!entry.text.trim()) {
       entry.text = "Hmm, I went quiet there. Ask me once more?";
     }
-    saveChat();
-    reRenderOuter();
+    // Save the OWNER session (refresh its timestamp + title)
+    ownerSession.updatedAt = Date.now();
+    if (!ownerSession.title || ownerSession.title === "New chat") {
+      const firstUser = ownerMessages.find(m => m.role === "user" && m.text);
+      if (firstUser) ownerSession.title = String(firstUser.text).slice(0, 42).replace(/\s+/g, " ").trim();
+    }
+    saveSessions(sessionsData);
+    if (isOwnerActive()) reRenderOuter();
     // Log the finished turn (not aborted, not error) so admin can review.
     if (!result?.aborted && !result?.error && entry.text && !entry.text.startsWith("Hmm")) {
       logChatTurn({ userText, assistantText: entry.text, model: "gemini-chat" });
