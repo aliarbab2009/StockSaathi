@@ -89,9 +89,11 @@ async function callLlmAgent(apiKey, history, state) {
     role: m.role === "user" ? "user" : "assistant",
     content: m.text,
   }));
-  // profile:"chat" uses Gemini 2.5 Flash Lite — Google's fastest Gemini
-  // model, sub-second on conversational chat. Tool-use still works.
-  return await runAgent({ apiKey, system, messages, profile: "chat" });
+  // Tool-use path: "fast" profile (Gemini 3 Flash Preview) is more reliable
+  // at function calling than Lite. Lite is kept for pure conversational chat
+  // only; when the query needs live data, pay the small latency hit for a
+  // model that actually calls the tool every time.
+  return await runAgent({ apiKey, system, messages, profile: "fast" });
 }
 
 // -----------------------------------------------------------------------------

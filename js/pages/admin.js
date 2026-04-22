@@ -631,7 +631,7 @@ function paintUserModal() {
 
   body.innerHTML = `
     <div class="admin-drill-nav">
-      ${["identity","money","history","holdings","transactions","orders","watchlist","friends","transfers","coach","report","auth","audit","raw"].map(s => `<a href="#sec-${s}" class="drill-jump">${s}</a>`).join("")}
+      ${["identity","money","history","holdings","transactions","orders","watchlist","friends","transfers","coach","report","auth","audit","raw"].map(s => `<button type="button" class="drill-jump" data-drill-target="sec-${s}">${s}</button>`).join("")}
     </div>
 
     <div id="sec-identity"><div class="admin-user-section-label">1. Identity</div>
@@ -767,6 +767,20 @@ function paintUserModal() {
 }
 function wireModalActions(profile) {
   const host = document.getElementById("modal-root");
+  // Drill-nav click handler: scroll to the target section INSIDE the modal
+  // without touching location.hash. Previously these were plain anchor tags
+  // whose default behaviour set location.hash = "#sec-money", which the
+  // router then interpreted as a new top-level route and kicked the user
+  // out of the admin page entirely.
+  host.querySelectorAll(".drill-jump").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const targetId = btn.getAttribute("data-drill-target");
+      if (!targetId) return;
+      const target = host.querySelector(`#${CSS.escape(targetId)}`);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
   host.querySelectorAll("[data-delete-trade]").forEach(b => b.addEventListener("click", async () => {
     const reason = prompt("Reason for reversing this trade (≥ 8 chars):");
     if (!reason || reason.trim().length < 8) return;

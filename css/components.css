@@ -1461,8 +1461,11 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
   color: var(--text-muted);
   text-decoration: none;
   font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
 }
 .drill-jump:hover { background: var(--brand); color: white; border-color: var(--brand); }
+.drill-jump:active { transform: translateY(1px); }
 
 .admin-coach-row {
   padding: 8px 12px;

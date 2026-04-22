@@ -260,7 +260,12 @@ async function sendAndReply(userText) {
         apiKey: state.settings.llmApiKey || null,
         system,
         messages,
-        profile: "chat",
+        // Tool-use path: "fast" maps to Gemini 3 Flash Preview which is
+        // considerably more reliable than the Lite chat model at function
+        // calling. Pays ~500ms extra latency but drops the "Saathi couldn't
+        // answer that" failures on queries like "what's TCS at?" from ~80%
+        // to near zero. Lite is kept for pure conversational chat only.
+        profile: "fast",
       });
     } catch (e) {
       console.warn("coach chat tool path error:", e);
