@@ -146,19 +146,19 @@ let m_abortController = null;
 
 function renderBubble(m) {
   if (m.role === "user") {
-    // Font restored to original size — only the box padding is trimmed
-    // so short messages like "yo" don't look like a billboard. fit-content
-    // makes the width hug the actual text.
+    // Bubbles tightened: padding 5px 10px, line-height 1.4. Font stays at
+    // text-md per your "reset the font back" request — only the box hugs
+    // the text more aggressively now.
     return `
-      <div style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 7px 12px; border-radius: 16px 16px 4px 16px; font-size: var(--text-md); line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
+      <div style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 5px 10px; border-radius: 14px 14px 3px 14px; font-size: var(--text-md); line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
         ${escapeHtml(m.text)}
       </div>
     `;
   }
   return `
-    <div style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 10px; align-items: flex-start;">
-      <div class="friend-avatar green" style="width: 28px; height: 28px; font-size: 11px; flex-shrink: 0;">SS</div>
-      <div style="background: var(--surface); border: 1px solid var(--border); padding: 7px 12px; border-radius: 16px 16px 16px 4px; font-size: var(--text-md); line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
+    <div style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 8px; align-items: flex-start;">
+      <div class="friend-avatar green" style="width: 24px; height: 24px; font-size: 10px; flex-shrink: 0;">SS</div>
+      <div style="background: var(--surface); border: 1px solid var(--border); padding: 5px 10px; border-radius: 14px 14px 14px 3px; font-size: var(--text-md); line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
         ${renderMarkdown(m.text)}
       </div>
     </div>

@@ -468,8 +468,18 @@ export async function runAgent({ apiKey, system, messages, onStep, profile = "fa
       continue;
     }
 
-    // Final text response — return even if empty so caller can template-fallback
-    const text = (msg.content || "").trim();
+    // Final text response — but sanitise first. Gemini 3 Flash Preview
+    // sometimes narrates its tool-use in the content stream as literal text
+    // like 'CALL search_stocks(query="...")' or '[Tool call: ...]' instead
+    // of emitting a proper tool_calls JSON block. These strings MUST not
+    // leak into the user-facing bubble — they're model-internal scaffolding.
+    // We strip them wholesale; if the model hallucinated a result after
+    // such a line we keep the prose around it (best-effort).
+    let text = String(msg.content || "");
+    text = text.replace(/^\s*CALL\s+\w+\s*\([^)]*\)\s*$/gmi, "");
+    text = text.replace(/^\s*\[Tool\s+call[^\]]*\]\s*$/gmi, "");
+    text = text.replace(/^\s*```(?:tool_calls?|function|json)?\s*[\s\S]*?(?:^\s*\{[\s\S]*?\})\s*^\s*```\s*$/gmi, "");
+    text = text.replace(/\n{3,}/g, "\n\n").trim();
     return text || null;
   }
 
@@ -523,6 +533,10 @@ export async function streamChat({ system, messages, profile = "chat", onToken, 
   const decoder = new TextDecoder();
   let buffer = "";
   let fullText = "";
+  // Tracks how many characters of the CLEANED fullText we've already sent
+  // to onToken. Each new raw chunk goes into fullText, we re-strip tool-
+  // call scaffolding on the whole thing, then emit only the new suffix.
+  let stripCursor = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -543,17 +557,50 @@ export async function streamChat({ system, messages, profile = "chat", onToken, 
           const delta = chunk?.choices?.[0]?.delta?.content;
           if (delta) {
             fullText += delta;
-            onToken?.(delta);
+            // Defer per-chunk emission: we buffer into fullText, then emit
+            // ONLY the new part after stripping any tool-call scaffolding
+            // (like 'CALL foo(bar)' that Gemini 3.x sometimes emits as
+            // literal content instead of structured tool_calls).
+            const cleanSoFar = stripToolCallScaffolding(fullText);
+            // Compute the incremental delta between what we've already shown
+            // the caller and the newly cleaned text. Track via an outer var.
+            if (cleanSoFar.length > stripCursor) {
+              const visible = cleanSoFar.slice(stripCursor);
+              stripCursor = cleanSoFar.length;
+              onToken?.(visible);
+            }
           }
         } catch {}
       }
     }
   } catch (e) {
-    if (e?.name === "AbortError") return { aborted: true, text: fullText };
+    if (e?.name === "AbortError") return { aborted: true, text: stripToolCallScaffolding(fullText) };
     console.warn("streamChat read error:", e);
-    return { error: e?.message || "read_error", text: fullText };
+    return { error: e?.message || "read_error", text: stripToolCallScaffolding(fullText) };
   }
-  return { text: fullText.trim() };
+  return { text: stripToolCallScaffolding(fullText).trim() };
+}
+
+// Strip the handful of tool-use scaffolding patterns that Gemini 3.x Flash
+// Preview occasionally emits as LITERAL text in the content stream instead
+// of as structured tool_calls. Users shouldn't see any of this.
+function stripToolCallScaffolding(text) {
+  if (!text) return "";
+  let s = String(text);
+  // Bare "CALL function_name(args...)" lines
+  s = s.replace(/^\s*CALL\s+\w+\s*\([^)]*\)\s*$/gmi, "");
+  // "[Tool call: xxx]" or "[Function call: xxx]" bracketed annotations
+  s = s.replace(/^\s*\[(?:tool|function)\s+call[^\]]*\]\s*$/gmi, "");
+  // Fenced tool_calls JSON blocks
+  s = s.replace(/```(?:tool_calls?|function|json)?\s*[\s\S]*?```/gi, (match) => {
+    // Keep plain ```json code fences if the output is genuinely JSON the
+    // user asked for. Only strip fenced blocks that look like a tool call.
+    if (/\b(name|function|tool_calls?)\b/i.test(match)) return "";
+    return match;
+  });
+  // Collapse any now-triple-blank-lines from the removals
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s;
 }
 
 // -----------------------------------------------------------------------------
