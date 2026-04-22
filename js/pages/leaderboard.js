@@ -24,15 +24,35 @@ export function renderLeaderboard(main) {
   const unsub = subscribe(() => { if (!cancelled && dbLoaded) render(); });
   window.addEventListener("hashchange", () => { cancelled = true; unsub?.(); }, { once: true });
 
-  // Poll real leaderboard every 20s
+  // Watchdog: if sb() or dbLeaderboard() hangs for any reason (RLS issue,
+  // Supabase slow, network flaky), force dbLoaded=true after 4 seconds
+  // so the user is never stuck on an infinite skeleton. renderInner()
+  // will then fall through to SEED data.
+  const watchdog = setTimeout(() => {
+    if (!dbLoaded && !cancelled) {
+      console.warn("[leaderboard] 4s watchdog: forcing dbLoaded=true");
+      dbLoaded = true;
+      render();
+    }
+  }, 4000);
+
+  // Poll real leaderboard every 20s. Each await is wrapped in a timeout
+  // race so a slow/hung upstream can never starve the UI.
   (async function liveLoop() {
     while (!cancelled) {
       try {
-        const client = await sb();
+        const client = await Promise.race([
+          sb(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("sb_timeout")), 4000)),
+        ]);
         if (client) {
-          dbRows = await dbLeaderboard({ scope, limit: 50 });
+          dbRows = await Promise.race([
+            dbLeaderboard({ scope, limit: 50 }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("dbLeaderboard_timeout")), 6000)),
+          ]);
         }
-      } catch (e) { console.warn("leaderboard:", e); }
+      } catch (e) { console.warn("leaderboard poll:", e?.message || e); }
+      clearTimeout(watchdog);
       dbLoaded = true;
       if (!cancelled) render();
       await new Promise(r => setTimeout(r, 20_000));

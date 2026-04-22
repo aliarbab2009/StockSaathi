@@ -11,7 +11,7 @@ import { runAgent, streamChat, needsLiveData, logChatTurn } from "../coach/agent
 import {
   loadSessions, saveSessions, getActiveSession, setActiveSession,
   createNewSession, deleteSessionById, touchActive, clearActiveMessages,
-  formatRelative,
+  formatRelative, SESSIONS_KEY,
 } from "../features/chatSessions.js";
 
 // sessionsData is the persistent envelope { activeId, sessions: [...] }.
@@ -20,6 +20,29 @@ import {
 // the array is mutated in place and chatSessions.saveSessions persists it.
 let sessionsData = loadSessions();
 let chatLog = getActiveSession(sessionsData).messages;
+
+// Cross-tab sync: when another tab writes a new sessions envelope to
+// localStorage, the browser fires a `storage` event on every OTHER tab
+// for the same origin. We use that to pull in the remote change so the
+// chat doesn't diverge between tabs. We intentionally SKIP applying
+// remote updates while this tab has a live stream (m_pending=true) — the
+// local stream owns the session and would be clobbered otherwise.
+window.addEventListener("storage", (e) => {
+  if (e.key !== SESSIONS_KEY || !e.newValue) return;
+  if (typeof m_pending !== "undefined" && m_pending) return;
+  try {
+    const fresh = JSON.parse(e.newValue);
+    if (!fresh || !Array.isArray(fresh.sessions) || !fresh.sessions.length) return;
+    sessionsData = fresh;
+    chatLog = getActiveSession(sessionsData).messages;
+    // Only re-render if the chat page is currently mounted. renderChat
+    // sets up DOM with #chat-messages, so presence of that element is a
+    // reliable mount signal.
+    if (document.getElementById("chat-messages")) {
+      document.dispatchEvent(new CustomEvent("ss:chat-sessions-sync"));
+    }
+  } catch {}
+});
 
 function saveChat() {
   // Session's messages array is `chatLog` itself (same reference), so any
@@ -44,6 +67,15 @@ function replyFor(text) {
 
 export function renderChat(main) {
   render();
+
+  // Cross-tab sync: when the storage event handler (see module scope) pulls
+  // in fresh sessionsData from another tab, it fires this custom event so
+  // the currently-mounted chat page re-renders with the updated state.
+  const syncHandler = () => { if (document.getElementById("chat-messages")) render(); };
+  document.addEventListener("ss:chat-sessions-sync", syncHandler);
+  window.addEventListener("hashchange", () => {
+    document.removeEventListener("ss:chat-sessions-sync", syncHandler);
+  }, { once: true });
 
   function render() {
     const state = getState();

@@ -14,7 +14,7 @@
 // so it stays meaningful even if the user deletes the original prompt.
 // =============================================================================
 
-const SESSIONS_KEY = "ss.chat.sessions.v1";
+export const SESSIONS_KEY = "ss.chat.sessions.v1";
 const LEGACY_LOG_KEY = "ss.chatlog.v1";
 
 function genId() {
