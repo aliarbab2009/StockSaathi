@@ -291,9 +291,15 @@ function render(inst, symbol) {
             ${ui.orderType === "LIMIT" ? `Place ${ui.side === "BUY" ? "Buy" : "Sell"} limit` : `Review ${ui.side === "BUY" ? "Buy" : "Sell"} order`}
           </button>
 
-          <div class="dim text-xs center" style="margin-top: var(--sp-3);">
-            Virtual money · Reviewed on a confirmation step · Coach reflection follows every trade
-          </div>
+          ${ui.side === "SELL" && !holding ? `
+            <div class="dim text-xs center" style="margin-top: var(--sp-3); color: var(--warning, var(--text-muted));">
+              You don't hold any ${inst.symbol} to sell. Switch to Buy, or pick a stock from your portfolio.
+            </div>
+          ` : `
+            <div class="dim text-xs center" style="margin-top: var(--sp-3);">
+              Virtual money · Reviewed on a confirmation step · Coach reflection follows every trade
+            </div>
+          `}
         </div>
       </aside>
     </div>
@@ -449,8 +455,16 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
     else addToWatchlist(symbol);
   });
 
-  main.querySelector("#place-trade-btn")?.addEventListener("click", () => {
-    reviewTrade(inst, symbol, curPrice, holding);
+  main.querySelector("#place-trade-btn")?.addEventListener("click", async () => {
+    // Wrap in try/catch so any silent throw inside reviewTrade surfaces
+    // as a visible toast instead of the button appearing "dead".
+    try {
+      console.log("[trade] click on place-trade-btn", { side: ui.side, qty: ui.qty, symbol });
+      await reviewTrade(inst, symbol, curPrice, holding);
+    } catch (e) {
+      console.error("[trade] reviewTrade threw:", e);
+      toast({ kind: "error", message: e?.message || "Trade review failed. Check console." });
+    }
   });
 }
 
