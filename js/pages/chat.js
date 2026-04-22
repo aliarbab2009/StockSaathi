@@ -7,7 +7,7 @@
 import { getState } from "../state.js";
 import { getInstrument } from "../data/universe.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
-import { runAgent } from "../coach/agent.js";
+import { runAgent, streamChat, needsLiveData } from "../coach/agent.js";
 
 const CHAT_KEY = "ss.chatlog.v1";
 
@@ -177,51 +177,82 @@ function pushAssistant(text) {
 
 async function sendAndReply(userText) {
   m_pending = true;
-  // Re-render to show typing indicator.
-  const main = document.getElementById("main");
-  const mEl = main?.querySelector("#chat-messages");
-  if (mEl) {
-    mEl.innerHTML += renderTyping();
-    mEl.scrollTop = mEl.scrollHeight;
+  const state = getState();
+  const messages = chatLog.slice(-12).map(m => ({
+    role: m.role === "user" ? "user" : "assistant",
+    content: m.text,
+  }));
+
+  // Heuristic: does the message obviously need live data (stock price,
+  // portfolio, crypto, news)? If yes, take the slower tool-use path with
+  // runAgent. If no, stream tokens directly for instant feel — first
+  // character typically visible in ~300ms.
+  const wantTools = needsLiveData(userText);
+
+  if (wantTools) {
+    // Tool-use path: non-streaming, standard runAgent with TOOLS.
+    const main = document.getElementById("main");
+    const mEl = main?.querySelector("#chat-messages");
+    if (mEl) {
+      mEl.innerHTML += renderTyping();
+      mEl.scrollTop = mEl.scrollHeight;
+    }
+    let replyText = null;
+    let errorText = null;
+    try {
+      const system = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
+      replyText = await runAgent({
+        apiKey: state.settings.llmApiKey || null,
+        system,
+        messages,
+        profile: "chat",
+      });
+    } catch (e) {
+      console.warn("coach chat tool path error:", e);
+      errorText = "Couldn't reach Saathi right now. Try again in a moment.";
+    }
+    m_pending = false;
+    if (replyText && replyText.trim()) {
+      pushAssistant(replyText);
+    } else {
+      pushAssistant(errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
+    }
+    return;
   }
 
-  const state = getState();
+  // Streaming path: push an empty placeholder bubble, then append each
+  // token as it arrives. Gives an instant-feel first character.
+  const placeholderIdx = chatLog.length;
+  chatLog.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
+  rerender();
 
-  // New chat path: always call Gemini. No template fallback, no off-topic
-  // pre-filter — if the user asks something off-topic Gemini politely
-  // declines per the system prompt. Templates used to intercept "hello",
-  // "are you gemini" etc. before the LLM ever saw them, which made the
-  // bot feel dumb. Let the LLM handle ALL replies.
-  let replyText = null;
-  let errorText = null;
+  const system = `${SYSTEM_PROMPT}\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
+  let fullText = null;
   try {
-    const messages = chatLog.slice(-12).map(m => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: m.text,
-    }));
-    const system = `${SYSTEM_PROMPT}\n\n# TOOL USE\nYou have tools for live data: get_stock_price, get_crypto_price, search_stocks, get_market_news, get_user_portfolio. USE them whenever the user asks about any specific stock, crypto, market state, or their portfolio. Never guess numbers — always call the tool.\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
-    replyText = await runAgent({
-      apiKey: state.settings.llmApiKey || null,
+    fullText = await streamChat({
       system,
       messages,
-      // "chat" profile = Gemini 2.5 Flash Lite — the fastest Gemini model,
-      // ~400 tok/s, no internal thinking overhead. Gets replies under 1s.
-      // Crash-replay and other structured-output tasks still use the
-      // heavier fast/reasoning profiles via /api/ai.
       profile: "chat",
+      onToken: (delta) => {
+        if (chatLog[placeholderIdx]) {
+          chatLog[placeholderIdx].text += delta;
+          rerender();
+        }
+      },
     });
   } catch (e) {
-    console.warn("coach chat error:", e);
-    errorText = "Couldn't reach Saathi right now. Try again in a moment.";
+    console.warn("coach stream error:", e);
   }
-
   m_pending = false;
-  if (replyText && replyText.trim()) {
-    pushAssistant(replyText);
-  } else {
-    // No reply + no exception = upstream returned empty. Surface an honest
-    // error instead of falling back to a canned template.
-    pushAssistant(errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
+  if (chatLog[placeholderIdx]) {
+    chatLog[placeholderIdx].streaming = false;
+    if (!chatLog[placeholderIdx].text.trim()) {
+      chatLog[placeholderIdx].text = fullText && fullText.trim()
+        ? fullText
+        : "Couldn't reach Saathi right now. Try again in a moment.";
+    }
+    saveChat();
+    rerender();
   }
 }
 

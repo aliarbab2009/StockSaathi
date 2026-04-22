@@ -222,8 +222,11 @@ async function callUpstream(desc, payload) {
     headers,
     body: JSON.stringify({ ...payload, model: modelForApi }),
   });
-  const text = await res.text();
-  return { status: res.status, text, upstream: desc.label };
+  // Return the Response object unread so the handler can either pipe the
+  // body through (streaming) or read it as text (non-streaming). For
+  // fallover decisions we only need the status + a peek at error bodies
+  // which we read lazily below.
+  return { status: res.status, res, upstream: desc.label };
 }
 
 export default async function handler(req) {
@@ -289,22 +292,39 @@ export default async function handler(req) {
     return jsonResponse(501, { error: "no_provider_configured" }, origin);
   }
 
+  // Streaming toggle. When true we pipe the upstream ReadableStream straight
+  // through as SSE, so the client sees the first token in ~300ms instead of
+  // waiting for the full reply. Tool-use path is incompatible with streaming
+  // (tool_calls arrive in chunks that are painful to reassemble client-side),
+  // so we silently disable streaming if the caller included tools.
+  const wantsStream = payload.stream === true && !Array.isArray(payload.tools);
+
   let last = null;
+  let lastText = null;
   for (const desc of order) {
     try {
       const r = await callUpstream(desc, payload);
-      // Pass any 2xx through immediately.
+      // Pass any 2xx through immediately. Streaming responses get their body
+      // piped; non-streaming ones get their body read + forwarded as JSON.
       if (r.status >= 200 && r.status < 300) {
-        return new Response(r.text, {
-          status: r.status,
-          headers: new Headers({
-            ...Object.fromEntries(corsHeaders(origin)),
-            "Content-Type": "application/json",
-            "X-Chat-Upstream": desc.label,
-          }),
+        const outHeaders = new Headers({
+          ...Object.fromEntries(corsHeaders(origin)),
+          "X-Chat-Upstream": desc.label,
         });
+        if (wantsStream) {
+          outHeaders.set("Content-Type", "text/event-stream");
+          outHeaders.set("Cache-Control", "no-store");
+          outHeaders.set("X-Accel-Buffering", "no");  // disable proxy buffering
+          return new Response(r.res.body, { status: r.status, headers: outHeaders });
+        }
+        outHeaders.set("Content-Type", "application/json");
+        const text = await r.res.text();
+        return new Response(text, { status: r.status, headers: outHeaders });
       }
-      last = r;
+      // Non-2xx: read the error body (text) so we can return it or log it.
+      const errText = await r.res.text().catch(() => "");
+      last = { status: r.status, text: errText, upstream: desc.label };
+      lastText = errText;
       // Fall over on any infrastructure/config failure at the upstream:
       //   - 5xx server-down
       //   - 429 rate limited
@@ -324,19 +344,20 @@ export default async function handler(req) {
                       || r.status === 408
                       || r.status === 409;
       if (isFallover) continue;
-      return new Response(r.text, {
+      return new Response(errText, {
         status: r.status,
         headers: corsHeaders(origin),
       });
     } catch (e) {
       last = { status: 502, text: JSON.stringify({ error: "upstream_unreachable", detail: redact(e?.message).slice(0, 140) }), upstream: desc.label };
+      lastText = last.text;
     }
   }
 
   // Exhausted the chain — every upstream was throttled or unreachable.
   const headers = corsHeaders(origin);
   headers.set("X-Chat-Upstream", last?.upstream || "none");
-  return new Response(last?.text || JSON.stringify({ error: "all_upstreams_unavailable" }), {
+  return new Response(lastText || JSON.stringify({ error: "all_upstreams_unavailable" }), {
     status: last?.status || 503,
     headers,
   });

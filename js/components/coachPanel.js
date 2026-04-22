@@ -9,7 +9,7 @@ import { getInstrument } from "../data/universe.js";
 import { getNews } from "../data/news.js";
 import { formatRupees, formatPct } from "../money.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
-import { runAgent } from "../coach/agent.js";
+import { runAgent, streamChat, needsLiveData } from "../coach/agent.js";
 
 const CHAT_LOG_KEY = "ss.coachchat.v1";
 
@@ -192,12 +192,53 @@ function render() {
     render();
 
     const s = getState();
+
+    // Streaming path for conversational messages — push placeholder bubble
+    // and append tokens as they arrive. For messages that need live data
+    // (stock prices, portfolio, news) we fall through to the non-streaming
+    // tool-use path below.
+    if (!needsLiveData(text)) {
+      const placeholderIdx = chatHistory.length;
+      chatHistory.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
+      render();
+      const portfolioSummary = summarisePortfolio(s);
+      const newsContext = newsSnap.slice(0, 5).map(n => `- ${n.headline} (${n.source}) [${n.sentiment}]`).join("\n");
+      const system = `${SAATHI_SYSTEM}\n\n# RUNTIME CONTEXT\n## User portfolio\n${portfolioSummary}\n\n## Latest market headlines\n${newsContext || "(none loaded)"}\n\n# TONE\nKeep replies short by default (1–3 sentences). Go longer only when asked for depth.`;
+      const messages = chatHistory.slice(-12).filter(m => !m.streaming || m === chatHistory[placeholderIdx]).slice(0, -1).map(m => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.text,
+      }));
+      let full = null;
+      try {
+        full = await streamChat({
+          system,
+          messages,
+          profile: "chat",
+          onToken: (delta) => {
+            if (chatHistory[placeholderIdx]) {
+              chatHistory[placeholderIdx].text += delta;
+              render();
+            }
+          },
+        });
+      } catch (e) { console.warn("coach stream error:", e); }
+      if (chatHistory[placeholderIdx]) {
+        chatHistory[placeholderIdx].streaming = false;
+        if (!chatHistory[placeholderIdx].text.trim()) {
+          chatHistory[placeholderIdx].text = full && full.trim() ? full : "Couldn't reach Saathi right now. Try again in a moment.";
+        }
+      }
+      saveChat();
+      pending = false;
+      render();
+      return;
+    }
+
+    // Tool-use path (live data queries): non-streaming.
     let reply = null;
     try {
       reply = await callLlmAgent(s.settings.llmApiKey || null, chatHistory, s);
     } catch (e) { console.warn("coach panel error:", e); }
-    // No template fallback — surface an honest error if the LLM didn't answer.
-    // Templates were hijacking simple greetings and making the coach feel dumb.
     if (!reply || !reply.trim()) {
       reply = "Couldn't reach Saathi right now. Try again in a moment.";
     }

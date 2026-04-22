@@ -478,3 +478,96 @@ export async function runAgent({ apiKey, system, messages, onStep, profile = "fa
 }
 
 export { TOOLS };
+
+// -----------------------------------------------------------------------------
+// Streaming chat — no tools, pipes tokens through as they arrive.
+// Pairs with the /api/chat SSE passthrough. Caller provides onToken(delta)
+// and gets each new chunk of assistant text as Gemini produces it. First
+// token typically arrives in ~300ms, making the coach feel instantaneous
+// even if total generation takes 1–2s.
+//
+// Returns the full assembled text at completion, or null on failure.
+// Falls back cleanly — the caller should treat null as "use non-stream path".
+// -----------------------------------------------------------------------------
+export async function streamChat({ system, messages, profile = "chat", onToken }) {
+  const body = {
+    model: MODEL,
+    max_tokens: MAX_TOKENS,
+    temperature: 0.5,
+    messages: [
+      { role: "system", content: system },
+      ...messages,
+    ],
+    stream: true,
+    profile,
+  };
+  let res;
+  try {
+    res = await fetch(BACKEND_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.warn("streamChat fetch:", e);
+    return null;
+  }
+  if (!res.ok || !res.body) {
+    console.warn("streamChat http:", res.status);
+    return null;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullText = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by blank lines; each frame has "data: {...}"
+      // lines. Gemini-OpenAI-compat sends one "data:" per chunk. Split on
+      // newlines and accumulate any partial line at the end of the buffer.
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || !line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk?.choices?.[0]?.delta?.content;
+          if (delta) {
+            fullText += delta;
+            onToken?.(delta);
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn("streamChat read error:", e);
+    return fullText || null;
+  }
+  return fullText.trim() || null;
+}
+
+// -----------------------------------------------------------------------------
+// Heuristic: does this user message likely need live data (tool-use)?
+// Used by the chat page to decide between the fast-streaming path and the
+// slower runAgent tool-loop. Intentionally conservative — false positives
+// just mean we skip streaming for one message, which is cheap; false
+// negatives mean the user's "what's TCS at?" gets answered without live
+// data, which is worse.
+// -----------------------------------------------------------------------------
+export function needsLiveData(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t.trim()) return false;
+  // Direct data keywords
+  if (/\b(price|quote|portfolio|holdings|my stocks|my crypto|news|market cap|p\/?e|p\/e ratio)\b/.test(t)) return true;
+  // Common Indian tickers + crypto
+  if (/\b(tcs|reliance|infy|infosys|hdfc|hdfcbank|icici|icicibank|sbi|sbin|wipro|itc|lt|axisbank|kotak|maruti|adani|tata|bharti|airtel|ongc|ntpc|coal india|asian paints|nestle|hindalco|jsw|bitcoin|btc|ethereum|eth|solana|sol|dogecoin|doge|shib|nifty|sensex|bank nifty|nift)\b/.test(t)) return true;
+  // Uppercase ticker-shaped tokens in the ORIGINAL casing (not lowercased).
+  if (/\b[A-Z]{3,8}\b/.test(String(text || ""))) return true;
+  return false;
+}
