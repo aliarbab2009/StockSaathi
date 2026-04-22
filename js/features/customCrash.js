@@ -19,20 +19,49 @@
 // from Yahoo for that range in phase 2, which get fed back into phase 3
 // so the final replay is grounded in real data — no hallucinated Nifty
 // levels ever again.
-const PHASE1_PROMPT = `You are Saathi's historical-event-date picker for Indian markets. Given a free-form description of any Indian market event, return ONLY JSON:
+const PHASE1_PROMPT = `You are Saathi's historical-event-date picker for Indian markets. Given a free-form description of any Indian market event — even COLLOQUIAL, MIS-SPELT, or HINDI-INFLECTED references — identify the real event and return ONLY JSON:
 {
   "startIso": "<YYYY-MM-DD — first trading day of the event>",
-  "endIso":   "<YYYY-MM-DD — last day of the recovery/stabilisation window you want to plot, max 140 trading days after startIso>",
+  "endIso":   "<YYYY-MM-DD — last day of the recovery/stabilisation window to plot, max 140 trading days after startIso>",
   "symbol":   "^NSEI" | "^BSESN" | "<any NSE ticker>.NS",
-  "hint":     "<one-sentence identification of which actual event this probably refers to>"
+  "hint":     "<one-sentence identification of which actual event this refers to, INCLUDING the colloquial-to-formal mapping if relevant>",
+  "offTopic": <true only if the query is adult content, vulgar, or has absolutely zero connection to Indian markets/business/policy>
 }
 
+Colloquial → formal examples (use these, and handle similar):
+- "the waterball / golgappa / pani puri thingy" / "that fuchka vendor story" → Tamil Nadu pani puri vendor GST notice, June 2023 (set symbol "^NSEI", startIso 2023-06-01, endIso 2023-07-31)
+- "that telecom guy" / "Jio launch" → Reliance Jio launch, Sep 2016
+- "demon" / "demonetization" / "note band" → Demonetisation, 8 Nov 2016
+- "the soap guy scam" / "Nirav Modi" → Nirav Modi / PNB fraud, 14 Feb 2018
+- "lockdown crash" / "covid" / "corona" → COVID March 2020
+- "the short seller thing" / "hindenburg" → Adani Hindenburg report, 24 Jan 2023
+- "IL&FS" / "the NBFC thing" → IL&FS collapse, Sep 2018
+- "Satyam" / "computer scam" → Satyam fraud, 7 Jan 2009
+- "yes bank" / "yes guy" / "yes" → YES Bank moratorium, 5 Mar 2020
+- "Paytm IPO flop" → Paytm listing, 18 Nov 2021 (symbol PAYTM.NS)
+- "Adani board thing" / "Adani Enterprises FPO" → Adani FPO cancellation, 1 Feb 2023 (symbol ADANIENT.NS)
+
 Rules:
-- startIso must be before endIso.
-- If the event affected a specific stock more than the index (e.g. "Paytm IPO crash", "Adani group"), set symbol to that ticker (e.g. "PAYTM.NS", "ADANIENT.NS"). Otherwise default to ^NSEI.
-- For NON-crashes (rallies/booms/IPOs up), still pick a range — we'll later judge if it's a valid down-event. DON'T refuse here.
-- If the description is totally unrelated to Indian markets, pick any recent 60-day Nifty range and we'll refuse downstream.
+- startIso MUST be before endIso. Window 10-140 trading days.
+- If the event affected a specific stock more than the index, set symbol to that ticker (e.g. "PAYTM.NS", "ADANIENT.NS", "YESBANK.NS", "RELIANCE.NS"). Otherwise default to ^NSEI.
+- For rallies/booms/IPO-pops, still pick a range — we'll judge downstream whether the real move was down.
+- offTopic:true ONLY for adult content (porn/sex/nudity), vulgarity with no market angle, personal life, sports scores, recipes, weather. When offTopic:true, use a throwaway recent date range (we'll refuse downstream).
 - Return ONLY the JSON. No prose, no code fences.`;
+
+// Fast client-side filter for clearly inappropriate queries. We check
+// BEFORE any Gemini call so a user typing "pornhub" doesn't burn credits
+// OR land a replay with suggestive content. Keeping the list short and
+// high-signal — adult content, common slurs, explicit acts. The LLM's
+// offTopic:true flag in Phase A catches the long tail.
+const HARD_BLOCK_PATTERNS = [
+  /\b(porn|pornhub|xxx|nsfw|nude|naked|erotic|onlyfans|escort|hentai|cam\s*girl)\b/i,
+  /\b(sex(ual|y)?|fuck(ing|ed|er)?|cock|dick|pussy|boob|tits|ass\s*hole|bitch|whore|slut)\b/i,
+  /\b(rape|molest|paedo|pedo|child\s*porn)\b/i,
+];
+function isHardBlocked(text) {
+  const t = String(text || "").toLowerCase();
+  return HARD_BLOCK_PATTERNS.some(rx => rx.test(t));
+}
 
 const SYSTEM_PROMPT = `You are a financial-history reconstructor for Indian markets. You are given REAL daily closing-price data from Yahoo Finance for the event's date range. Use the real numbers — do NOT hallucinate alternatives.
 
@@ -196,6 +225,16 @@ function cacheReplayPut(hash, description, payload) {
 }
 
 export async function generateCustomCrash(description) {
+  // 0. Hard content filter — reject adult / vulgar / slur queries BEFORE
+  //    any LLM call. These would either burn Gemini credits on junk or
+  //    surface an inappropriate-looking replay. Rejection is friendly —
+  //    we don't shame the user, just redirect them.
+  if (isHardBlocked(description)) {
+    const err = new Error("That isn't something I can turn into a market replay. Try a real event like 'Harshad Mehta 1992' or 'Adani Hindenburg 2023'.");
+    err.kind = "not_a_crash";
+    throw err;
+  }
+
   // Stable hash of the prompt — serves as both the cross-user cache key and
   // the suffix of the scenario id, so the same prompt always yields the same
   // URL regardless of browser/device/user.
@@ -239,17 +278,31 @@ export async function generateCustomCrash(description) {
   } catch (e) {
     throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
   }
+  // LLM's off-topic flag — catches adult/vulgar/zero-market queries that the
+  // regex blocklist missed. Reject cleanly.
+  if (bracket?.offTopic === true) {
+    const err = new Error(`That doesn't fit a market replay. Try something like "${pickRandomExample()}".`);
+    err.kind = "not_a_crash";
+    throw err;
+  }
   if (!bracket?.startIso || !bracket?.endIso) {
     throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing.");
   }
 
-  // Phase B: fetch real historical data
-  let history;
-  try {
-    history = await fetchHistory(bracket.symbol || "^NSEI", bracket.startIso, bracket.endIso);
-  } catch (e) {
-    throw new Error("Couldn't fetch historical prices for that date range. The market data might be unavailable for this period.");
-  }
+  // Phase B: fetch real historical data in PARALLEL for the main symbol +
+  // companion indices, so Phase C sees broader sector context (Bank Nifty
+  // for bank events, Nifty IT for tech events, etc.). The primary symbol
+  // is the source of truth for the chart; companions are context-only
+  // and don't block rendering if they fail.
+  const primary = bracket.symbol || "^NSEI";
+  const companions = pickCompanionSymbols(primary, description);
+  const fetches = [
+    fetchHistory(primary, bracket.startIso, bracket.endIso).catch(() => null),
+    ...companions.map(sym => fetchHistory(sym, bracket.startIso, bracket.endIso).catch(() => null)),
+  ];
+  const results = await Promise.all(fetches);
+  const history = results[0];
+  const companionHistory = results.slice(1).filter(h => h && h.points && h.points.length >= 5);
   if (!history?.points?.length || history.points.length < 5) {
     throw new Error("Not enough historical data for that range. Try a different event or check your date phrasing.");
   }
@@ -272,7 +325,7 @@ export async function generateCustomCrash(description) {
   // Phase C: generate narrative with real data in context
   for (const { profile, temperature } of ATTEMPTS) {
     try {
-      const meta = await callLlmWithHistory(description, bracket, history, temperature, profile);
+      const meta = await callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile);
       if (meta && meta.error === "not_a_crash") {
         const msg = typeof meta.message === "string" && meta.message.trim()
           ? meta.message.trim()
@@ -317,6 +370,22 @@ function formatIsoToLabel(iso) {
     const d = new Date(iso);
     return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   } catch { return iso; }
+}
+
+const EXAMPLE_EVENTS = [
+  "Harshad Mehta 1992",
+  "Satyam scandal 2009",
+  "Global Financial Crisis 2008",
+  "COVID March 2020",
+  "Demonetisation 2016",
+  "YES Bank moratorium 2020",
+  "Adani Hindenburg 2023",
+  "Paytm IPO 2021",
+  "Nirav Modi PNB fraud",
+  "IL&FS collapse 2018",
+];
+function pickRandomExample() {
+  return EXAMPLE_EVENTS[Math.floor(Math.random() * EXAMPLE_EVENTS.length)];
 }
 
 // Phase A: ask Gemini for the event's date range + target symbol.
@@ -398,7 +467,31 @@ function parseJsonLoose(text) {
   return null;
 }
 
-async function callLlmWithHistory(description, bracket, history, temperature, profile) {
+// Pick companion symbols for richer sector context in Phase C. Doesn't
+// change the chart — just feeds the LLM extra datapoints to draw on.
+// Keep it to 2-3 max to keep prompt tokens reasonable.
+function pickCompanionSymbols(primary, description) {
+  const d = String(description || "").toLowerCase();
+  const already = primary.toUpperCase();
+  const want = new Set();
+  // Always add Bank Nifty for the broadest "banks vs rest" signal.
+  if (already !== "^NSEBANK") want.add("^NSEBANK");
+  // IT events → Nifty IT
+  if (/\b(it|infosys|tcs|wipro|hcl|tech|software)\b/.test(d)) want.add("^CNXIT");
+  // FMCG / consumer events → Nifty FMCG
+  if (/\b(fmcg|consumer|hindustan|itc|nestle|dabur|britannia|pani\s*puri|golgappa|fuchka)\b/.test(d)) want.add("^CNXFMCG");
+  // Auto events → Nifty Auto
+  if (/\b(auto|maruti|tata\s*motors|bajaj|hero|eicher|mahindra)\b/.test(d)) want.add("^CNXAUTO");
+  // Pharma events → Nifty Pharma
+  if (/\b(pharma|sun\s*pharma|cipla|dr\s*reddy|lupin)\b/.test(d)) want.add("^CNXPHARMA");
+  // If primary is a specific stock, also pull the sector index above.
+  // If primary is ^NSEI already, add ^BSESN for cross-check.
+  if (primary === "^NSEI" && !want.has("^BSESN")) want.add("^BSESN");
+  // Cap at 3 companions to keep Promise.all fast + prompt lean.
+  return Array.from(want).slice(0, 3);
+}
+
+async function callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile) {
   // Compose a compact, LLM-readable table of the real daily closes.
   const closes = history.points.map(p => p.c);
   const dates = history.points.map(p => p.d);
@@ -427,7 +520,20 @@ async function callLlmWithHistory(description, bracket, history, temperature, pr
     `SAMPLED CLOSES (day=date@price): ${sample.join(", ")}`,
     `LLM-IDENTIFIED EVENT: ${bracket.hint || "unknown"}`,
   ].join("\n");
-  const userMsg = `Event description from user: "${String(description).trim().slice(0, 400)}"\n\nREAL MARKET DATA (use these exact numbers, not your memory):\n${factsBlock}`;
+  // Tack on companion-symbol context so the LLM can write narration that
+  // references sector relativity (e.g. "banks fell 12% while IT held").
+  let companionBlock = "";
+  if (companionHistory && companionHistory.length) {
+    companionBlock = "\n\nCOMPANION SYMBOLS (for sector context only, NOT the chart):\n" + companionHistory.map(h => {
+      const cc = h.points.map(p => p.c);
+      const s = cc[0];
+      const t = Math.min(...cc);
+      const e = cc[cc.length - 1];
+      const dp = ((t - s) / s) * 100;
+      return `  ${h.symbol}: ${s.toFixed(0)} → trough ${t.toFixed(0)} → ${e.toFixed(0)} (drop ${dp.toFixed(2)}%)`;
+    }).join("\n");
+  }
+  const userMsg = `Event description from user: "${String(description).trim().slice(0, 400)}"\n\nREAL MARKET DATA (use these exact numbers, not your memory):\n${factsBlock}${companionBlock}`;
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

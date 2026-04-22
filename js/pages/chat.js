@@ -37,18 +37,12 @@ export function renderChat(main) {
 
   function render() {
     const state = getState();
-    const userOwnKey = !!state.settings.llmApiKey;
-    // The server always has Gemini configured now. Template mode no longer
-    // exists as a runtime state — the old badge was lying. Show the actual
-    // source of the LLM instead so the user has a clear mental model.
-    const badgeText = userOwnKey ? "Your key · finance only" : "Gemini · finance only";
 
     main.innerHTML = `
       <div style="max-width: 760px; margin: 0 auto;">
         <div style="margin-bottom: var(--sp-4);">
           <div class="flex items-center gap-3">
             <h1>Saathi</h1>
-            <span class="data-badge"><span class="dot"></span> ${badgeText}</span>
           </div>
           <p class="muted">I'm Saathi — your finance coach. Ask anything about money, investing, Indian markets, taxes, behavioral econ, or how a past crash played out. Out of scope: everything else.</p>
         </div>
@@ -153,18 +147,18 @@ let m_abortController = null;
 function renderBubble(m) {
   if (m.role === "user") {
     // width:fit-content so the bubble hugs the actual text instead of
-    // stretching to max-width (the flex parent has default align-items:
-    // stretch which makes children fill the cross axis otherwise).
+    // stretching to max-width. Tighter padding + line-height keeps short
+    // messages like "yo" / "hello" from looking like giant squares.
     return `
-      <div style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: var(--text-md); line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
+      <div style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 6px 11px; border-radius: 14px 14px 3px 14px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
         ${escapeHtml(m.text)}
       </div>
     `;
   }
   return `
-    <div style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 10px; align-items: flex-start;">
-      <div class="friend-avatar green" style="width: 28px; height: 28px; font-size: 11px; flex-shrink: 0;">SS</div>
-      <div style="background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: 16px 16px 16px 4px; font-size: var(--text-md); line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
+    <div style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 8px; align-items: flex-start;">
+      <div class="friend-avatar green" style="width: 24px; height: 24px; font-size: 10px; flex-shrink: 0;">SS</div>
+      <div style="background: var(--surface); border: 1px solid var(--border); padding: 6px 11px; border-radius: 14px 14px 14px 3px; font-size: var(--text-sm); line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
         ${renderMarkdown(m.text)}
       </div>
     </div>
