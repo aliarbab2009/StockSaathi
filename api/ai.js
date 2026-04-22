@@ -110,11 +110,11 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
   const geminiFastModel = env.GEMINI_FAST_MODEL || "gemini-2.5-flash";
   const geminiProModel  = env.GEMINI_PRO_MODEL  || "gemini-2.5-pro";
   const geminiChatModel = env.GEMINI_CHAT_MODEL || "gemini-2.5-flash-lite";
-  // JSON-profile model: 2.5 Flash is GA everywhere, fast, and non-thinking —
-  // crucial for structured JSON outputs where thinking tokens would truncate
-  // the response. 3.x previews are NOT used here even if the user set them
-  // as FAST/PRO defaults.
-  const geminiJsonModel = env.GEMINI_JSON_MODEL || "gemini-2.5-flash";
+  // JSON-profile model: 2.5 Flash Lite — GA, fast, and genuinely non-thinking
+  // in strict-JSON mode. Tested: 2.5 Flash spends ~1900 reasoning tokens on
+  // response_format:json_object calls, truncating the actual JSON. Lite
+  // completes the full schema in ~3s with 689 output tokens, no reasoning.
+  const geminiJsonModel = env.GEMINI_JSON_MODEL || "gemini-2.5-flash-lite";
   const openaiModel = env.OPENAI_MODEL || "gpt-5.4";
   const groqModel = env.GROQ_MODEL || "llama-3.3-70b-versatile";
 

@@ -49,11 +49,12 @@ const GEMINI_PRO     = (globalThis.process?.env?.GEMINI_PRO_MODEL)  || "gemini-2
 // fast/reasoning lanes run heavier 3.x preview models for structured tasks.
 const GEMINI_CHAT    = (globalThis.process?.env?.GEMINI_CHAT_MODEL) || "gemini-2.5-flash-lite";
 // Dedicated model for JSON-returning ops (command palette, market-search,
-// report-card, crash-replay suggestions, etc.). Defaults to 2.5 Flash because
-// it's GA in every region, fast (~800ms), and crucially NON-THINKING — it
-// doesn't burn max_tokens budget on internal chain-of-thought that would
-// truncate the structured JSON response.
-const GEMINI_JSON    = (globalThis.process?.env?.GEMINI_JSON_MODEL) || "gemini-2.5-flash";
+// report-card, crash-replay). 2.5 Flash Lite is the ONLY Gemini model that
+// is truly non-thinking in response_format:json_object mode — 2.5 Flash
+// spends ~1900 reasoning-tokens on strict-JSON requests, which breaks crash
+// replay (hits max_tokens with the JSON itself only 70 tokens long). Lite
+// completes full crash-replay schema in ~3s with no reasoning overhead.
+const GEMINI_JSON    = (globalThis.process?.env?.GEMINI_JSON_MODEL) || "gemini-2.5-flash-lite";
 const CEREBRAS_MODEL = (globalThis.process?.env?.CEREBRAS_MODEL)  || "llama3.3-70b";
 const GROQ_MODEL     = (globalThis.process?.env?.GROQ_MODEL)      || "llama-3.3-70b-versatile";
 const PUBLIC_ORIGIN  = ((globalThis.process?.env?.PUBLIC_ORIGIN) || "").replace(/\/$/, "");
