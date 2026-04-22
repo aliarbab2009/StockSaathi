@@ -7,7 +7,7 @@
 import { getState } from "../state.js";
 import { getInstrument } from "../data/universe.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
-import { runAgent, streamChat, needsLiveData } from "../coach/agent.js";
+import { runAgent, streamChat, needsLiveData, logChatTurn } from "../coach/agent.js";
 
 const CHAT_KEY = "ss.chatlog.v1";
 
@@ -199,8 +199,12 @@ async function sendAndReply(userText) {
   const input = outer?.querySelector("#chat-input");
   const sendBtn = outer?.querySelector("#chat-send");
   if (input) {
-    input.disabled = true;
-    input.placeholder = "Wait for the response to finish…";
+    // readonly (not disabled) — keeps the caret blinking + focus on the
+    // input, just blocks typing. Feels natural: user still sees where
+    // they'll type the next message the moment Saathi finishes.
+    input.setAttribute("readonly", "readonly");
+    input.placeholder = "Saathi is responding…";
+    input.focus();
   }
   if (sendBtn) {
     sendBtn.outerHTML = `<button class="btn btn-outline" id="chat-stop" type="button" title="Stop response">◼ Stop</button>`;
@@ -223,7 +227,7 @@ async function sendAndReply(userText) {
 
   const restoreForm = () => {
     if (input) {
-      input.disabled = false;
+      input.removeAttribute("readonly");
       input.placeholder = "Ask about SIPs, P/E, crashes, anything...";
       input.focus();
     }
@@ -266,6 +270,7 @@ async function sendAndReply(userText) {
     m_abortController = null;
     if (replyText && replyText.trim()) {
       pushAssistant(replyText);
+      logChatTurn({ userText, assistantText: replyText, model: "gemini-chat" });
     } else {
       pushAssistant(errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
     }
@@ -303,18 +308,25 @@ async function sendAndReply(userText) {
   if (entry) {
     entry.streaming = false;
     if (result?.aborted) {
-      // User clicked Stop — keep whatever streamed so far and note the stop.
-      if (entry.text.trim()) entry.text = entry.text.trim() + " \n\n_(stopped)_";
-      else entry.text = "_(stopped)_";
+      // User clicked Stop — keep whatever streamed so far and add a warm
+      // sign-off rather than the clinical "[stopped]".
+      const suffix = "\n\n— ok, I'll stop there. Ping me again if you want me to keep going.";
+      entry.text = entry.text.trim()
+        ? entry.text.trim() + suffix
+        : "No worries — tap send again whenever you're ready.";
     } else if (result?.error && !entry.text.trim()) {
-      entry.text = "Couldn't reach Saathi right now. Try again in a moment.";
+      entry.text = "Hmm, I'm having trouble reaching my brain right now. Give it a sec and try again?";
     } else if (!entry.text.trim() && result?.text) {
       entry.text = result.text;
     } else if (!entry.text.trim()) {
-      entry.text = "Saathi went quiet. Try asking again in a moment.";
+      entry.text = "Hmm, I went quiet there. Ask me once more?";
     }
     saveChat();
     reRenderOuter();
+    // Log the finished turn (not aborted, not error) so admin can review.
+    if (!result?.aborted && !result?.error && entry.text && !entry.text.startsWith("Hmm")) {
+      logChatTurn({ userText, assistantText: entry.text, model: "gemini-chat" });
+    }
   }
   restoreForm();
 }

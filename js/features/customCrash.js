@@ -70,9 +70,19 @@ const ATTEMPTS = [
 ];
 
 // Normalised query key used for dedup lookup + as a stable alias that points
-// at whichever scenario id was generated for this query first.
+// at whichever scenario id was generated for this query first. Mirrors the
+// aggressive tokenise+sort used by queryHash so the local-cache lookup
+// matches the same rephrasings the server-cache matches.
 function queryKey(desc) {
-  return String(desc || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").slice(0, 100);
+  const tokens = String(desc || "")
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+    .replace(/(\d)([a-zA-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return Array.from(new Set(tokens)).sort().join("_").slice(0, 120);
 }
 
 const QUERY_INDEX_STORAGE_KEY = "ss.customCrashes.queryIndex.v1";
@@ -105,9 +115,35 @@ export function existingScenarioForQuery(description) {
 // Stable SHA-256 of a normalised description. Used as the cross-user cache
 // key AND as the deterministic suffix for the scenario id so the generated
 // URL is stable for a given prompt — shareable, and identical across users.
+//
+// Normalisation is AGGRESSIVE on purpose: users rephrase ("Adani Hindenburg
+// 2023" vs "Hindenburg 2023 Adani" vs "AdaniHindenburg2023" vs "adani-
+// hindenburg 2023!") and without collapsing these we'd cache-miss on every
+// rephrasing and burn LLM credits regenerating the same scenario.
+//
+// Strategy:
+//   1. Split letter/digit runs ("hindenburg2023" → "hindenburg 2023")
+//   2. Lowercase
+//   3. Replace every non-alphanumeric run with a single space
+//   4. Split into word-tokens, dedupe, sort alphabetically
+//   5. Rejoin — word-order no longer matters, punctuation no longer matters
+//
+// Side effect: "Adani 2023" and "2023 Adani" hash the same (fine — same
+// event). "Adani Enterprises IPO" vs "IPO Adani Enterprises" same. "Adani
+// Hindenburg" vs "Hindenburg Adani" same. What they hash DIFFERENTLY from:
+// queries that contain genuinely distinct words ("Adani IPO 2023" vs
+// "Adani Hindenburg 2023") — which is correct, those are different events.
 async function queryHash(desc) {
-  const normalised = String(desc || "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 400);
-  const bytes = new TextEncoder().encode(normalised);
+  const tokens = String(desc || "")
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+    .replace(/(\d)([a-zA-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const canonical = Array.from(new Set(tokens)).sort().join(" ").slice(0, 400);
+  const bytes = new TextEncoder().encode(canonical);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
 }

@@ -714,13 +714,7 @@ function paintUserModal() {
         </tr>`).join("")}
       </tbody></table>` : `<div class="muted text-sm">No transfers.</div>`}</div>
 
-    <div id="sec-coach"><div class="admin-user-section-label">10. Coach chat / messages (${coachMessages?.length || 0})</div>
-      ${coachMessages?.length ? `<div class="flex-col gap-2">${coachMessages.map(m => `
-        <details class="admin-coach-row">
-          <summary><strong>${escapeHtml(m.event_type || "—")}</strong> · ${escapeHtml(m.trigger_symbol || "—")} · <span class="dim" style="font-family: var(--font-mono, ui-monospace, monospace);">${formatDatePrecise(m.created_at)}</span> · model=${escapeHtml(m.model || "—")}
-          <button class="btn btn-ghost btn-sm" data-delete-coach="${escapeAttr(m.id)}" style="float:right;">delete</button></summary>
-          <pre class="admin-coach-payload">${escapeHtml(JSON.stringify(m.payload || {}, null, 2))}</pre>
-        </details>`).join("")}</div>` : `<div class="muted text-sm">No coach messages.</div>`}</div>
+    ${renderCoachSection(coachMessages)}
 
     <div id="sec-report"><div class="admin-user-section-label">11. Report card (server-computed)</div>
       ${reportCard ? `<div class="admin-user-grid">
@@ -1743,6 +1737,92 @@ function renderSystem(body) {
 // Utility renderers
 // -----------------------------------------------------------------------------
 function kv(k, v) { return `<div class="admin-kv"><span>${escapeHtml(k)}</span><span>${escapeHtml(v ?? "—")}</span></div>`; }
+// Render the coach section of the user-detail modal. Splits entries into:
+//   - chat turns (event_type starts with "chat_") → threaded chat bubbles
+//   - other events (trade reflections, crash replays) → collapsible JSON rows
+// Chat turns are grouped into time-separated threads so the admin can
+// see each session as a single conversation.
+function renderCoachSection(coachMessages) {
+  const msgs = Array.isArray(coachMessages) ? coachMessages : [];
+  if (!msgs.length) {
+    return `<div id="sec-coach"><div class="admin-user-section-label">10. Coach chat / messages (0)</div><div class="muted text-sm">No coach messages.</div></div>`;
+  }
+  // Server returns newest first — reverse for chronological chat order.
+  const ordered = [...msgs].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const chatTurns = ordered.filter(m => typeof m.event_type === "string" && m.event_type.startsWith("chat_"));
+  const otherEvents = ordered.filter(m => !m.event_type || !m.event_type.startsWith("chat_"));
+
+  // Break chat turns into sessions (gap > 30 min = new session).
+  const sessions = [];
+  let cur = [];
+  let lastTs = 0;
+  for (const m of chatTurns) {
+    const ts = new Date(m.created_at).getTime();
+    if (cur.length && ts - lastTs > 30 * 60_000) {
+      sessions.push(cur);
+      cur = [];
+    }
+    cur.push(m);
+    lastTs = ts;
+  }
+  if (cur.length) sessions.push(cur);
+
+  const chatHtml = sessions.length
+    ? sessions.reverse().map((session, i) => {
+        const first = session[0];
+        const last = session[session.length - 1];
+        const dur = Math.max(0, new Date(last.created_at) - new Date(first.created_at));
+        const durStr = dur < 60_000 ? `${Math.round(dur/1000)}s`
+                      : dur < 3600_000 ? `${Math.round(dur/60_000)}m`
+                      : `${Math.round(dur/3600_000)}h`;
+        return `
+          <details class="admin-coach-row" ${i === 0 ? "open" : ""}>
+            <summary>
+              <strong>💬 Chat session</strong> ·
+              <span class="dim">${session.length} msg${session.length === 1 ? "" : "s"}</span> ·
+              <span class="dim" style="font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px;">${formatDatePrecise(first.created_at)}</span>
+              ${durStr !== "0s" ? `· <span class="dim">${durStr}</span>` : ""}
+            </summary>
+            <div class="admin-chat-thread">
+              ${session.map(m => renderChatTurn(m)).join("")}
+            </div>
+          </details>
+        `;
+      }).join("")
+    : "";
+
+  const otherHtml = otherEvents.length
+    ? `<details class="admin-coach-row"><summary><strong>⚙ Coach events</strong> · <span class="dim">${otherEvents.length} trade / replay reflections</span></summary>
+        <div class="flex-col gap-2" style="margin-top: 8px;">
+          ${otherEvents.reverse().map(m => `
+            <details class="admin-coach-row">
+              <summary><strong>${escapeHtml(m.event_type || "—")}</strong> · ${escapeHtml(m.trigger_symbol || "—")} · <span class="dim" style="font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px;">${formatDatePrecise(m.created_at)}</span> · model=${escapeHtml(m.model || "—")}
+              <button class="btn btn-ghost btn-sm" data-delete-coach="${escapeAttr(m.id)}" style="float:right;">delete</button></summary>
+              <pre class="admin-coach-payload">${escapeHtml(JSON.stringify(m.payload || {}, null, 2))}</pre>
+            </details>`).join("")}
+        </div>
+      </details>`
+    : "";
+
+  return `<div id="sec-coach"><div class="admin-user-section-label">10. Coach chat / messages (${msgs.length})</div>
+    ${chatHtml || `<div class="muted text-xs" style="margin-bottom: 8px;">No back-and-forth chats yet.</div>`}
+    ${otherHtml}
+  </div>`;
+}
+
+function renderChatTurn(m) {
+  const isUser = m.event_type === "chat_user";
+  const text = (m.payload && typeof m.payload.text === "string") ? m.payload.text : "";
+  const ts = formatDatePrecise(m.created_at);
+  return `
+    <div class="admin-chat-bubble ${isUser ? "user" : "assistant"}" title="${escapeAttr(ts)}">
+      <div class="admin-chat-role">${isUser ? "USER" : "SAATHI"}</div>
+      <div class="admin-chat-text">${escapeHtml(text)}</div>
+      <div class="admin-chat-ts">${escapeHtml(ts)}${m.model && !isUser ? ` · ${escapeHtml(m.model)}` : ""}</div>
+    </div>
+  `;
+}
+
 function formatDateShort(iso) {
   if (!iso) return "—";
   const d = new Date(iso);

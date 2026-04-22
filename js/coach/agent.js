@@ -557,6 +557,35 @@ export async function streamChat({ system, messages, profile = "chat", onToken, 
 }
 
 // -----------------------------------------------------------------------------
+// Persist a chat turn (user+assistant pair) to coach_messages so admins can
+// review actual conversations in the admin panel. Fire-and-forget: any DB
+// error here never affects the chat UX. Uses the existing dbAddCoachMessage
+// helper with event_type "chat_user" / "chat_assistant".
+// -----------------------------------------------------------------------------
+export async function logChatTurn({ userText, assistantText, model }) {
+  try {
+    const mod = await import("../db/sync.js");
+    if (!mod?.dbAddCoachMessage) return;
+    if (userText && userText.trim()) {
+      mod.dbAddCoachMessage({
+        eventType: "chat_user",
+        triggerSymbol: null,
+        payload: { text: String(userText).slice(0, 4000) },
+        model: null,
+      }).catch(() => {});
+    }
+    if (assistantText && assistantText.trim()) {
+      mod.dbAddCoachMessage({
+        eventType: "chat_assistant",
+        triggerSymbol: null,
+        payload: { text: String(assistantText).slice(0, 8000) },
+        model: model || null,
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+// -----------------------------------------------------------------------------
 // Heuristic: does this user message likely need live data (tool-use)?
 // Used by the chat page to decide between the fast-streaming path and the
 // slower runAgent tool-loop. Intentionally conservative — false positives

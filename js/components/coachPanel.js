@@ -9,7 +9,7 @@ import { getInstrument } from "../data/universe.js";
 import { getNews } from "../data/news.js";
 import { formatRupees, formatPct } from "../money.js";
 import { SYSTEM_PROMPT, matchTemplate, isOffTopic, offTopicRedirect, STARTER_QUESTIONS } from "../coach/persona.js";
-import { runAgent, streamChat, needsLiveData } from "../coach/agent.js";
+import { runAgent, streamChat, needsLiveData, logChatTurn } from "../coach/agent.js";
 
 const CHAT_LOG_KEY = "ss.coachchat.v1";
 
@@ -243,20 +243,25 @@ function render() {
       if (entry) {
         entry.streaming = false;
         if (result?.aborted) {
+          const suffix = "\n\n— ok, I'll stop there. Ping me again if you want more.";
           entry.text = entry.text.trim()
-            ? entry.text.trim() + " \n\n_(stopped)_"
-            : "_(stopped)_";
+            ? entry.text.trim() + suffix
+            : "No worries — ask again when you're ready.";
         } else if (result?.error && !entry.text.trim()) {
-          entry.text = "Couldn't reach Saathi right now. Try again in a moment.";
+          entry.text = "Hmm, I can't reach my brain right now. Give it a sec and try again?";
         } else if (!entry.text.trim()) {
           entry.text = result?.text && result.text.trim()
             ? result.text
-            : "Saathi went quiet. Try asking again.";
+            : "Hmm, I went quiet there. Ask me once more?";
         }
       }
       saveChat();
       pending = false;
       abortController = null;
+      // Log the finished turn to coach_messages so admin panel can see it.
+      if (!result?.aborted && !result?.error && entry && entry.text && !entry.text.startsWith("Hmm")) {
+        logChatTurn({ userText: text, assistantText: entry.text, model: "gemini-chat" });
+      }
       render();
       return;
     }
@@ -267,7 +272,10 @@ function render() {
       reply = await callLlmAgent(s.settings.llmApiKey || null, chatHistory, s);
     } catch (e) { console.warn("coach panel error:", e); }
     if (!reply || !reply.trim()) {
-      reply = "Couldn't reach Saathi right now. Try again in a moment.";
+      reply = "Hmm, I can't reach my brain right now. Give it a sec and try again?";
+    } else {
+      // Successful tool-use turn — log to DB for admin review.
+      logChatTurn({ userText: text, assistantText: reply, model: "gemini-chat-tools" });
     }
 
     chatHistory.push({ role: "assistant", text: reply, ts: Date.now() });
