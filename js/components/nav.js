@@ -43,7 +43,11 @@ export function mountNav() {
     const drawer = document.getElementById("nav-drawer");
     if (drawer?.classList.contains("open") &&
         !drawer.querySelector(".nav-drawer-panel").contains(e.target) &&
-        !e.target.closest(".nav-burger")) {
+        !e.target.closest(".nav-burger") &&
+        !e.target.closest("[data-mobile-menu]")) {
+      // ^ also exclude the mobile bottom-nav "More" button — otherwise the
+      // same click that opens the drawer bubbles up and closes it
+      // immediately, making the button appear broken.
       closeDrawer();
     }
   });
