@@ -151,6 +151,21 @@ function render(inst, symbol) {
     : { label: "Cached", live: false };
   const ms = marketStatus();
 
+  // ===================================================================
+  // After-hours AMO mode — mirror Groww.
+  // When NSE is closed, Market orders are disabled. The trade form
+  // forces the Limit tab (== AMO) and pre-fills with the last-shown
+  // price so the user can one-tap queue an order that fills at the
+  // next market open. This also bypasses the apply_trade RPC hang that
+  // happens out-of-hours by routing through placeLimitOrder() instead.
+  // ===================================================================
+  if (!ms.open) {
+    if (ui.orderType !== "LIMIT") ui.orderType = "LIMIT";
+    if (!ui.limitPrice || +ui.limitPrice <= 0) {
+      ui.limitPrice = (curPrice / 100).toFixed(2);
+    }
+  }
+
   main.innerHTML = `
     <div style="margin-bottom: var(--sp-5);">
       <div class="flex items-center gap-2">
@@ -246,26 +261,38 @@ function render(inst, symbol) {
 
       <aside>
         <div class="card trade-box">
+          ${!ms.open ? `
+            <div class="amo-banner" style="margin-bottom: var(--sp-3); padding: var(--sp-3); border-radius: var(--r-md); background: color-mix(in srgb, var(--brand) 7%, var(--bg-soft)); border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--border)); font-size: var(--text-xs); line-height: 1.45;">
+              <div style="font-weight: 600; color: var(--text-strong); margin-bottom: 2px;">🕗 NSE Closed — AMO mode</div>
+              <div class="dim">Your order queues now and executes at <strong style="color: var(--text-strong);">${escapeHtml(ms.nextOpenLabel || "the next market open")}</strong> at the opening price. Market orders are unavailable after hours (same behaviour as Groww).</div>
+            </div>
+          ` : ""}
+
           <div class="trade-tabs">
             <button class="trade-tab buy ${ui.side === "BUY" ? "active" : ""}" data-side="BUY">Buy</button>
             <button class="trade-tab sell ${ui.side === "SELL" ? "active" : ""}" data-side="SELL">Sell</button>
           </div>
 
           <div class="lb-tabs" style="margin-bottom: var(--sp-3); width: 100%;">
-            <button class="lb-tab ${ui.orderType === "MARKET" ? "active" : ""}" data-otype="MARKET" style="flex: 1;">Market</button>
-            <button class="lb-tab ${ui.orderType === "LIMIT" ? "active" : ""}" data-otype="LIMIT" style="flex: 1;">Limit</button>
+            <button class="lb-tab ${ui.orderType === "MARKET" ? "active" : ""}" data-otype="MARKET" style="flex: 1;${!ms.open ? " opacity: 0.45; cursor: not-allowed;" : ""}"
+              ${!ms.open ? `disabled title="Market orders unavailable after hours — use Limit to queue an AMO."` : ""}>
+              Market${!ms.open ? " 🔒" : ""}
+            </button>
+            <button class="lb-tab ${ui.orderType === "LIMIT" ? "active" : ""}" data-otype="LIMIT" style="flex: 1;">${!ms.open ? "Limit (AMO)" : "Limit"}</button>
           </div>
 
           ${ui.orderType === "LIMIT" ? `
             <div style="margin-bottom: var(--sp-3);">
-              <label class="label" for="limit-price-input">Limit price (₹)</label>
+              <label class="label" for="limit-price-input">${!ms.open ? "AMO price (₹)" : "Limit price (₹)"}</label>
               <input class="input" id="limit-price-input" type="number" min="0.01" step="0.05"
                 placeholder="${(curPrice/100).toFixed(2)}"
                 value="${ui.limitPrice || (curPrice/100).toFixed(2)}" inputmode="decimal" />
               <div class="dim text-xs" style="margin-top: 4px;">
-                ${ui.side === "BUY"
-                  ? "Fires when market price drops to this level or lower."
-                  : "Fires when market price rises to this level or higher."}
+                ${!ms.open
+                  ? `Fills at market open when the opening tick crosses ${ui.side === "BUY" ? "at or below" : "at or above"} this price. Pre-filled with the last close — edit if you want a stricter fill.`
+                  : ui.side === "BUY"
+                    ? "Fires when market price drops to this level or lower."
+                    : "Fires when market price rises to this level or higher."}
               </div>
             </div>
           ` : ""}
@@ -288,7 +315,11 @@ function render(inst, symbol) {
 
           <button class="btn btn-block ${ui.side === "BUY" ? "btn-buy" : "btn-sell"}" id="place-trade-btn"
             ${ui.side === "SELL" && !holding ? "disabled" : ""}>
-            ${ui.orderType === "LIMIT" ? `Place ${ui.side === "BUY" ? "Buy" : "Sell"} limit` : `Review ${ui.side === "BUY" ? "Buy" : "Sell"} order`}
+            ${!ms.open
+              ? `Queue AMO ${ui.side === "BUY" ? "Buy" : "Sell"}`
+              : ui.orderType === "LIMIT"
+                ? `Place ${ui.side === "BUY" ? "Buy" : "Sell"} limit`
+                : `Review ${ui.side === "BUY" ? "Buy" : "Sell"} order`}
           </button>
 
           ${ui.side === "SELL" && !holding ? `
@@ -297,7 +328,9 @@ function render(inst, symbol) {
             </div>
           ` : `
             <div class="dim text-xs center" style="margin-top: var(--sp-3);">
-              Virtual money · Reviewed on a confirmation step · Coach reflection follows every trade
+              ${!ms.open
+                ? `Virtual money · Queues as AMO · Fills at ${escapeHtml(ms.nextOpenLabel || "next market open")}`
+                : "Virtual money · Reviewed on a confirmation step · Coach reflection follows every trade"}
             </div>
           `}
         </div>
@@ -473,6 +506,36 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
   if (!qty || qty <= 0) { toast({ kind: "error", message: "Enter a valid quantity." }); return; }
   if (ui.side === "SELL" && (!holding || holding.qty < qty - 1e-9)) {
     toast({ kind: "error", message: `You only hold ${holding?.qty || 0}.` });
+    return;
+  }
+
+  // ---- After-hours AMO path --------------------------------------------
+  // Mirror Groww: when NSE is closed, we never call apply_trade — we queue
+  // the order as a limit at the last-shown price, and the existing
+  // limit-order matcher fills it at the first tick after market open
+  // (which is mathematically the same as an AMO fill at the opening price).
+  // This also sidesteps the apply_trade RPC hang that happens out-of-hours.
+  const ms = marketStatus();
+  if (!ms.open) {
+    const fallbackRupees = curPrice / 100;
+    const limitRupees = Number.isFinite(parseFloat(ui.limitPrice)) && parseFloat(ui.limitPrice) > 0
+      ? parseFloat(ui.limitPrice)
+      : fallbackRupees;
+    const limitPaise = Math.round(limitRupees * 100);
+    if (ui.side === "BUY" && Math.round(qty * limitPaise) > getState().portfolio.cashPaise) {
+      toast({ kind: "error", message: "Not enough cash to reserve for this AMO." });
+      return;
+    }
+    try {
+      await placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise });
+      toast({
+        kind: "success",
+        message: `AMO queued: ${ui.side} ${formatQty(qty, inst.kind)} ${symbol} @ ₹${limitRupees.toFixed(2)}. Fills at ${ms.nextOpenLabel || "next market open"}.`,
+        duration: 5000,
+      });
+    } catch (e) {
+      toast({ kind: "error", message: e?.message || "Could not queue AMO." });
+    }
     return;
   }
 
