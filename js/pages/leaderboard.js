@@ -34,9 +34,20 @@ export function renderLeaderboard(main) {
   })();
 
   function render() {
-    const state = getState();
-    const myReturn = getPortfolioReturnPct(state) * 100;
-    const myName = state.user.displayName || state.user.username || "You";
+    try { renderInner(); }
+    catch (e) {
+      console.error("leaderboard render failed:", e);
+      main.innerHTML = `<div class="empty-state"><span class="emoji">😬</span><h3>Leaderboard hit a snag</h3><div class="muted text-sm" style="max-width:420px; margin:0 auto;">Technical: <code>${escapeHtml(String(e?.message || e))}</code></div><div style="margin-top:var(--sp-4);"><a href="#/portfolio" class="btn btn-primary">Back to portfolio</a></div></div>`;
+    }
+  }
+  function renderInner() {
+    const state = getState() || {};
+    const user = state.user || {};
+    const friends = Array.isArray(state.friends) ? state.friends : [];
+    const transactions = Array.isArray(state.transactions) ? state.transactions : [];
+    let myReturn = 0;
+    try { myReturn = (getPortfolioReturnPct(state) || 0) * 100; } catch { myReturn = 0; }
+    const myName = user.displayName || user.username || "You";
 
     // Real rows from DB (preferred) or seeded competitors (fallback)
     let entries;
@@ -55,7 +66,8 @@ export function renderLeaderboard(main) {
     }
 
     // Augment with real StockSaathi users on this device (other accounts)
-    const realUsers = listAccountsPublic().filter(u => u.id !== state.user.id);
+    let realUsers = [];
+    try { realUsers = (listAccountsPublic() || []).filter(u => u.id !== user.id); } catch {}
     for (const u of realUsers) {
       // Load their state to get their return %
       try {
@@ -86,18 +98,18 @@ export function renderLeaderboard(main) {
     // Append me (if not already present from DB)
     if (!entries.some(e => e.me)) {
       entries.push({
-        id: "me", name: myName, school: state.user.school || "Your school",
+        id: "me", name: myName, school: user.school || "Your school",
         class: "", returnPct: Math.round(myReturn * 10) / 10,
-        trades: state.transactions.length, daysActive: 1, me: true,
+        trades: transactions.length, daysActive: 1, me: true,
       });
     }
 
     // Filter by scope
-    if (scope === "SCHOOL" && state.user.school) {
-      entries = entries.filter(u => u.school === state.user.school || u.me);
+    if (scope === "SCHOOL" && user.school) {
+      entries = entries.filter(u => u.school === user.school || u.me);
     }
     if (scope === "FRIENDS") {
-      const friendIds = new Set(state.friends.map(f => f.id));
+      const friendIds = new Set(friends.map(f => f && f.id).filter(Boolean));
       entries = entries.filter(u => u.me || friendIds.has(u.id));
     }
 
@@ -117,7 +129,7 @@ export function renderLeaderboard(main) {
         <div class="lb-tabs">
           <button class="lb-tab ${scope === "GLOBAL" ? "active" : ""}" data-scope="GLOBAL">🌏 Global</button>
           <button class="lb-tab ${scope === "SCHOOL" ? "active" : ""}" data-scope="SCHOOL">🏫 My School</button>
-          <button class="lb-tab ${scope === "FRIENDS" ? "active" : ""}" data-scope="FRIENDS">👥 Friends (${state.friends.length})</button>
+          <button class="lb-tab ${scope === "FRIENDS" ? "active" : ""}" data-scope="FRIENDS">👥 Friends (${friends.length})</button>
         </div>
         <div class="lb-tabs">
           <button class="lb-tab ${windowTf === "DAILY" ? "active" : ""}" data-window="DAILY">Today</button>
