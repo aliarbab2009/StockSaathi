@@ -296,8 +296,12 @@ export async function applyTrade({ symbol, side, qty, pricePaise, biasFlags = []
       } catch (e) {
         // If the RPC itself complained about auth, fall through to local.
         // Other errors (insufficient cash, etc.) should bubble up.
-        if (!/not logged in|jwt|auth|permission/i.test(String(e?.message || ""))) throw e;
-        console.warn("DB trade failed auth, using local path:", e?.message);
+        const msg = String(e?.message || "");
+        if (msg === "trade_timeout") {
+          throw new Error("Trade took too long — a previous request may still be processing. Wait 30 seconds and try again.");
+        }
+        if (!/not logged in|jwt|auth|permission/i.test(msg)) throw e;
+        console.warn("DB trade failed auth, using local path:", msg);
       }
     }
   }

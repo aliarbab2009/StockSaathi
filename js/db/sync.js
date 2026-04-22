@@ -224,14 +224,22 @@ export async function dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyK
   const client = await sb();
   if (!client) throw new Error("Backend not configured.");
   await ensureAuthedOrRedirect(client);
-  const { data, error } = await client.rpc("apply_trade", {
-    p_symbol: symbol,
-    p_side: side,
-    p_qty: qty,
-    p_price_paise: pricePaise,
-    p_idempotency_key: idempotencyKey,
-    p_bias_flags: biasFlags || [],
-  });
+  // Race the RPC against a 10 s timeout. apply_trade has occasionally hung
+  // on SELL when earlier failed calls left row-locks queued in the pool —
+  // without this, the confirm modal would sit forever and the UI looks
+  // dead. 10 s is generous (usually completes in <200ms); anything longer
+  // is either a real problem or a transient lock that'll clear in a minute.
+  const { data, error } = await Promise.race([
+    client.rpc("apply_trade", {
+      p_symbol: symbol,
+      p_side: side,
+      p_qty: qty,
+      p_price_paise: pricePaise,
+      p_idempotency_key: idempotencyKey,
+      p_bias_flags: biasFlags || [],
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("trade_timeout")), 10_000)),
+  ]);
   if (error) {
     if (/not logged in/i.test(error.message)) await handleSessionLost();
     throw new Error(prettifyErr(error.message));
