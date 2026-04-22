@@ -152,14 +152,17 @@ let m_abortController = null;
 
 function renderBubble(m) {
   if (m.role === "user") {
+    // width:fit-content so the bubble hugs the actual text instead of
+    // stretching to max-width (the flex parent has default align-items:
+    // stretch which makes children fill the cross axis otherwise).
     return `
-      <div style="align-self: flex-end; max-width: 78%; background: var(--brand); color: white; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: var(--text-md); line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
+      <div style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: var(--text-md); line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
         ${escapeHtml(m.text)}
       </div>
     `;
   }
   return `
-    <div style="align-self: flex-start; max-width: 82%; display: flex; gap: 10px; align-items: flex-start;">
+    <div style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 10px; align-items: flex-start;">
       <div class="friend-avatar green" style="width: 28px; height: 28px; font-size: 11px; flex-shrink: 0;">SS</div>
       <div style="background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: 16px 16px 16px 4px; font-size: var(--text-md); line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
         ${renderMarkdown(m.text)}

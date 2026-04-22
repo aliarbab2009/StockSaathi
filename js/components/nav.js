@@ -64,7 +64,45 @@ export function mountNav() {
     const pfValue = state.isAuthed ? (state.portfolio.cashPaise + computeHoldingsValue(state)) : 0;
     const ms = marketStatus();
 
+    // Mobile bottom nav — 5 primary destinations (or 4 + a menu button).
+    // CSS hides this on desktop (≥821px). The same `active` state highlights
+    // the current route. Taps go directly to the route — no burger → drawer
+    // → item indirection, which is what was causing the "laggy nav" feel on
+    // Android phones.
+    const mobileNavItems = state.isAuthed
+      ? [
+          { route: "portfolio",    label: "Home",   icon: "🏠" },
+          { route: "stocks",       label: "Markets", icon: "📈" },
+          { route: "chat",         label: "Coach",  icon: "💬" },
+          { route: "crash-replay", label: "Replay", icon: "⏱" },
+          { route: "__menu",       label: "More",   icon: "☰" },
+        ]
+      : [
+          { route: "",             label: "Home",   icon: "🏠" },
+          { route: "chat",         label: "Coach",  icon: "💬" },
+          { route: "crash-replay", label: "Replay", icon: "⏱" },
+          { route: "login",        label: "Log in", icon: "🔑" },
+        ];
+    const mobileNavHtml = `
+      <nav class="mobile-bottom-nav" aria-label="Primary">
+        ${mobileNavItems.map(item => {
+          const isActive = item.route && active === item.route;
+          if (item.route === "__menu") {
+            return `<button type="button" class="mbn-link" data-mobile-menu aria-label="Open menu">
+              <span class="mbn-link-icon" aria-hidden="true">${item.icon}</span>
+              <span class="mbn-link-label">${item.label}</span>
+            </button>`;
+          }
+          return `<a href="#/${item.route}" class="mbn-link ${isActive ? "active" : ""}">
+            <span class="mbn-link-icon" aria-hidden="true">${item.icon}</span>
+            <span class="mbn-link-label">${item.label}</span>
+          </a>`;
+        }).join("")}
+      </nav>
+    `;
+
     root.innerHTML = `
+      ${mobileNavHtml}
       <div class="nav-inner">
         <a href="${state.isAuthed ? "#/portfolio" : "#/"}" class="brand-logo" aria-label="StockSaathi home">
           <span class="logo-mark">SS</span>
@@ -155,6 +193,9 @@ export function mountNav() {
       navigate("/");
     });
     root.querySelector("#nav-burger-btn")?.addEventListener("click", openDrawer);
+    // Mobile bottom nav "More" button opens the same drawer as the top-bar
+    // burger — keeps the full nav menu reachable in one tap from anywhere.
+    root.querySelector("[data-mobile-menu]")?.addEventListener("click", openDrawer);
     root.querySelector("#theme-toggle-btn")?.addEventListener("click", toggleTheme);
     root.querySelector("#cmdk-open-btn")?.addEventListener("click", () => {
       import("./commandPalette.js").then(m => m.openCommandPalette());
