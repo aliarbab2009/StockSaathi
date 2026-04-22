@@ -108,7 +108,13 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
 
   // 2.5 = production GA, available in every Vertex region. 3.x = preview-only.
   const geminiFastModel = env.GEMINI_FAST_MODEL || "gemini-2.5-flash";
-  const geminiProModel = env.GEMINI_PRO_MODEL || "gemini-2.5-pro";
+  const geminiProModel  = env.GEMINI_PRO_MODEL  || "gemini-2.5-pro";
+  const geminiChatModel = env.GEMINI_CHAT_MODEL || "gemini-2.5-flash-lite";
+  // JSON-profile model: 2.5 Flash is GA everywhere, fast, and non-thinking —
+  // crucial for structured JSON outputs where thinking tokens would truncate
+  // the response. 3.x previews are NOT used here even if the user set them
+  // as FAST/PRO defaults.
+  const geminiJsonModel = env.GEMINI_JSON_MODEL || "gemini-2.5-flash";
   const openaiModel = env.OPENAI_MODEL || "gpt-5.4";
   const groqModel = env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
@@ -127,12 +133,26 @@ async function callLlm({ messages, temperature = 0.4, max_tokens = 400, response
   // Order by profile. Groq removed entirely by user request — Gemini is
   // the only acceptable provider, with OpenAI as a paid-upgrade fallback
   // for users who set OPENAI_API_KEY. No Llama anywhere.
-  if (profile === "fast") {
+  if (profile === "json") {
+    // JSON-returning ops: non-thinking 2.5 Flash first (reliably produces
+    // structured output), 2.5 Flash Lite second, 3.x Flash third, OpenAI last.
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiJsonModel, label: "gemini_json" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiChatModel, label: "gemini_chat" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
+    if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
+  } else if (profile === "chat") {
+    // Conversational chat: 2.5 Flash Lite first (fastest, non-thinking), then
+    // fast/pro/openai as escalation.
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiChatModel, label: "gemini_chat" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
+    if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
+    if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
+  } else if (profile === "fast") {
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
     if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
   } else {
-    // reasoning / json / creative — Gemini Pro first, Flash fallback, OpenAI last.
+    // reasoning / creative — Gemini Pro first, Flash fallback, OpenAI last.
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiProModel, label: "gemini_pro" });
     if (env.GEMINI_API_KEY) providers.push({ url: geminiUrl, key: env.GEMINI_API_KEY, model: geminiFastModel, label: "gemini_fast" });
     if (env.OPENAI_API_KEY) providers.push({ url: "https://api.openai.com/v1/chat/completions", key: env.OPENAI_API_KEY, model: openaiModel, label: "openai" });
@@ -280,7 +300,7 @@ async function opNewsTldr(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_NEWS_TLDR }, { role: "user", content: userMsg }],
-      max_tokens: 180, temperature: 0.3, response_format: { type: "json_object" }, profile: "fast",
+      max_tokens: 180, temperature: 0.3, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -315,7 +335,7 @@ async function opPortfolioDigest(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_PORTFOLIO }, { role: "user", content: userMsg }],
-      max_tokens: 260, temperature: 0.4, response_format: { type: "json_object" }, profile: "reasoning",
+      max_tokens: 260, temperature: 0.4, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -354,7 +374,7 @@ async function opStockWhy(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_STOCK_WHY }, { role: "user", content: userMsg }],
-      max_tokens: 240, temperature: 0.35, response_format: { type: "json_object" }, profile: "reasoning",
+      max_tokens: 240, temperature: 0.35, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -393,7 +413,7 @@ async function opTradeNudge(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_TRADE_NUDGE }, { role: "user", content: userMsg }],
-      max_tokens: 220, temperature: 0.4, response_format: { type: "json_object" }, profile: "fast",
+      max_tokens: 220, temperature: 0.4, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -426,7 +446,7 @@ async function opMarketMood(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_MOOD }, { role: "user", content: userMsg }],
-      max_tokens: 200, temperature: 0.35, response_format: { type: "json_object" }, profile: "fast",
+      max_tokens: 200, temperature: 0.35, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -462,7 +482,7 @@ async function opMarketSearch(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_NL_SEARCH }, { role: "user", content: userMsg }],
-      max_tokens: 400, temperature: 0.2, response_format: { type: "json_object" }, profile: "reasoning",
+      max_tokens: 400, temperature: 0.2, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -498,7 +518,7 @@ async function opReportCard(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_REPORT }, { role: "user", content: userMsg }],
-      max_tokens: 360, temperature: 0.45, response_format: { type: "json_object" }, profile: "reasoning",
+      max_tokens: 360, temperature: 0.45, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -523,7 +543,7 @@ async function opCrashSuggestions(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_CRASH_SUGG }, { role: "user", content: "Generate 10 suggestions." }],
-      max_tokens: 300, temperature: 0.8, response_format: { type: "json_object" }, profile: "fast",
+      max_tokens: 300, temperature: 0.8, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
@@ -556,7 +576,7 @@ async function opCommand(req, origin) {
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_COMMAND }, { role: "user", content: userMsg }],
-      max_tokens: 400, temperature: 0.2, response_format: { type: "json_object" }, profile: "reasoning",
+      max_tokens: 400, temperature: 0.2, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);

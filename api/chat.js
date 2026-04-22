@@ -48,6 +48,12 @@ const GEMINI_PRO     = (globalThis.process?.env?.GEMINI_PRO_MODEL)  || "gemini-2
 // overhead. Keeps the coach chat response <1s end-to-end even when the
 // fast/reasoning lanes run heavier 3.x preview models for structured tasks.
 const GEMINI_CHAT    = (globalThis.process?.env?.GEMINI_CHAT_MODEL) || "gemini-2.5-flash-lite";
+// Dedicated model for JSON-returning ops (command palette, market-search,
+// report-card, crash-replay suggestions, etc.). Defaults to 2.5 Flash because
+// it's GA in every region, fast (~800ms), and crucially NON-THINKING — it
+// doesn't burn max_tokens budget on internal chain-of-thought that would
+// truncate the structured JSON response.
+const GEMINI_JSON    = (globalThis.process?.env?.GEMINI_JSON_MODEL) || "gemini-2.5-flash";
 const CEREBRAS_MODEL = (globalThis.process?.env?.CEREBRAS_MODEL)  || "llama3.3-70b";
 const GROQ_MODEL     = (globalThis.process?.env?.GROQ_MODEL)      || "llama-3.3-70b-versatile";
 const PUBLIC_ORIGIN  = ((globalThis.process?.env?.PUBLIC_ORIGIN) || "").replace(/\/$/, "");
@@ -128,6 +134,13 @@ function providerDescriptors() {
       key: env.GEMINI_API_KEY,
       model: GEMINI_CHAT,
     },
+    gemini_json: {
+      label: "gemini_json",
+      enabled: () => !!env.GEMINI_API_KEY,
+      url: GEMINI_URL,
+      key: env.GEMINI_API_KEY,
+      model: GEMINI_JSON,
+    },
     gemini_fast: {
       label: "gemini_fast",
       enabled: () => !!env.GEMINI_API_KEY,
@@ -171,11 +184,15 @@ function chainFor(profile) {
       // Live-typing coach chat. Leads with 2.5 Flash Lite for sub-second
       // feel; Flash / Pro sit behind it as escalation if Lite errors.
       return ["gemini_chat", "gemini_fast", "gemini_pro", "openai"];
+    case "json":
+      // JSON-returning ops (command palette, market-search, report-card,
+      // crash-replay). Leads with 2.5 Flash (non-thinking, GA everywhere),
+      // falling back to Chat / Fast / OpenAI. Explicitly NO thinking models
+      // first — 3.x previews truncate structured JSON via reasoning tokens.
+      return ["gemini_json", "gemini_chat", "gemini_fast", "openai"];
     case "fast":
       return ["gemini_fast", "cerebras", "gemini_pro", "openai"];
     case "creative":
-      return ["openai", "gemini_pro", "gemini_fast"];
-    case "json":
       return ["openai", "gemini_pro", "gemini_fast"];
     case "reasoning":
     default:

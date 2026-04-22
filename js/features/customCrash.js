@@ -57,14 +57,15 @@ Rules:
 
 const MAX_DAYS = 140;
 
-// Each attempt tuple is [profile, temperature]. We try the fast lane twice
-// so most queries land in ~1 s flat; if Flash's JSON fails validation both
-// times (rare — mostly niche or badly-worded queries), we escalate to the
-// reasoning lane where GPT / Gemini Pro take over. Smart-as-fuck on the
-// rare miss, blazing on the common case.
+// Each attempt tuple is [profile, temperature]. We lead with the json
+// profile (Gemini 2.5 Flash — non-thinking, reliable structured output)
+// because Gemini 3.x preview models burn so many tokens on internal
+// reasoning that the JSON gets truncated mid-object. If the json attempts
+// fail validation (rare — only on wildly ambiguous queries), we escalate
+// to reasoning (Pro) with full thinking budget for the hard cases.
 const ATTEMPTS = [
-  { profile: "fast",      temperature: 0.2  },
-  { profile: "fast",      temperature: 0.55 },
+  { profile: "json",      temperature: 0.2  },
+  { profile: "json",      temperature: 0.55 },
   { profile: "reasoning", temperature: 0.3  },
 ];
 
@@ -225,6 +226,27 @@ function reshape(m) {
   }
 }
 
+// Robust JSON parser — handles Markdown code fences and leading/trailing
+// prose that Gemini 3.x preview models sometimes emit despite response_format.
+// Mirrors the server-side parseJsonLoose in api/ai.js.
+function parseJsonLoose(text) {
+  if (typeof text !== "string") return null;
+  try { return JSON.parse(text); }
+  catch {}
+  // Try a ```json ... ``` fence first (most common model misbehaviour).
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenceMatch) {
+    try { return JSON.parse(fenceMatch[1]); } catch {}
+  }
+  // Last resort: biggest `{ ... }` substring we can find.
+  const first = text.indexOf("{");
+  const last  = text.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(text.slice(first, last + 1)); } catch {}
+  }
+  return null;
+}
+
 async function callLlmForMeta(description, temperature, profile) {
   const res = await fetch("/api/chat", {
     method: "POST",
@@ -235,7 +257,9 @@ async function callLlmForMeta(description, temperature, profile) {
         { role: "user", content: String(description).trim().slice(0, 800) },
       ],
       temperature,
-      max_tokens: 800,
+      // Comfortable budget: fits the full crash-replay JSON schema AND any
+      // thinking tokens the reasoning-escalation path consumes on 3.x Pro.
+      max_tokens: 2000,
       response_format: { type: "json_object" },
       profile,
     }),
@@ -258,9 +282,8 @@ async function callLlmForMeta(description, temperature, profile) {
   const body = await res.json();
   const text = body?.choices?.[0]?.message?.content;
   if (!text) throw new Error("The coach returned an empty answer. Try again.");
-  let meta;
-  try { meta = JSON.parse(text); }
-  catch { throw new Error("The coach's answer didn't parse cleanly. Try again or rephrase."); }
+  const meta = parseJsonLoose(text);
+  if (!meta) throw new Error("The coach's answer didn't parse cleanly. Try again or rephrase.");
   return meta;
 }
 
