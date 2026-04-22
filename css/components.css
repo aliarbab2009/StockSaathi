@@ -301,7 +301,13 @@
   box-shadow: var(--sh-md);
 }
 .coach-panel.open { transform: translateX(0); }
-body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; border-left-color: var(--divider); }
+/* Docked mode only applies on wide desktop viewports. On mobile the panel
+   would otherwise sit as a full-width fixed overlay when settings.coachPanelOpen
+   is true, covering the entire app and making it unusable. The FAB + explicit
+   open action still works on mobile via the .open class. */
+@media (min-width: 1280px) {
+  body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; border-left-color: var(--divider); }
+}
 
 .coach-header {
   display: flex;

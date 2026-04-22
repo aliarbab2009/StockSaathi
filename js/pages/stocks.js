@@ -44,23 +44,25 @@ export function renderStocks(main) {
       const q = await getQuoteBatch(allEquitySyms);
       if (cancelled) return;
       quoteCache = { ...quoteCache, ...q };
-      render();
+      renderList();   // just the grid — toolbar already up
     } catch {}
   })();
 
   pollUnsub = subscribeToQuotes(allEquitySyms, (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
-    render();
-    // Fire the daily market-mood card once quotes have landed for the
-    // first time. Cached across the whole site per day, so most visits
-    // are instant + free.
+    // Quote-tick update: ONLY the stock-card grid is re-rendered. The
+    // toolbar (search input + themed-select Top-by-size dropdown) and
+    // filter pills stay in place — this kills the "blink" where the
+    // sort dropdown flashed on every 10-second tick because the entire
+    // main.innerHTML was being rebuilt.
+    renderList();
     if (!marketMood && !_moodFetched && Object.keys(quoteCache).length > 50) {
       _moodFetched = true;
       fetchMarketMood().then((m) => {
         if (cancelled) return;
         marketMood = m;
-        render();
+        render();   // mood card is structural, needs full render once
       }).catch(() => {});
     }
   }, 10_000);
@@ -127,9 +129,9 @@ export function renderStocks(main) {
         ${SECTORS.map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
       </div>
 
-      ${list.length === 0
+      <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-        : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state)).join("")}</div>`}
+        : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state)).join("")}</div>`}</div>
     `;
 
     const searchEl = main.querySelector("#stocks-search");
@@ -190,6 +192,39 @@ export function renderStocks(main) {
           runAiSearch(q, render);
         }
       }
+    });
+  }
+
+  // Quote-tick path: rebuild ONLY the stocks grid. The toolbar (search
+  // input, Top-by-size dropdown, filter pills) stays intact, so the
+  // themed-select doesn't get torn down + re-mounted every 10 seconds
+  // and the dropdown stops blinking.
+  function renderList() {
+    const state = getState();
+    const host = main.querySelector("#stocks-grid-host");
+    if (!host) {
+      // Shell not mounted yet — fall back to full render.
+      render();
+      return;
+    }
+    const list = applyFilters(INSTRUMENTS, filter, state, quoteCache);
+    host.innerHTML = list.length === 0
+      ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
+      : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state)).join("")}</div>`;
+    // Re-wire the per-card listeners since the grid innerHTML was replaced.
+    host.querySelectorAll(".stock-card").forEach(card => {
+      card.addEventListener("click", (e) => {
+        if (e.target.closest(".watchlist-toggle")) return;
+        location.hash = "#/stocks/" + card.dataset.sym;
+      });
+    });
+    host.querySelectorAll(".watchlist-toggle").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const sym = btn.dataset.sym;
+        if (state.watchlist.includes(sym)) removeFromWatchlist(sym);
+        else addToWatchlist(sym);
+      });
     });
   }
 }
