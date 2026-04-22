@@ -27,6 +27,15 @@
 let uidCounter = 0;
 
 export function mountThemedSelect(hostEl, config) {
+  // Clean up any prior instance on this host. Without this, callers that
+  // re-mount on every render (like stocks.js subscribing to quote updates
+  // every few seconds) leave zombie <div.ts-menu> nodes attached to
+  // document.body on every re-mount. Visible symptom: the dropdown
+  // "blinks" as each tick tears down + rebuilds the label, and the body
+  // accumulates dozens of invisible menu nodes with leaked scroll listeners.
+  if (hostEl._themedSelectInstance && typeof hostEl._themedSelectInstance.destroy === "function") {
+    try { hostEl._themedSelectInstance.destroy(); } catch {}
+  }
   const uid = "ts-" + (++uidCounter);
   const state = {
     value: config.value ?? null,
@@ -228,13 +237,23 @@ export function mountThemedSelect(hostEl, config) {
     return from;
   }
 
-  // Public API
-  return {
+  // Public API. The instance is also stashed on the host element so that
+  // mountThemedSelect() on the same host cleans itself up next time (see
+  // the re-mount guard at the top of this function).
+  const instance = {
     setValue,
     getValue: () => state.value,
     setOptions(next) { state.options = normaliseOptions(next); if (state.open) renderMenu(); },
-    destroy() { closeMenu(); menu.remove(); hostEl.classList.remove("themed-select"); hostEl.innerHTML = ""; },
+    destroy() {
+      closeMenu();
+      menu.remove();
+      hostEl.classList.remove("themed-select");
+      hostEl.innerHTML = "";
+      try { delete hostEl._themedSelectInstance; } catch {}
+    },
   };
+  try { hostEl._themedSelectInstance = instance; } catch {}
+  return instance;
 }
 
 function normaliseOptions(arr) {
