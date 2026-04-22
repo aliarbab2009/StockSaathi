@@ -26,8 +26,10 @@ const LINKS_PUBLIC = [
   { route: "news",         label: "News",       icon: "📰" },
 ];
 
-// Keep only the most important 5 in the top bar on desktop to prevent overflow
-const DESKTOP_TOP5_AUTH = ["portfolio", "stocks", "news", "chat", "crash-replay"];
+// Top bar on desktop — keep the 6 main routes. Friends, Report card,
+// Settings live in the avatar dropdown since they're less frequently
+// accessed. Leaderboard matters (it's social/competitive) so it stays here.
+const DESKTOP_TOP_AUTH = ["portfolio", "stocks", "news", "chat", "crash-replay", "leaderboard"];
 
 export function mountNav() {
   const root = document.getElementById("nav-root");
@@ -63,7 +65,7 @@ export function mountNav() {
     const active = currentRoute().name;
     const allLinks = state.isAuthed ? LINKS_AUTH : LINKS_PUBLIC;
     const topLinks = state.isAuthed
-      ? allLinks.filter(l => DESKTOP_TOP5_AUTH.includes(l.route))
+      ? allLinks.filter(l => DESKTOP_TOP_AUTH.includes(l.route))
       : allLinks;
     const pfValue = state.isAuthed ? (state.portfolio.cashPaise + computeHoldingsValue(state)) : 0;
     const ms = marketStatus();
@@ -161,6 +163,7 @@ export function mountNav() {
                   <div class="muted text-xs">@${escapeHtml(state.user.username || "")}</div>
                 </div>
                 <div class="dropdown-divider"></div>
+                <a class="dropdown-item" href="#/leaderboard">🏆 Leaderboard</a>
                 <a class="dropdown-item" href="#/report-card">📋 Report card</a>
                 <a class="dropdown-item" href="#/friends">👥 Friends & transfers</a>
                 <a class="dropdown-item" href="#/settings">⚙️ Settings</a>
