@@ -2339,6 +2339,26 @@ body.coach-docked .coach-panel { transform: translateX(0); box-shadow: none; bor
 .lb-name { font-weight: 600; color: var(--text-strong); }
 .lb-school { font-size: var(--text-xs); color: var(--text-dim); }
 
+/* Leaderboard skeleton loader — shown while the first DB poll is in flight.
+   Shimmering grey bars mimic the real row layout so the transition to
+   actual data doesn't cause layout shift. */
+.lb-skeleton .lb-skel-line {
+  background: linear-gradient(
+    90deg,
+    var(--bg-soft) 0%,
+    var(--divider) 50%,
+    var(--bg-soft) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: lbSkelShimmer 1.4s linear infinite;
+}
+@keyframes lbSkelShimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.lb-skeleton .lb-tab[disabled] { opacity: 0.55; cursor: default; }
+
 /* ============================== REPORT CARD ========================= */
 .report-grade {
   display: flex;
