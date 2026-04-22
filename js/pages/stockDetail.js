@@ -221,7 +221,7 @@ function render(inst, symbol) {
         <div class="card" style="padding: var(--sp-3);">
           ${inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
-            : `<div id="stock-chart-host" style="height: 360px; width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode })}</div>`}
+            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800 })}</div>`}
         </div>
 
         <div class="card stock-why-card" id="stock-why-card" style="margin-top: var(--sp-4);">

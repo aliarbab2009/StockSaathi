@@ -349,7 +349,7 @@ function renderMessagesHtml(state) {
       <div class="coach-message">
         <div class="coach-bubble">
           <div class="coach-bubble-head"><span>${timeAgo(m.ts)}</span></div>
-          <div>${escapeHtml(m.text)}</div>
+          <div style="white-space: pre-wrap; word-wrap: break-word;">${renderMarkdown(m.text)}</div>
         </div>
       </div>
     `;
@@ -373,3 +373,16 @@ function timeAgo(ts) {
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
+
+// Minimal safe Markdown renderer — escapes HTML first, then converts
+// **bold**, *italic*, `code`, and bare URLs. Keeps Gemini's natural
+// Markdown output readable instead of rendering literal asterisks.
+function renderMarkdown(text) {
+  if (!text) return "";
+  let s = escapeHtml(String(text));
+  s = s.replace(/\*\*([^\n*][^\n*]*?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[\s(])\*([^\n*][^\n*]*?)\*(?=[\s.,!?)]|$)/g, "$1<em>$2</em>");
+  s = s.replace(/`([^`\n]+)`/g, "<code style=\"background:var(--bg-soft);padding:1px 4px;border-radius:3px;font-size:0.9em;\">$1</code>");
+  s = s.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, "$1<a href=\"$2\" target=\"_blank\" rel=\"noopener\" style=\"color:var(--brand);text-decoration:underline;\">$2</a>");
+  return s;
+}

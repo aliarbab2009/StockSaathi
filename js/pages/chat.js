@@ -153,7 +153,7 @@ let m_abortController = null;
 function renderBubble(m) {
   if (m.role === "user") {
     return `
-      <div style="align-self: flex-end; max-width: 78%; background: var(--brand); color: white; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: var(--text-md); line-height: 1.5; box-shadow: var(--sh-xs);">
+      <div style="align-self: flex-end; max-width: 78%; background: var(--brand); color: white; padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-size: var(--text-md); line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
         ${escapeHtml(m.text)}
       </div>
     `;
@@ -161,11 +161,32 @@ function renderBubble(m) {
   return `
     <div style="align-self: flex-start; max-width: 82%; display: flex; gap: 10px; align-items: flex-start;">
       <div class="friend-avatar green" style="width: 28px; height: 28px; font-size: 11px; flex-shrink: 0;">SS</div>
-      <div style="background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: 16px 16px 16px 4px; font-size: var(--text-md); line-height: 1.55; color: var(--text); box-shadow: var(--sh-xs);">
-        ${escapeHtml(m.text)}
+      <div style="background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: 16px 16px 16px 4px; font-size: var(--text-md); line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
+        ${renderMarkdown(m.text)}
       </div>
     </div>
   `;
+}
+
+// Minimal safe Markdown renderer for chat bubbles. Escapes HTML first (so
+// user/LLM content can't inject tags), then converts a whitelist of common
+// Gemini-output patterns: **bold**, *italic*, `code`, auto-linked URLs.
+// Paragraph spacing is handled by CSS white-space: pre-wrap on the bubble.
+function renderMarkdown(text) {
+  if (!text) return "";
+  let s = escapeHtml(String(text));
+  // Bold: **text** — run first so the single-* italic regex below doesn't
+  // try to claim the same asterisks.
+  s = s.replace(/\*\*([^\n*][^\n*]*?)\*\*/g, "<strong>$1</strong>");
+  // Italic: single-* text *. Intentionally conservative — no words on
+  // either side of the asterisks (e.g. "rate*up" isn't italic).
+  s = s.replace(/(^|[\s(])\*([^\n*][^\n*]*?)\*(?=[\s.,!?)]|$)/g, "$1<em>$2</em>");
+  // Inline code: `snippet`
+  s = s.replace(/`([^`\n]+)`/g, "<code style=\"background:var(--bg-soft);padding:1px 4px;border-radius:3px;font-size:0.9em;\">$1</code>");
+  // Auto-link bare URLs. Safe because HTML was escaped first so any raw
+  // "http" from user content is already `http` not a tag attribute.
+  s = s.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, "$1<a href=\"$2\" target=\"_blank\" rel=\"noopener\" style=\"color:var(--brand);text-decoration:underline;\">$2</a>");
+  return s;
 }
 
 function renderTyping() {

@@ -1828,13 +1828,25 @@ function renderChatTurn(m) {
   const isUser = m.event_type === "chat_user";
   const text = (m.payload && typeof m.payload.text === "string") ? m.payload.text : "";
   const ts = formatDatePrecise(m.created_at);
+  // User messages stay plain (no markdown — user typed literal text).
+  // Assistant messages render minimal markdown so **bold** looks correct.
+  const body = isUser ? escapeHtml(text) : renderChatMarkdown(text);
   return `
     <div class="admin-chat-bubble ${isUser ? "user" : "assistant"}" title="${escapeAttr(ts)}">
       <div class="admin-chat-role">${isUser ? "USER" : "SAATHI"}</div>
-      <div class="admin-chat-text">${escapeHtml(text)}</div>
+      <div class="admin-chat-text">${body}</div>
       <div class="admin-chat-ts">${escapeHtml(ts)}${m.model && !isUser ? ` · ${escapeHtml(m.model)}` : ""}</div>
     </div>
   `;
+}
+
+function renderChatMarkdown(text) {
+  if (!text) return "";
+  let s = escapeHtml(String(text));
+  s = s.replace(/\*\*([^\n*][^\n*]*?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[\s(])\*([^\n*][^\n*]*?)\*(?=[\s.,!?)]|$)/g, "$1<em>$2</em>");
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  return s;
 }
 
 function formatDateShort(iso) {
