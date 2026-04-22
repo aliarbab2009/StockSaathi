@@ -62,12 +62,15 @@ export function renderChat(main) {
             <input
               id="chat-input"
               class="input"
-              placeholder="Ask about SIPs, P/E, crashes, anything..."
+              placeholder="${m_pending ? "Wait for the response to finish…" : "Ask about SIPs, P/E, crashes, anything..."}"
               autocomplete="off"
               style="flex: 1;"
               maxlength="500"
+              ${m_pending ? "disabled" : ""}
             />
-            <button class="btn btn-primary" id="chat-send" type="submit">Send</button>
+            ${m_pending
+              ? `<button class="btn btn-outline" id="chat-stop" type="button" title="Stop response">◼ Stop</button>`
+              : `<button class="btn btn-primary" id="chat-send" type="submit">Send</button>`}
           </form>
         </div>
 
@@ -86,6 +89,7 @@ export function renderChat(main) {
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (m_pending) return;   // guardrail: don't queue sends while streaming
       const text = input.value.trim();
       if (!text) return;
       input.value = "";
@@ -95,8 +99,16 @@ export function renderChat(main) {
       rerender();
     });
 
+    // Stop-button: aborts the in-flight stream. The sendAndReply handler
+    // detects the aborted state, appends a "stopped" suffix, and releases
+    // m_pending so the input re-enables.
+    main.querySelector("#chat-stop")?.addEventListener("click", () => {
+      if (m_abortController) m_abortController.abort();
+    });
+
     main.querySelectorAll("[data-q]").forEach(btn => {
       btn.addEventListener("click", async () => {
+        if (m_pending) return;
         const q = btn.dataset.q;
         input.value = q;
         form.dispatchEvent(new Event("submit"));
@@ -136,6 +148,7 @@ export function renderChat(main) {
 }
 
 let m_pending = false;
+let m_abortController = null;
 
 function renderBubble(m) {
   if (m.role === "user") {
@@ -177,6 +190,49 @@ function pushAssistant(text) {
 
 async function sendAndReply(userText) {
   m_pending = true;
+  m_abortController = new AbortController();
+
+  // Manually toggle the form DOM so the input disables + Send becomes Stop
+  // without a full re-render (a full re-render would re-attach listeners
+  // and move focus, disrupting the user's typing rhythm).
+  const outer = document.getElementById("main");
+  const input = outer?.querySelector("#chat-input");
+  const sendBtn = outer?.querySelector("#chat-send");
+  if (input) {
+    input.disabled = true;
+    input.placeholder = "Wait for the response to finish…";
+  }
+  if (sendBtn) {
+    sendBtn.outerHTML = `<button class="btn btn-outline" id="chat-stop" type="button" title="Stop response">◼ Stop</button>`;
+    outer.querySelector("#chat-stop")?.addEventListener("click", () => {
+      if (m_abortController) m_abortController.abort();
+    });
+  }
+
+  const reRenderOuter = () => {
+    // Only re-renders the messages region; the form swap above handles the
+    // input + button state transitions without touching message content.
+    const messagesEl = outer?.querySelector("#chat-messages");
+    if (messagesEl) {
+      messagesEl.innerHTML = "";
+      for (const m of chatLog) messagesEl.innerHTML += renderBubble(m);
+      if (m_pending && !chatLog.at(-1)?.streaming) messagesEl.innerHTML += renderTyping();
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  };
+
+  const restoreForm = () => {
+    if (input) {
+      input.disabled = false;
+      input.placeholder = "Ask about SIPs, P/E, crashes, anything...";
+      input.focus();
+    }
+    const stopBtn = outer?.querySelector("#chat-stop");
+    if (stopBtn) {
+      stopBtn.outerHTML = `<button class="btn btn-primary" id="chat-send" type="submit">Send</button>`;
+    }
+  };
+
   const state = getState();
   const messages = chatLog.slice(-12).map(m => ({
     role: m.role === "user" ? "user" : "assistant",
@@ -191,12 +247,7 @@ async function sendAndReply(userText) {
 
   if (wantTools) {
     // Tool-use path: non-streaming, standard runAgent with TOOLS.
-    const main = document.getElementById("main");
-    const mEl = main?.querySelector("#chat-messages");
-    if (mEl) {
-      mEl.innerHTML += renderTyping();
-      mEl.scrollTop = mEl.scrollHeight;
-    }
+    reRenderOuter();   // show typing indicator
     let replyText = null;
     let errorText = null;
     try {
@@ -212,11 +263,13 @@ async function sendAndReply(userText) {
       errorText = "Couldn't reach Saathi right now. Try again in a moment.";
     }
     m_pending = false;
+    m_abortController = null;
     if (replyText && replyText.trim()) {
       pushAssistant(replyText);
     } else {
       pushAssistant(errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
     }
+    restoreForm();
     return;
   }
 
@@ -224,19 +277,20 @@ async function sendAndReply(userText) {
   // token as it arrives. Gives an instant-feel first character.
   const placeholderIdx = chatLog.length;
   chatLog.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
-  rerender();
+  reRenderOuter();
 
   const system = `${SYSTEM_PROMPT}\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
-  let fullText = null;
+  let result = null;
   try {
-    fullText = await streamChat({
+    result = await streamChat({
       system,
       messages,
       profile: "chat",
+      signal: m_abortController.signal,
       onToken: (delta) => {
         if (chatLog[placeholderIdx]) {
           chatLog[placeholderIdx].text += delta;
-          rerender();
+          reRenderOuter();
         }
       },
     });
@@ -244,16 +298,25 @@ async function sendAndReply(userText) {
     console.warn("coach stream error:", e);
   }
   m_pending = false;
-  if (chatLog[placeholderIdx]) {
-    chatLog[placeholderIdx].streaming = false;
-    if (!chatLog[placeholderIdx].text.trim()) {
-      chatLog[placeholderIdx].text = fullText && fullText.trim()
-        ? fullText
-        : "Couldn't reach Saathi right now. Try again in a moment.";
+  m_abortController = null;
+  const entry = chatLog[placeholderIdx];
+  if (entry) {
+    entry.streaming = false;
+    if (result?.aborted) {
+      // User clicked Stop — keep whatever streamed so far and note the stop.
+      if (entry.text.trim()) entry.text = entry.text.trim() + " \n\n_(stopped)_";
+      else entry.text = "_(stopped)_";
+    } else if (result?.error && !entry.text.trim()) {
+      entry.text = "Couldn't reach Saathi right now. Try again in a moment.";
+    } else if (!entry.text.trim() && result?.text) {
+      entry.text = result.text;
+    } else if (!entry.text.trim()) {
+      entry.text = "Saathi went quiet. Try asking again in a moment.";
     }
     saveChat();
-    rerender();
+    reRenderOuter();
   }
+  restoreForm();
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }

@@ -15,6 +15,7 @@ const CHAT_LOG_KEY = "ss.coachchat.v1";
 
 let chatHistory = loadChat();
 let pending = false;
+let abortController = null;
 let newsSnap = [];
 let root;
 let fab;
@@ -162,8 +163,10 @@ function render() {
     </div>
 
     <form class="coach-chat-input" id="coach-form" autocomplete="off">
-      <input id="coach-input" placeholder="Ask about any stock, crypto, or concept…" maxlength="300" ${pending ? "disabled" : ""} />
-      <button type="submit" id="coach-send" ${pending ? "disabled" : ""}>${pending ? "…" : "Send"}</button>
+      <input id="coach-input" placeholder="${pending ? "Wait for the response…" : "Ask about any stock, crypto, or concept…"}" maxlength="300" ${pending ? "disabled" : ""} />
+      ${pending
+        ? `<button type="button" id="coach-stop" title="Stop response">◼</button>`
+        : `<button type="submit" id="coach-send">Send</button>`}
     </form>
 
     <div class="coach-footer">
@@ -176,6 +179,12 @@ function render() {
 
   root.querySelector("#coach-close-btn")?.addEventListener("click", () => {
     setSetting("coachPanelOpen", false);
+  });
+
+  // Stop button aborts in-flight streaming. Whatever streamed so far stays
+  // in the chat history; pending flips off and the Send button returns.
+  root.querySelector("#coach-stop")?.addEventListener("click", () => {
+    if (abortController) abortController.abort();
   });
 
   const form = root.querySelector("#coach-form");
@@ -198,6 +207,7 @@ function render() {
     // (stock prices, portfolio, news) we fall through to the non-streaming
     // tool-use path below.
     if (!needsLiveData(text)) {
+      abortController = new AbortController();
       const placeholderIdx = chatHistory.length;
       chatHistory.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
       render();
@@ -208,28 +218,45 @@ function render() {
         role: m.role === "user" ? "user" : "assistant",
         content: m.text,
       }));
-      let full = null;
+      let result = null;
       try {
-        full = await streamChat({
+        result = await streamChat({
           system,
           messages,
           profile: "chat",
+          signal: abortController.signal,
           onToken: (delta) => {
             if (chatHistory[placeholderIdx]) {
               chatHistory[placeholderIdx].text += delta;
-              render();
+              // Light-touch update — rewrite only the messages scroller, not
+              // the whole panel (full render loses the input focus).
+              const ms = root?.querySelector("#coach-messages-scroll");
+              if (ms) {
+                ms.innerHTML = renderMessagesHtml(getState());
+                ms.scrollTop = ms.scrollHeight;
+              }
             }
           },
         });
       } catch (e) { console.warn("coach stream error:", e); }
-      if (chatHistory[placeholderIdx]) {
-        chatHistory[placeholderIdx].streaming = false;
-        if (!chatHistory[placeholderIdx].text.trim()) {
-          chatHistory[placeholderIdx].text = full && full.trim() ? full : "Couldn't reach Saathi right now. Try again in a moment.";
+      const entry = chatHistory[placeholderIdx];
+      if (entry) {
+        entry.streaming = false;
+        if (result?.aborted) {
+          entry.text = entry.text.trim()
+            ? entry.text.trim() + " \n\n_(stopped)_"
+            : "_(stopped)_";
+        } else if (result?.error && !entry.text.trim()) {
+          entry.text = "Couldn't reach Saathi right now. Try again in a moment.";
+        } else if (!entry.text.trim()) {
+          entry.text = result?.text && result.text.trim()
+            ? result.text
+            : "Saathi went quiet. Try asking again.";
         }
       }
       saveChat();
       pending = false;
+      abortController = null;
       render();
       return;
     }

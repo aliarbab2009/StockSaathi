@@ -489,7 +489,7 @@ export { TOOLS };
 // Returns the full assembled text at completion, or null on failure.
 // Falls back cleanly — the caller should treat null as "use non-stream path".
 // -----------------------------------------------------------------------------
-export async function streamChat({ system, messages, profile = "chat", onToken }) {
+export async function streamChat({ system, messages, profile = "chat", onToken, signal }) {
   const body = {
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -507,14 +507,17 @@ export async function streamChat({ system, messages, profile = "chat", onToken }
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
       body: JSON.stringify(body),
+      signal,
     });
   } catch (e) {
+    if (e?.name === "AbortError") return { aborted: true, text: "" };
     console.warn("streamChat fetch:", e);
-    return null;
+    return { error: e?.message || "network_error", text: "" };
   }
   if (!res.ok || !res.body) {
-    console.warn("streamChat http:", res.status);
-    return null;
+    const errText = await res.text().catch(() => "");
+    console.warn("streamChat http:", res.status, errText.slice(0, 200));
+    return { error: `http_${res.status}`, text: "" };
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -546,10 +549,11 @@ export async function streamChat({ system, messages, profile = "chat", onToken }
       }
     }
   } catch (e) {
+    if (e?.name === "AbortError") return { aborted: true, text: fullText };
     console.warn("streamChat read error:", e);
-    return fullText || null;
+    return { error: e?.message || "read_error", text: fullText };
   }
-  return fullText.trim() || null;
+  return { text: fullText.trim() };
 }
 
 // -----------------------------------------------------------------------------
