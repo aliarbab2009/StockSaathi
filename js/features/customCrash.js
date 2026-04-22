@@ -409,9 +409,33 @@ async function callLlmForBracket(description) {
   const text = body?.choices?.[0]?.message?.content;
   const parsed = parseJsonLoose(text);
   if (!parsed) throw new Error("phase1_non_json");
-  // Basic sanity
+  // Normalise loose LLM outputs.
+  // Dates: the prompt asks for YYYY-MM-DD but Gemini sometimes emits full
+  // ISO-8601 with T00:00:00Z — just slice the date portion.
+  if (typeof parsed.startIso === "string") parsed.startIso = parsed.startIso.slice(0, 10);
+  if (typeof parsed.endIso === "string") parsed.endIso = parsed.endIso.slice(0, 10);
+  // Symbol: must match Yahoo's ticker shape (letters/digits/caret/dot/dash).
+  // "GST" or similar made-up strings → fall back to the index.
+  const validSymbolRe = /^[A-Za-z0-9.\-\^]{1,24}$/;
+  const knownSymbols = new Set(["^NSEI", "^BSESN", "^NSEBANK", "^CNXIT", "^CNXFMCG", "^CNXAUTO", "^CNXPHARMA"]);
+  if (!parsed.symbol || typeof parsed.symbol !== "string" ||
+      !validSymbolRe.test(parsed.symbol) ||
+      // Single-word non-ticker like "GST", "NIFTY", "INDIA"
+      (!knownSymbols.has(parsed.symbol) && !parsed.symbol.includes(".") && !parsed.symbol.startsWith("^"))) {
+    parsed.symbol = "^NSEI";
+  }
+  // Date sanity
   if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed.startIso || "")) throw new Error("phase1_bad_start");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed.endIso || "")) throw new Error("phase1_bad_end");
+  // Widen too-narrow ranges — a 30-day window is often too tight for a good
+  // replay. Extend endIso by 60 days if < 30 trading days apart to give the
+  // market time to show a full drawdown + partial recovery.
+  const startMs = new Date(parsed.startIso).getTime();
+  const endMs = new Date(parsed.endIso).getTime();
+  if (!isNaN(startMs) && !isNaN(endMs) && endMs - startMs < 30 * 86400_000) {
+    const wider = new Date(startMs + 90 * 86400_000);
+    parsed.endIso = wider.toISOString().slice(0, 10);
+  }
   return parsed;
 }
 
