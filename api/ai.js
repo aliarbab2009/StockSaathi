@@ -730,6 +730,8 @@ export default async function handler(req) {
       case "admin-auth-reset":    return await opAdminAuthReset(req, origin);
       case "admin-auth-magiclink": return await opAdminAuthMagicLink(req, origin);
       case "admin-auth-update-email": return await opAdminAuthUpdateEmail(req, origin);
+      case "admin-auth-set-password": if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opAdminAuthSetPassword(req, origin);
+      case "auth-resolve-username":   if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opAuthResolveUsername(req, origin);
       case "admin-auth-force-confirm": return await opAdminAuthForceConfirm(req, origin);
       case "admin-vercel-deployments": return await opAdminVercelDeployments(req, origin, url);
       case "admin-vercel-deployment":  return await opAdminVercelDeployment(req, origin, url);
@@ -2046,6 +2048,66 @@ async function opAdminAuthUpdateEmail(req, origin) {
   });
   if (!result.ok) return j(502, { error: "update_failed" }, origin);
   return j(200, { ok: true }, origin);
+}
+
+// Admin: set a new password for a user. Bypasses email — admin just types
+// a new password in the admin panel and the user can log in with it. Use
+// case: user can't/won't use the password-reset email flow.
+// Supabase stores passwords as bcrypt one-way hashes, so this is the ONLY
+// way to issue a working known password (even raw DB access can't decrypt).
+async function opAdminAuthSetPassword(req, origin) {
+  const gate = checkAdmin(req);
+  if (!gate.ok) return j(401, { error: gate.reason }, origin);
+  const parsed = await parseWriteBody(req);
+  if (parsed.err) return j(400, { error: parsed.err }, origin);
+  const { body, reason } = parsed;
+  const userId = String(body?.userId || "").trim();
+  const password = String(body?.password || "");
+  if (!userId) return j(400, { error: "missing_userId" }, origin);
+  if (password.length < 8) return j(400, { error: "password_too_short" }, origin);
+  if (password.length > 128) return j(400, { error: "password_too_long" }, origin);
+
+  const result = await auditWrap(req, {
+    action: "auth_set_password", targetKind: "auth_user", targetUserId: userId, targetId: userId, reason,
+    note: `password_length=${password.length}`,   // don't log the plaintext password
+  }, async () => {
+    const r = await supabaseAuthAdmin(`/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ password }),
+    });
+    const rb = r.ok ? await r.json() : await r.text();
+    return { beforeState: { userId }, afterState: { updated: r.ok, status: r.status }, ok: r.ok };
+  });
+  if (!result.ok) return j(502, { error: "password_set_failed" }, origin);
+  return j(200, { ok: true }, origin);
+}
+
+// Public: resolve a username to an email address for the login flow. Runs
+// with service_role to bypass RLS (anon users can't SELECT the email column
+// on profiles they don't own, which is what's been breaking username logins
+// with "No account with that username"). Intentionally only returns the
+// email — never username/display_name/age/etc. Any attacker can already
+// enumerate usernames from leaderboards, so leaking email-existence for a
+// username isn't a new attack surface.
+async function opAuthResolveUsername(req, origin) {
+  let body;
+  try { body = await req.json(); } catch { return j(400, { error: "bad_body" }, origin); }
+  const username = String(body?.username || "").trim().toLowerCase().replace(/^@/, "");
+  if (!username) return j(400, { error: "missing_username" }, origin);
+  if (!/^[a-z0-9_.-]{1,40}$/.test(username)) return j(400, { error: "bad_username" }, origin);
+  try {
+    const r = await sbAdminFetch(
+      `/rest/v1/profiles?select=email&username=ilike.${encodeURIComponent(username)}&limit=1`
+    );
+    if (!r.ok) return j(502, { error: "lookup_failed" }, origin);
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows.length || !rows[0].email) {
+      return j(404, { error: "not_found" }, origin);
+    }
+    return j(200, { email: rows[0].email }, origin);
+  } catch (e) {
+    return j(502, { error: "resolve_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
 }
 
 async function opAdminAuthForceConfirm(req, origin) {

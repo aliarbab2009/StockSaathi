@@ -236,15 +236,29 @@ export async function loginAccount({ emailOrUsername, password }) {
 
   const client = await sb();
   if (client) {
-    // Resolve to email. If input contains '@', treat as email directly (also
-    // try profiles lookup in case someone has @ in their username — unlikely
-    // but cheap).
+    // Resolve to email. If input contains '@', treat as email directly.
+    // Otherwise use the server-side resolver (service_role) — anon RLS on
+    // the profiles table blocks us from SELECTing another user's email
+    // column, which is why direct client queries were 100% returning
+    // "No account with that username" for any valid username. The
+    // resolver endpoint does the lookup safely.
     let email = q;
     if (!q.includes("@")) {
-      const { data } = await client.from("profiles")
-        .select("email").ilike("username", q).maybeSingle();
-      if (!data?.email) throw new Error("No account with that username.");
-      email = data.email;
+      try {
+        const res = await fetch("/api/ai?op=auth-resolve-username", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: q }),
+        });
+        if (res.status === 404) throw new Error("No account with that username.");
+        if (!res.ok) throw new Error("Couldn't look up that username. Try your email instead.");
+        const data = await res.json();
+        if (!data?.email) throw new Error("No account with that username.");
+        email = data.email;
+      } catch (e) {
+        if (e.message) throw e;
+        throw new Error("Couldn't look up that username. Try your email instead.");
+      }
     }
     const { data, error } = await client.auth.signInWithPassword({ email, password });
     if (error) throw new Error(prettifySbError(error.message));

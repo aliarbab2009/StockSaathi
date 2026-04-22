@@ -747,10 +747,14 @@ function paintUserModal() {
         </div>
       </div>
       <div class="flex gap-2 wrap" style="margin-top: var(--sp-3);">
-        <button class="btn btn-ghost btn-sm" data-auth-reset="${escapeAttr(profile.email)}">Send reset email</button>
-        <button class="btn btn-ghost btn-sm" data-auth-magic="${escapeAttr(profile.email)}">Magic link</button>
+        <button class="btn btn-ghost btn-sm" data-auth-reset="${escapeAttr(profile.email)}" title="Sends a password-reset email to the user. They click it to choose a new password themselves.">Send reset email</button>
+        <button class="btn btn-ghost btn-sm" data-auth-magic="${escapeAttr(profile.email)}" title="Generates a one-time magic link. User clicks it and is logged in without a password.">Magic link</button>
+        <button class="btn btn-ghost btn-sm" data-auth-set-password="${escapeAttr(profile.id)}" data-username="${escapeAttr(profile.username)}" title="Set a new password for this user (bypasses email). They'll use it to log in. Passwords themselves CAN'T be retrieved — they're one-way bcrypt-hashed.">Set password</button>
         ${authMeta.bannedUntil ? `<button class="btn btn-ghost btn-sm" data-unban="${escapeAttr(profile.id)}">Unban</button>` : `<button class="btn btn-ghost btn-sm" data-ban="${escapeAttr(profile.id)}" style="color:var(--negative);">Ban</button>`}
         <button class="btn btn-ghost btn-sm" data-delete-user="${escapeAttr(profile.id)}" data-username="${escapeAttr(profile.username)}" style="color:var(--negative);">Delete account</button>
+      </div>
+      <div class="muted text-xs" style="margin-top: var(--sp-2); line-height: 1.5;">
+        Note: actual passwords cannot be shown. Supabase (like every real auth system) stores them as <strong>bcrypt one-way hashes</strong> — mathematically irreversible. "Set password" is the admin equivalent of reading a password.
       </div>
       ` : `<div class="muted text-sm">Unreachable (service-role needed).</div>`}</div>
 
@@ -805,6 +809,19 @@ function wireModalActions(profile) {
   host.querySelectorAll("[data-auth-magic]").forEach(b => b.addEventListener("click", async () => {
     const reason = prompt("Reason (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
     try { const r = await adminPost("/api/ai?op=admin-auth-magiclink", { email: b.dataset.authMagic, reason }); toast({ kind: "success", message: "Link: " + (r.link || "generated.") }); } catch (e) { toast({ kind: "error", message: e.message }); }
+  }));
+  host.querySelectorAll("[data-auth-set-password]").forEach(b => b.addEventListener("click", async () => {
+    const username = b.dataset.username || "this user";
+    const newPw = prompt(`Set a NEW password for @${username}. The user can log in with this password (minimum 8 characters). Passwords CAN'T be retrieved — this is the admin equivalent of reading one.`);
+    if (!newPw) return;
+    if (newPw.length < 8) { toast({ kind: "error", message: "Password must be at least 8 characters." }); return; }
+    if (newPw.length > 128) { toast({ kind: "error", message: "Password must be 128 characters or less." }); return; }
+    const reason = prompt("Reason for setting this password (≥ 8 chars, audit-logged):");
+    if (!reason || reason.trim().length < 8) return;
+    try {
+      await adminPost("/api/ai?op=admin-auth-set-password", { userId: b.dataset.authSetPassword, password: newPw, reason });
+      toast({ kind: "success", message: `Password set for @${username}. They can now log in with it.` });
+    } catch (e) { toast({ kind: "error", message: e.message }); }
   }));
   host.querySelectorAll("[data-ban]").forEach(b => b.addEventListener("click", async () => {
     const reason = prompt("Reason for ban (≥ 8 chars):"); if (!reason || reason.trim().length < 8) return;
