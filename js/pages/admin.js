@@ -489,7 +489,7 @@ function renderUsersRowsHtml(list) {
       <td class="tabular ${u.unrealizedPLPct >= 0 ? "positive" : "negative"}">${u.unrealizedPLPct >= 0 ? "+" : ""}${u.unrealizedPLPct.toFixed(1)}%</td>
       <td class="tabular">${u.totalTradedValueRupees ? formatRupees(u.totalTradedValueRupees * 100, { compact: true }) : "—"}</td>
       <td class="tabular">${u.daysSinceLastTrade != null ? u.daysSinceLastTrade + "d" : "—"}</td>
-      <td class="dim text-xs">${formatDateShort(u.lastActive)}</td>
+      <td class="dim text-xs" title="${escapeAttr(formatDatePrecise(u.lastActive))}">${formatDateShort(u.lastActive)}</td>
       <td><button class="btn btn-ghost btn-sm" data-quick-reset="${escapeAttr(u.id)}" title="Reset portfolio">⟲</button></td>
     </tr>`).join("");
 }
@@ -647,10 +647,10 @@ function paintUserModal() {
         </div>
         <div>
           ${kv("Parent email", profile.parent_email)}
-          ${kv("Consent at", profile.parent_consent_at ? formatDateShort(profile.parent_consent_at) : "—")}
+          ${kv("Consent at", profile.parent_consent_at ? formatDatePrecise(profile.parent_consent_at) : "—")}
           ${kv("Onboarded", profile.onboarded ? "Yes" : "No")}
-          ${kv("Joined", formatDateShort(profile.created_at))}
-          ${kv("Updated", formatDateShort(profile.updated_at))}
+          ${kv("Joined", formatDatePrecise(profile.created_at))}
+          ${kv("Last active", formatDatePrecise(profile.updated_at))}
           ${kv("ID", profile.id)}
         </div>
       </div>
@@ -714,10 +714,10 @@ function paintUserModal() {
         </tr>`).join("")}
       </tbody></table>` : `<div class="muted text-sm">No transfers.</div>`}</div>
 
-    <div id="sec-coach"><div class="admin-user-section-label">10. Coach messages (${coachMessages?.length || 0})</div>
-      ${coachMessages?.length ? `<div class="flex-col gap-2">${coachMessages.slice(0, 50).map(m => `
+    <div id="sec-coach"><div class="admin-user-section-label">10. Coach chat / messages (${coachMessages?.length || 0})</div>
+      ${coachMessages?.length ? `<div class="flex-col gap-2">${coachMessages.map(m => `
         <details class="admin-coach-row">
-          <summary><strong>${escapeHtml(m.event_type || "—")}</strong> · ${escapeHtml(m.trigger_symbol || "—")} · <span class="dim">${formatDateShort(m.created_at)}</span> · model=${escapeHtml(m.model || "—")}
+          <summary><strong>${escapeHtml(m.event_type || "—")}</strong> · ${escapeHtml(m.trigger_symbol || "—")} · <span class="dim" style="font-family: var(--font-mono, ui-monospace, monospace);">${formatDatePrecise(m.created_at)}</span> · model=${escapeHtml(m.model || "—")}
           <button class="btn btn-ghost btn-sm" data-delete-coach="${escapeAttr(m.id)}" style="float:right;">delete</button></summary>
           <pre class="admin-coach-payload">${escapeHtml(JSON.stringify(m.payload || {}, null, 2))}</pre>
         </details>`).join("")}</div>` : `<div class="muted text-sm">No coach messages.</div>`}</div>
@@ -1614,7 +1614,7 @@ async function renderQuoteCacheView(body) {
     <div class="dim text-xs" style="margin-bottom: 6px;">${rows.length} symbols cached</div>
     <div class="admin-table-wrap">
       <table class="admin-table">
-        <thead><tr><th>Symbol</th><th>Price</th><th>Change %</th><th>Day H/L</th><th>Volume</th><th>Source</th><th>Age</th><th>Act</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Price</th><th>Change %</th><th>Day H/L</th><th title="Number of shares traded today">Shares traded</th><th>Source</th><th>Age</th><th>Act</th></tr></thead>
         <tbody>
           ${rows.slice(0, 500).map(r => `<tr>
             <td class="font-semi">${escapeHtml(r.symbol)}</td>
@@ -1753,6 +1753,25 @@ function formatDateShort(iso) {
   if (diff < 86400_000) return Math.floor(diff / 3600_000) + "h";
   if (diff < 7 * 86400_000) return Math.floor(diff / 86400_000) + "d";
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" });
+}
+
+// Audit-grade timestamp: "2026-04-22 18:35:42.193 IST" — 24-hour IST with
+// millisecond precision. Used on admin fields where knowing the exact
+// moment matters (signup, last active, individual coach messages).
+function formatDatePrecise(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return "—";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  }).formatToParts(d).reduce((a, p) => (a[p.type] = p.value, a), {});
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  // "hour" can be "24" at midnight in some locales; normalise to "00".
+  const hour = parts.hour === "24" ? "00" : parts.hour;
+  return `${parts.year}-${parts.month}-${parts.day} ${hour}:${parts.minute}:${parts.second}.${ms} IST`;
 }
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
