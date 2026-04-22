@@ -221,6 +221,7 @@ function render() {
         content: m.text,
       }));
       let result = null;
+      let rafPending = false;
       try {
         result = await streamChat({
           system,
@@ -228,15 +229,20 @@ function render() {
           profile: "chat",
           signal: abortController.signal,
           onToken: (delta) => {
-            if (chatHistory[placeholderIdx]) {
-              chatHistory[placeholderIdx].text += delta;
-              // Light-touch update — rewrite only the messages scroller, not
-              // the whole panel (full render loses the input focus).
-              const ms = root?.querySelector("#coach-messages-scroll");
-              if (ms) {
-                ms.innerHTML = renderMessagesHtml(getState());
-                ms.scrollTop = ms.scrollHeight;
-              }
+            if (!chatHistory[placeholderIdx]) return;
+            chatHistory[placeholderIdx].text += delta;
+            // Coalesce token updates to 60fps max — gemini streams faster
+            // than the main thread can rebuild the messages list on phones.
+            if (!rafPending) {
+              rafPending = true;
+              requestAnimationFrame(() => {
+                rafPending = false;
+                const ms = root?.querySelector("#coach-messages-scroll");
+                if (ms) {
+                  ms.innerHTML = renderMessagesHtml(getState());
+                  ms.scrollTop = ms.scrollHeight;
+                }
+              });
             }
           },
         });

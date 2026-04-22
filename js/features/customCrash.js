@@ -14,14 +14,34 @@
 // returned JSON through a shape validator before accepting.
 // =============================================================================
 
-const SYSTEM_PROMPT = `You are a financial-history reconstructor for Indian markets. Given ANY description — specific, vague, mis-spelt, niche, obscure, or approximate — your job is to figure out what Indian event the user probably means and build a crash-style day-by-day replay for it.
+// Phase 1: pick the event's date range + target index. Tiny prompt, tiny
+// response, ~500ms. The server then fetches REAL historical daily closes
+// from Yahoo for that range in phase 2, which get fed back into phase 3
+// so the final replay is grounded in real data — no hallucinated Nifty
+// levels ever again.
+const PHASE1_PROMPT = `You are Saathi's historical-event-date picker for Indian markets. Given a free-form description of any Indian market event, return ONLY JSON:
+{
+  "startIso": "<YYYY-MM-DD — first trading day of the event>",
+  "endIso":   "<YYYY-MM-DD — last day of the recovery/stabilisation window you want to plot, max 140 trading days after startIso>",
+  "symbol":   "^NSEI" | "^BSESN" | "<any NSE ticker>.NS",
+  "hint":     "<one-sentence identification of which actual event this probably refers to>"
+}
+
+Rules:
+- startIso must be before endIso.
+- If the event affected a specific stock more than the index (e.g. "Paytm IPO crash", "Adani group"), set symbol to that ticker (e.g. "PAYTM.NS", "ADANIENT.NS"). Otherwise default to ^NSEI.
+- For NON-crashes (rallies/booms/IPOs up), still pick a range — we'll later judge if it's a valid down-event. DON'T refuse here.
+- If the description is totally unrelated to Indian markets, pick any recent 60-day Nifty range and we'll refuse downstream.
+- Return ONLY the JSON. No prose, no code fences.`;
+
+const SYSTEM_PROMPT = `You are a financial-history reconstructor for Indian markets. You are given REAL daily closing-price data from Yahoo Finance for the event's date range. Use the real numbers — do NOT hallucinate alternatives.
 
 YOUR DEFAULT IS TO BUILD, NOT REFUSE.
-- If the query is a real crash/correction/scandal/panic: reconstruct it from memory, including Nifty/Sensex levels and dates. Approximations are fine — the user knows the numbers are estimates.
-- If the query is a real event but not obviously a crash (e.g. "Pani Puri vendor GST notice", "Adani board reshuffle", "SEBI circular on f&o"): think about how that event REVERBERATED through listed stocks — did FMCG dip, did a related sector sell off, did mid-caps wobble on sentiment? Build the replay around the PROXY market reaction, describing it honestly.
-- If the query is mis-spelt or vague ("the one waterballl golgappa thingy"): figure out what the user probably means (the viral 2023 pani puri vendor GST-notice story) and build a replay of the consumer-stock / FMCG / mid-cap sentiment wobble around that news cycle. Even if the actual index move was small, construct a believable scaled replay.
-- If the query is clearly an UP event (bull run, IPO pop, positive earnings blowout) and the user explicitly called it a rally/boom/surge: return { "error": "not_a_crash", "message": "<one sentence suggesting a related DOWN event they could try instead>" }. Otherwise, try to build it.
-- ONLY refuse with "not_a_crash" if the query is so totally unrelated to Indian markets that no construction is possible (e.g. "my dog's birthday", "recipe for biryani"). In that case, suggest they try something like "Harshad Mehta 1992" or "Adani Hindenburg 2023".
+- Identify the event the user is describing. The provided REAL market data is for the date range you picked in phase 1.
+- Use the REAL startIndex (first close), troughIndex (lowest close), endIndex (last close), and troughDay (index of lowest close). These are facts, not estimates.
+- Write narration + description that truthfully explain what happened on each key date using the real numbers.
+- If the real data shows the index WENT UP (not a crash), return: { "error": "not_a_crash", "message": "<one sentence noting the real move was positive and suggesting a related DOWN event>" }
+- ONLY refuse with "not_a_crash" if the user's query is clearly non-market (sports, recipes).
 
 If you're building a scenario, return a JSON object with this EXACT shape:
 
@@ -47,13 +67,12 @@ If you're building a scenario, return a JSON object with this EXACT shape:
 Rules:
 - Return ONLY the JSON object. No prose, no code fences, no commentary.
 - All numbers are plain JSON numbers, not strings.
-- troughDay MUST be between 1 and totalDays-1.
-- startIndex and endIndex must be positive.
-- troughIndex must be lower than startIndex.
-- indexDrop MUST be negative, at least -3 (i.e. a ≥3% drop — if the real event was smaller, scale it proportionally so the replay is still instructive; make this clear in the description).
-- Include 4 to 7 keyMoments covering: start context, first panic, trough, any mid-course inflection, recovery or finish.
-- If you're uncertain about exact numbers, APPROXIMATE confidently. The description can note "approximate reconstruction" but the numbers must still be filled in.
-- REFUSE ONLY for clearly non-market topics (sports, recipes, weather, personal life). Mis-spelt queries, vague references, and niche business/regulatory events are ALL in scope — build a plausible replay for them.`;
+- startIndex, troughIndex, endIndex, troughDay MUST come from the REAL data provided — no fabrication.
+- indexDrop = ((troughIndex - startIndex) / startIndex) * 100, rounded to 1 decimal. Will be negative for real crashes.
+- totalDays = number of trading days in the provided data (== data.length).
+- Include 4 to 7 keyMoments whose "day" values map to actual indices in the provided data array (not fake dates).
+- keyMoment narrations reference the REAL price on that day where useful.
+- REFUSE ONLY if the real data clearly shows an UP move or the query is non-market (sports/recipes).`;
 
 const MAX_DAYS = 140;
 
@@ -207,36 +226,132 @@ export async function generateCustomCrash(description) {
     return cached;
   }
 
-  // 3. Cache miss → call the LLM (and write back on success).
+  // 3. Cache miss → THREE-PHASE grounded generation:
+  //    a) LLM picks the event's startIso/endIso/symbol
+  //    b) Server fetches REAL daily closes from Yahoo for that range
+  //    c) LLM generates the replay JSON using the real numbers (no hallucination)
   let lastErr = null;
+
+  // Phase A: pick dates + symbol
+  let bracket;
+  try {
+    bracket = await callLlmForBracket(description);
+  } catch (e) {
+    throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
+  }
+  if (!bracket?.startIso || !bracket?.endIso) {
+    throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing.");
+  }
+
+  // Phase B: fetch real historical data
+  let history;
+  try {
+    history = await fetchHistory(bracket.symbol || "^NSEI", bracket.startIso, bracket.endIso);
+  } catch (e) {
+    throw new Error("Couldn't fetch historical prices for that date range. The market data might be unavailable for this period.");
+  }
+  if (!history?.points?.length || history.points.length < 5) {
+    throw new Error("Not enough historical data for that range. Try a different event or check your date phrasing.");
+  }
+
+  // Real data gives us the hard truth about whether this was a crash or rally.
+  const closes = history.points.map(p => p.c);
+  const startIdx = closes[0];
+  const troughIdx = Math.min(...closes);
+  const endIdx = closes[closes.length - 1];
+  const troughDayIdx = closes.indexOf(troughIdx);
+  const realDropPct = ((troughIdx - startIdx) / startIdx) * 100;
+
+  // If the real index went UP the whole time, this isn't a crash event.
+  if (realDropPct >= -2) {
+    const err = new Error(`Real market data for ${bracket.startIso} to ${bracket.endIso} doesn't show a notable drop (${realDropPct.toFixed(1)}%). Pick a real crash event like 'COVID March 2020' or 'Harshad Mehta 1992'.`);
+    err.kind = "not_a_crash";
+    throw err;
+  }
+
+  // Phase C: generate narrative with real data in context
   for (const { profile, temperature } of ATTEMPTS) {
     try {
-      const meta = await callLlmForMeta(description, temperature, profile);
-      // LLM may refuse non-crash queries (rallies, tiny moves) — surface cleanly.
+      const meta = await callLlmWithHistory(description, bracket, history, temperature, profile);
       if (meta && meta.error === "not_a_crash") {
         const msg = typeof meta.message === "string" && meta.message.trim()
           ? meta.message.trim()
-          : "That event was a rally, not a crash. The time-travel replay is built for market drops — try something like 'Diwali 2008 correction' instead.";
-        // Do NOT cache — refusals are often wrong on niche or vague queries.
-        // Next retry (possibly with Gemini active, or just a different mood)
-        // should be free to produce a real replay.
+          : `That event wasn't a crash (real ${bracket.symbol} move was ${realDropPct.toFixed(1)}%). Try 'Harshad Mehta 1992' or 'Adani Hindenburg 2023'.`;
         const err = new Error(msg);
         err.kind = "not_a_crash";
         throw err;
       }
+      // Overwrite any hallucinated numbers with the REAL ones. The LLM's
+      // numbers are a sanity cross-check; the real-data numbers are truth.
+      if (meta && typeof meta === "object") {
+        meta.startIndex = Math.round(startIdx * 100) / 100;
+        meta.troughIndex = Math.round(troughIdx * 100) / 100;
+        meta.endIndex = Math.round(endIdx * 100) / 100;
+        meta.troughDay = troughDayIdx;
+        meta.totalDays = history.points.length;
+        meta.indexDrop = Math.round(realDropPct * 10) / 10;
+        meta.startLabel = meta.startLabel || formatIsoToLabel(bracket.startIso);
+        meta.endLabel = meta.endLabel || formatIsoToLabel(bracket.endIso);
+      }
       reshape(meta);
       const valid = validate(meta);
       if (!valid.ok) { lastErr = valid.error; continue; }
+      // Attach real daily closes so buildScenario can use them for the
+      // day-by-day curve instead of interpolating.
+      meta._realCloses = closes;
+      meta._startIso = bracket.startIso;
       const scenario = buildScenario(meta, hash);
       rememberQuery(queryKey(description), scenario.id);
       cacheReplayPut(hash, description, scenario);
       return scenario;
     } catch (e) {
-      if (e?.kind === "not_a_crash") throw e;   // don't retry on a deliberate refusal
+      if (e?.kind === "not_a_crash") throw e;
       lastErr = e?.message || String(e);
     }
   }
   throw new Error(lastErr || "The coach couldn't build that one. Try rephrasing.");
+}
+
+function formatIsoToLabel(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  } catch { return iso; }
+}
+
+// Phase A: ask Gemini for the event's date range + target symbol.
+async function callLlmForBracket(description) {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messages: [
+        { role: "system", content: PHASE1_PROMPT },
+        { role: "user", content: String(description).trim().slice(0, 400) },
+      ],
+      temperature: 0.1,
+      max_tokens: 200,
+      response_format: { type: "json_object" },
+      profile: "json",
+    }),
+  });
+  if (!res.ok) throw new Error(`phase1_http_${res.status}`);
+  const body = await res.json();
+  const text = body?.choices?.[0]?.message?.content;
+  const parsed = parseJsonLoose(text);
+  if (!parsed) throw new Error("phase1_non_json");
+  // Basic sanity
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed.startIso || "")) throw new Error("phase1_bad_start");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed.endIso || "")) throw new Error("phase1_bad_end");
+  return parsed;
+}
+
+// Phase B: fetch Yahoo historical data via our server-side proxy.
+async function fetchHistory(symbol, fromIso, toIso) {
+  const qs = `symbol=${encodeURIComponent(symbol)}&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
+  const res = await fetch(`/api/ai?op=history&${qs}`);
+  if (!res.ok) throw new Error(`history_http_${res.status}`);
+  return await res.json();
 }
 
 // Mutate the raw LLM output into something the validator/builder can
@@ -283,18 +398,45 @@ function parseJsonLoose(text) {
   return null;
 }
 
-async function callLlmForMeta(description, temperature, profile) {
+async function callLlmWithHistory(description, bracket, history, temperature, profile) {
+  // Compose a compact, LLM-readable table of the real daily closes.
+  const closes = history.points.map(p => p.c);
+  const dates = history.points.map(p => p.d);
+  const startIdx = closes[0];
+  const troughIdx = Math.min(...closes);
+  const endIdx = closes[closes.length - 1];
+  const troughDayIdx = closes.indexOf(troughIdx);
+  const realDropPct = ((troughIdx - startIdx) / startIdx) * 100;
+  // Pack ~30 sampled points to keep context small (full array can be 140+).
+  const step = Math.max(1, Math.floor(closes.length / 30));
+  const sample = [];
+  for (let i = 0; i < closes.length; i += step) {
+    sample.push(`${i}=${dates[i]}@${Math.round(closes[i] * 100) / 100}`);
+  }
+  if (sample[sample.length - 1]?.startsWith(`${closes.length - 1}=`) === false) {
+    sample.push(`${closes.length - 1}=${dates[closes.length - 1]}@${Math.round(endIdx * 100) / 100}`);
+  }
+  const factsBlock = [
+    `SYMBOL: ${history.symbol}`,
+    `DATE RANGE: ${dates[0]} to ${dates[dates.length - 1]}`,
+    `TOTAL TRADING DAYS: ${closes.length}`,
+    `START CLOSE: ${Math.round(startIdx * 100) / 100} (day 0)`,
+    `TROUGH CLOSE: ${Math.round(troughIdx * 100) / 100} (day ${troughDayIdx}, ${dates[troughDayIdx]})`,
+    `END CLOSE: ${Math.round(endIdx * 100) / 100} (day ${closes.length - 1})`,
+    `REAL DROP: ${realDropPct.toFixed(2)}% from start to trough`,
+    `SAMPLED CLOSES (day=date@price): ${sample.join(", ")}`,
+    `LLM-IDENTIFIED EVENT: ${bracket.hint || "unknown"}`,
+  ].join("\n");
+  const userMsg = `Event description from user: "${String(description).trim().slice(0, 400)}"\n\nREAL MARKET DATA (use these exact numbers, not your memory):\n${factsBlock}`;
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: String(description).trim().slice(0, 800) },
+        { role: "user", content: userMsg },
       ],
       temperature,
-      // Comfortable budget: fits the full crash-replay JSON schema AND any
-      // thinking tokens the reasoning-escalation path consumes on 3.x Pro.
       max_tokens: 2000,
       response_format: { type: "json_object" },
       profile,
@@ -356,13 +498,23 @@ function buildScenario(m, hash) {
   const panicDay = Math.max(1, Math.min(Math.floor(m.panicDay ?? 3), m.totalDays - 1));
   const frames = [];
   const narrations = {};
+  // If Phase B produced a real close-price array, use it verbatim. Every
+  // frame's Nifty value is a real Yahoo close, not an interpolated curve.
+  // Falls back to interpIndex only if real data isn't available (never
+  // happens in the new flow but kept for defensive backcompat).
+  const realCloses = Array.isArray(m._realCloses) ? m._realCloses : null;
 
   for (let i = 0; i < m.totalDays; i++) {
-    const niftyLevel = interpIndex(i, m);
+    const niftyLevel = realCloses && realCloses[i] != null
+      ? realCloses[i]
+      : interpIndex(i, m);
+    const panicNiftyLevel = realCloses && realCloses[panicDay] != null
+      ? realCloses[panicDay]
+      : interpIndex(panicDay, m);
     const heldPortfolio = Math.round(100000 * (niftyLevel / m.startIndex));
     const panicPortfolio = i < panicDay
       ? heldPortfolio
-      : Math.round(100000 * (interpIndex(panicDay, m) / m.startIndex));
+      : Math.round(100000 * (panicNiftyLevel / m.startIndex));
     const f = { day: i, nifty: Math.round(niftyLevel), held: heldPortfolio, panic: panicPortfolio };
     frames.push(f);
   }

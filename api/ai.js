@@ -557,6 +557,79 @@ async function opCrashSuggestions(req, origin) {
   }
 }
 
+// --- Historical index data (Yahoo Finance chart API) ------------------------
+// Proxies Yahoo's v8/chart endpoint. Server-side fetch avoids browser CORS
+// and lets us normalize the response + cache-control. Used to GROUND crash
+// replay generation in real daily close prices instead of letting the LLM
+// hallucinate index levels.
+//
+// GET /api/ai?op=history&symbol=^NSEI&from=2023-01-24&to=2023-03-15
+//   symbol: Yahoo ticker. Defaults to ^NSEI (Nifty 50). Also try ^BSESN
+//           (Sensex), TCS.NS (single stock), etc.
+//   from/to: YYYY-MM-DD
+//
+// Returns: { symbol, currency, points: [{ d: "2023-01-24", c: 17891.95, o:, h:, l:, v: }, ...] }
+//
+// Cached 1 hour — historical ranges are immutable (yesterday's close doesn't
+// change), so aggressive caching is safe.
+async function opHistory(req, origin, url) {
+  const symbol = (url.searchParams.get("symbol") || "^NSEI").trim();
+  const fromStr = (url.searchParams.get("from") || "").trim();
+  const toStr   = (url.searchParams.get("to") || "").trim();
+  if (!symbol || symbol.length > 32) return j(400, { error: "bad_symbol" }, origin);
+  // Very conservative symbol allowlist — letters/digits/caret/dot/dash only
+  if (!/^[A-Za-z0-9.\-\^]+$/.test(symbol)) return j(400, { error: "bad_symbol" }, origin);
+  const fromDate = new Date(fromStr);
+  const toDate = new Date(toStr);
+  if (isNaN(fromDate) || isNaN(toDate)) return j(400, { error: "bad_dates" }, origin);
+  // Clamp any absurd range (max 2 years)
+  const maxMs = 2 * 365 * 86400 * 1000;
+  if (toDate - fromDate > maxMs) return j(400, { error: "range_too_large" }, origin);
+  if (toDate < fromDate) return j(400, { error: "bad_range" }, origin);
+
+  const cacheKey = `${symbol}|${fromStr}|${toStr}`;
+  const hit = await cacheGet("history", cacheKey);
+  if (hit?.points?.length) return j(200, { ...hit, source: "cache" }, origin, false);
+
+  const p1 = Math.floor(fromDate.getTime() / 1000);
+  const p2 = Math.floor(toDate.getTime() / 1000) + 86400;   // include toDate
+  const yurl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&period1=${p1}&period2=${p2}`;
+  try {
+    const res = await fetch(yurl, {
+      headers: { "User-Agent": "Mozilla/5.0 StockSaathi-Edge/1.0" },
+    });
+    if (!res.ok) return j(502, { error: "yahoo_http", status: res.status }, origin);
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    const ts = result?.timestamp;
+    const q = result?.indicators?.quote?.[0];
+    if (!Array.isArray(ts) || !q) return j(502, { error: "no_data" }, origin);
+    const points = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = q.close?.[i];
+      if (c == null) continue;
+      const d = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+      points.push({
+        d,
+        c: Number(c),
+        o: q.open?.[i] != null ? Number(q.open[i]) : null,
+        h: q.high?.[i] != null ? Number(q.high[i]) : null,
+        l: q.low?.[i] != null ? Number(q.low[i]) : null,
+        v: q.volume?.[i] != null ? Number(q.volume[i]) : null,
+      });
+    }
+    const out = {
+      symbol,
+      currency: result?.meta?.currency || "INR",
+      points,
+    };
+    cachePut("history", cacheKey, null, out);
+    return j(200, { ...out, source: "fresh" }, origin, false);
+  } catch (e) {
+    return j(502, { error: "yahoo_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
+  }
+}
+
 // --- Command router (Command-K) ---------------------------------------------
 const SYSTEM_COMMAND = `You are Saathi's command router on StockSaathi. A user types a command or question. Return strict JSON:
   { "action": "navigate", "target": "<hash path like /portfolio or /stocks/TCS>", "response": "<short ack>" }
@@ -622,6 +695,7 @@ export default async function handler(req) {
       case "report-card":         if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opReportCard(req, origin);
       case "crash-suggestions":   return await opCrashSuggestions(req, origin);
       case "command":             if (req.method !== "POST") return j(405, { error: "method_not_allowed" }, origin); return await opCommand(req, origin);
+      case "history":             return await opHistory(req, origin, url);
       case "time":                return opTime(req, origin);
       case "signup-count":        return await opSignupCount(req, origin);
       case "admin-path-check":    return opAdminPathCheck(req, origin, url);

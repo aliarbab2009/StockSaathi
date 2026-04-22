@@ -312,6 +312,7 @@ async function sendAndReply(userText) {
 
   const system = `${SYSTEM_PROMPT}\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
   let result = null;
+  let rafPending = false;
   try {
     result = await streamChat({
       system,
@@ -319,9 +320,18 @@ async function sendAndReply(userText) {
       profile: "chat",
       signal: m_abortController.signal,
       onToken: (delta) => {
-        if (chatLog[placeholderIdx]) {
-          chatLog[placeholderIdx].text += delta;
-          reRenderOuter();
+        if (!chatLog[placeholderIdx]) return;
+        chatLog[placeholderIdx].text += delta;
+        // Perf: coalesce token updates to ≤60fps. Gemini streams 100+
+        // tokens/sec; without this the main thread spends more time in
+        // innerHTML rebuild than in user code, which is what mid-range
+        // Android phones feel as 'lag'.
+        if (!rafPending) {
+          rafPending = true;
+          requestAnimationFrame(() => {
+            rafPending = false;
+            reRenderOuter();
+          });
         }
       },
     });
