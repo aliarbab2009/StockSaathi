@@ -76,8 +76,13 @@ export function renderLeaderboard(main) {
     try { myReturn = (getPortfolioReturnPct(state) || 0) * 100; } catch { myReturn = 0; }
     const myName = user.displayName || user.username || "You";
 
-    // Real rows from DB (preferred) or seeded competitors (fallback)
+    // Real rows from DB (preferred) or seeded competitors (fallback). Track
+    // which path we took so we can show an honest "sample data" banner —
+    // users kept asking why the leaderboard looked identical every visit,
+    // because when no real rows came back we were silently passing SEED
+    // off as real. Banner tells them what they're looking at.
     let entries;
+    let usingSeed = false;
     if (dbRows && dbRows.length) {
       entries = dbRows.map(r => ({
         id: r.user_id,
@@ -90,6 +95,7 @@ export function renderLeaderboard(main) {
       }));
     } else {
       entries = SEED.map(u => ({ ...u }));
+      usingSeed = true;
     }
 
     // Augment with real StockSaathi users on this device (other accounts)
@@ -151,6 +157,21 @@ export function renderLeaderboard(main) {
         <h1>Leaderboard</h1>
         <p class="muted">Ranked by portfolio return since ₹1,00,000 start.</p>
       </div>
+
+      ${usingSeed ? `
+        <div class="card" style="margin-bottom: var(--sp-4); background: var(--warning-soft); border-color: var(--warning);">
+          <div class="flex items-start gap-3">
+            <span aria-hidden="true" style="font-size: 20px;">ℹ️</span>
+            <div>
+              <div style="font-weight: 600; color: var(--text-strong); margin-bottom: 2px;">Showing sample competitors</div>
+              <div class="muted text-sm" style="line-height: 1.55;">
+                Real StockSaathi users will replace these as soon as enough people start trading in your region.
+                Your rank is calculated honestly against whatever's on the board right now — including you.
+              </div>
+            </div>
+          </div>
+        </div>
+      ` : ""}
 
       <div class="flex gap-2 wrap" style="margin-bottom: var(--sp-5);">
         <div class="lb-tabs">

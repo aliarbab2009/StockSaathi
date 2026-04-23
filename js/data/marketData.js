@@ -93,6 +93,32 @@ export function getCachedQuotes(symbols) {
   return out;
 }
 
+// Like getCachedQuotes but ONLY returns quotes that aren't stale. Rules:
+// - Market CLOSED: any cached quote is fine (yesterday's close is still
+//   the current reference price for display).
+// - Market OPEN: the cache entry must be fresher than `maxAgeMs` AND the
+//   quote's own upstream-staleness flag must be false (data.stale).
+// Pages use this when they'd rather flash a skeleton for a second than
+// display a misleading stale price (stock detail, stocks grid cards).
+export function getFreshCachedQuote(symbol, maxAgeMs = 30_000) {
+  const c = _quoteCache.get(symbol);
+  if (!c?.data) return null;
+  const marketOpen = _isNseOpen(Date.now());
+  if (!marketOpen) return c.data;                  // closed → cache IS truth
+  if (Date.now() - c.ts > maxAgeMs) return null;   // fetched too long ago
+  if (c.data.stale) return null;                   // upstream feed lagged
+  return c.data;
+}
+export function getFreshCachedQuotes(symbols, maxAgeMs = 30_000) {
+  const out = {};
+  if (!symbols) return out;
+  for (const s of symbols) {
+    const q = getFreshCachedQuote(s, maxAgeMs);
+    if (q) out[s] = q;
+  }
+  return out;
+}
+
 export function getDataSource() {
   // Branded "NSE" — the underlying upstream (Yahoo / Finnhub) is sourcing
   // NSE tick data itself, and the user only cares that the numbers reflect

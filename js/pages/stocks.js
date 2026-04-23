@@ -4,7 +4,7 @@
 
 import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS } from "../data/universe.js";
 import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
-import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
+import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getFreshCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
@@ -22,10 +22,16 @@ export function renderStocks(main) {
   let cancelled = false;
   let pollUnsub = null;
 
-  // Prefill from in-memory + localStorage cache SYNCHRONOUSLY so the very first
-  // paint already shows last-known real prices (not universe placeholders).
+  // Prefill from in-memory cache SYNCHRONOUSLY so the very first paint
+  // shows last-known REAL-FRESH prices (not universe placeholders, and
+  // not stale localStorage-persisted quotes from hours/days ago).
+  // getFreshCachedQuotes: during market hours, only returns cache entries
+  // younger than 30s whose upstream timestamp wasn't stale either. Outside
+  // market hours, returns whatever we have (yesterday's close is truth).
+  // Anything that's missing or stale falls through to skeleton cards in
+  // renderStockCard until the first getQuoteBatch() returns below.
   const allSyms = INSTRUMENTS.map(i => i.symbol);
-  quoteCache = { ...quoteCache, ...getCachedQuotes(allSyms) };
+  quoteCache = { ...quoteCache, ...getFreshCachedQuotes(allSyms) };
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
@@ -430,12 +436,20 @@ function renderStockCard(inst, state) {
       </div>
       <div class="flex items-center justify-between">
         <div>
-          <div class="stock-price tabular">${price != null ? formatRupees(price) : `<span class="dim">₹—</span>`}</div>
-          <div class="stock-change ${deltaClass(change)}">${hasLive ? `${formatPct(change, { sign: true })} today` : `<span class="dim">—</span>`} ${liveBadge}</div>
+          ${hasLive || inst.kind === "MF" ? `
+            <div class="stock-price tabular">${formatRupees(price)}</div>
+            <div class="stock-change ${deltaClass(change)}">${hasLive ? `${formatPct(change, { sign: true })} today` : `<span class="dim">NAV</span>`} ${liveBadge}</div>
+          ` : `
+            <div class="skeleton" style="width: 96px; height: 20px;" aria-label="Loading price"></div>
+            <div class="stock-change" style="display:flex; align-items:center; gap:6px;">
+              <span class="skeleton" style="width: 60px; height: 12px;" aria-label="Loading change"></span>
+              ${liveBadge}
+            </div>
+          `}
         </div>
         <span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "MED").toUpperCase()}</span>
       </div>
-      <div class="stock-sparkline">${sparkline(closes)}</div>
+      <div class="stock-sparkline">${(hasLive || inst.kind === "MF") ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
     </div>
   `;
 }

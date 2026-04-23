@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { getInstrument } from "../data/universe.js";
-import { getQuote, getHistory, subscribeToQuotes, quoteAge, getFundamentals } from "../data/marketData.js";
+import { getQuote, getHistory, subscribeToQuotes, quoteAge, getFundamentals, getFreshCachedQuote } from "../data/marketData.js";
 import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange, marketStatus } from "../data/prices.js";
@@ -79,6 +79,15 @@ export function renderStockDetail(main, params) {
   qtySelectorHandle?.destroy?.();
   qtySelectorHandle = null;
 
+  // Prefill liveQuote ONLY if the cache entry is fresh. This avoids the
+  // "flash of stale price" bug where the page used to paint inst.price
+  // (the seeded universe price, possibly months old) for 5-15 seconds
+  // before the first poll landed. Fresh cache → instant paint with real
+  // prices. No fresh cache → render() falls through to the price-block
+  // skeleton and waits for the poll.
+  const preQuote = inst.kind !== "MF" ? getFreshCachedQuote(symbol) : null;
+  if (preQuote) liveQuote = preQuote;
+
   render(inst, symbol);
   const unsub = subscribe(() => { if (!myToken.cancelled) render(inst, symbol); });
   const pollUnsub = subscribeToQuotes([symbol], (quotes) => {
@@ -135,11 +144,18 @@ function render(inst, symbol) {
   const state = getState();
   const holding = state.holdings[symbol];
 
+  // Price-block loading state. Mutual funds don't have a live feed so we
+  // never show a skeleton for them. Equities: show a skeleton until the
+  // first live (or fresh-cache-prefilled) quote lands — better than
+  // flashing the seeded universe price for 5-15 seconds while the poll
+  // ticks over.
+  const priceLoading = inst.kind !== "MF" && !liveQuote;
   const curPrice = liveQuote?.pricePaise ?? getPriceAt(symbol, 0);
   const change = liveQuote?.changePct ?? getTodayChange(symbol);
   const dayChangeVal = Math.round(curPrice * change);
 
   const tfSpec = TF_MAP[ui.timeframe] || TF_MAP["1M"];
+  const historyLoading = inst.kind !== "MF" && !liveHistory;
   const history = liveHistory?.ohlc?.length ? liveHistory.ohlc : getSeries(symbol).slice(-tfSpec.days);
   const closes = history.map(k => k.c);
 
@@ -209,10 +225,15 @@ function render(inst, symbol) {
         </div>
 
         <div class="price-block" style="margin-top: var(--sp-4);">
-          <div class="price tabular">${formatRupees(curPrice)}</div>
-          <div class="change ${deltaClass(change)} tabular">
-            ${formatRupees(dayChangeVal, { sign: true })} (${formatPct(change, { sign: true })}) today
-          </div>
+          ${priceLoading ? `
+            <div class="skeleton" style="width: 180px; height: 40px;" aria-label="Loading price"></div>
+            <div class="skeleton" style="width: 200px; height: 18px;" aria-label="Loading change"></div>
+          ` : `
+            <div class="price tabular">${formatRupees(curPrice)}</div>
+            <div class="change ${deltaClass(change)} tabular">
+              ${formatRupees(dayChangeVal, { sign: true })} (${formatPct(change, { sign: true })}) today
+            </div>
+          `}
         </div>
 
         <div class="tf-buttons" style="display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap;">
@@ -234,7 +255,12 @@ function render(inst, symbol) {
         </div>
 
         <div class="card" style="padding: var(--sp-3);">
-          ${inst.kind === "MF"
+          ${historyLoading ? `
+            <div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%; display:grid; place-items:center; gap:var(--sp-3);">
+              <div class="skeleton" style="width: 100%; height: 75%;" aria-label="Loading chart"></div>
+              <div class="dim text-xs">Loading ${ui.timeframe} chart…</div>
+            </div>
+          ` : inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
             : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800 })}</div>`}
         </div>
@@ -445,17 +471,14 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
     });
   });
   // Attach hover crosshair + tooltip (re-called on every render). Skip for
-  // MFs which use the simpler lineChart (no OHLC data available).
-  if (inst.kind !== "MF") {
+  // MFs which use the simpler lineChart (no OHLC data available). Also
+  // skip while the chart-host is showing the loading skeleton — there's
+  // no SVG inside it to hang hover events off, and we don't want to
+  // attach hover to seeded history the user doesn't actually see.
+  if (inst.kind !== "MF" && liveHistory?.ohlc?.length) {
     const host = main.querySelector("#stock-chart-host");
-    // Use whatever history the render just painted; if it's empty, skip.
-    // We re-read from the live/synth chain here to keep hover + chart in sync.
-    const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
-    const hist = liveHistory?.ohlc?.length
-      ? liveHistory.ohlc
-      : getSeries(symbol).slice(-tf.days);
-    if (host && hist?.length) {
-      attachStockChartHover(host, hist, { mode: ui.chartMode });
+    if (host && host.querySelector(".chart-svg")) {
+      attachStockChartHover(host, liveHistory.ohlc, { mode: ui.chartMode });
     }
   }
 
