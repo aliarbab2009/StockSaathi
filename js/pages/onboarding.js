@@ -63,7 +63,13 @@ function renderStep(s) {
         <p class="muted" style="max-width: 400px; margin: 0 auto var(--sp-5); line-height: 1.6;">
           You start with <strong style="color: var(--text-strong);">₹1,00,000 of virtual money</strong> to invest in real Indian stocks and crypto. An AI coach reflects on every trade — never tells you what to buy.
         </p>
-        <button class="btn btn-primary btn-lg" data-next>Get started →</button>
+        <div style="max-width: 460px; margin: 0 auto var(--sp-5); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-soft); text-align: left; font-size: var(--text-xs); line-height: 1.6; color: var(--text-muted);">
+          <strong style="color: var(--text-strong);">Quick heads-up:</strong> StockSaathi is an
+          <strong>educational paper-trading simulator</strong>. You are <em>not</em> buying real
+          shares, and StockSaathi is not a SEBI-registered broker or investment adviser. Nothing
+          here is investment advice. The prices are real; your money is not.
+        </div>
+        <button class="btn btn-primary btn-lg" data-next>Got it, get started →</button>
       </div>
     `;
     case 1: return `

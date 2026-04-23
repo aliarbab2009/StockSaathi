@@ -76,9 +76,13 @@ export function renderRegister(main) {
 
             <label class="flex items-start gap-2" style="font-size: var(--text-sm); color: var(--text-muted); line-height: 1.5; margin-top: var(--sp-2);">
               <input type="checkbox" class="checkbox" id="r-terms" required style="margin-top: 2px;" />
-              <span>I understand StockSaathi uses <strong>virtual money only</strong>, provides
-              behavioral reflection and not investment advice, and that nothing in this app
-              constitutes SEBI-regulated recommendation.</span>
+              <span>I understand StockSaathi is an <strong>educational paper-trading
+              simulator</strong> with <strong>virtual money only</strong> &mdash; no real
+              securities are bought or held. StockSaathi is not a SEBI-registered broker,
+              investment adviser, or research analyst, and nothing here is investment advice
+              or a SEBI-regulated recommendation. I accept that disputes arising from use of
+              this app are not covered by SEBI's investor-protection or grievance-redressal
+              mechanisms.</span>
             </label>
 
             <div id="reg-error" role="alert"></div>

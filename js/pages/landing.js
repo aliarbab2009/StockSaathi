@@ -32,6 +32,10 @@ export function renderLanding(main) {
         }
       </div>
 
+      <div class="landing-compliance-note" style="margin-top: var(--sp-4); font-size: var(--text-xs); color: var(--text-faint); text-align: center; line-height: 1.5; max-width: 560px; margin-left: auto; margin-right: auto;">
+        Educational paper-trading simulator &middot; Virtual money only &middot; Not a SEBI-registered broker or investment adviser
+      </div>
+
       <div class="stat-row">
         <div class="stat">
           <span class="n tabular">92%</span>
