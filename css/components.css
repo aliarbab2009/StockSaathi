@@ -97,6 +97,12 @@
   .nav-links { display: none; }
   .nav-cash { display: none; }
   .market-status { display: none; }
+  /* Log in + Sign up live in the mobile bottom-nav and the hamburger
+     drawer at this width — hiding them here keeps the top bar from
+     overflowing and shoving the theme-toggle / cmdk button off-screen
+     to the left (which is what was making the dark-mode button look
+     "missing" until the user logged in). */
+  .nav-auth-btn { display: none; }
 }
 
 /* Mobile bottom nav — fixed thumb-zone navigation bar shown only on phones.

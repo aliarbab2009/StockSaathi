@@ -172,8 +172,8 @@ export function mountNav() {
               </div>
             </div>
           ` : `
-            <a href="#/login" class="btn btn-ghost btn-sm">Log in</a>
-            <a href="#/register" class="btn btn-primary btn-sm">Sign up</a>
+            <a href="#/login" class="btn btn-ghost btn-sm nav-auth-btn">Log in</a>
+            <a href="#/register" class="btn btn-primary btn-sm nav-auth-btn">Sign up</a>
           `}
           <button class="nav-burger" aria-label="Open menu" id="nav-burger-btn">
             <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
