@@ -19,6 +19,9 @@ import { renderFriends } from "./pages/friends.js";
 import { renderNews } from "./pages/news.js";
 import { renderChat } from "./pages/chat.js";
 import { renderAdmin } from "./pages/admin.js";
+import { renderPrivacy } from "./pages/privacy.js";
+import { renderTerms } from "./pages/terms.js";
+import { renderGrievance } from "./pages/grievance.js";
 import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
 import { getState, subscribe } from "./state.js";
 
@@ -40,6 +43,9 @@ const ROUTES = [
   { name: "news",          match: /^\/news\/?$/,                           render: renderNews, public: true },
   { name: "chat",          match: /^\/chat\/?$/,                           render: renderChat, public: true },
   { name: "settings",      match: /^\/settings\/?$/,                       render: renderSettings, needsAuth: true },
+  { name: "privacy",       match: /^\/privacy\/?$/,                        render: renderPrivacy, public: true },
+  { name: "terms",         match: /^\/terms\/?$/,                          render: renderTerms, public: true },
+  { name: "grievance",     match: /^\/grievance\/?$/,                      render: renderGrievance, public: true },
   // Admin path is NOT /admin — that 404s. Real path is /a/<slug> where
   // <slug> must match ADMIN_PATH env var on the server. The server returns
   // the same 404 shape for wrong slugs, so scanning the URL space gets you

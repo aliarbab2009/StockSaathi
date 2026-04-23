@@ -303,6 +303,14 @@ export function stockChart(ohlc, {
       <text x="26" y="4" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="var(--font-mono, monospace)">₹${(ohlc[ohlc.length - 1].c / 100).toFixed(2)}</text>
     </g>`;
 
+  // Subtle "paper trading" watermark — sits behind the chart at very low
+  // opacity so it's effectively invisible while using the chart but is
+  // legible in screenshots. Labels the image as a simulator in case a
+  // screenshot is shared out of context.
+  const wmY = paddingTop + plotH / 2 + 6;
+  const wmX = paddingLeft + plotW / 2;
+  const watermark = `<text class="chart-watermark" x="${wmX}" y="${wmY}" text-anchor="middle" font-size="${Math.round(height * 0.055)}" font-weight="700" fill="currentColor" opacity="0.055" style="pointer-events:none; user-select:none; letter-spacing:0.12em;">PAPER TRADING · VIRTUAL MONEY</text>`;
+
   return `
     <div class="stock-chart" style="position:relative;">
       <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
@@ -311,6 +319,7 @@ export function stockChart(ohlc, {
            data-pt="${paddingTop}" data-pb="${paddingBottom}"
            data-min="${min}" data-max="${max}" data-n="${ohlc.length}">
         <g class="chart-grid">${grid}</g>
+        ${watermark}
         ${baseline}
         ${body}
         ${yLabels}

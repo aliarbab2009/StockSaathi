@@ -614,6 +614,25 @@ textarea.input { min-height: 88px; resize: vertical; }
   line-height: 1.7;
 }
 .disclaimer strong { color: var(--text-muted); }
+.disclaimer-nav {
+  margin-top: var(--sp-3);
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: center;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.disclaimer-nav a {
+  color: var(--text-dim, var(--text-faint));
+  text-decoration: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.disclaimer-nav a:hover {
+  color: var(--brand);
+  text-decoration: underline;
+}
+.disclaimer-nav span { color: var(--text-faint); opacity: 0.6; }
 
 /* -------------------- NoScript warning -------------------- */
 .noscript-warning {

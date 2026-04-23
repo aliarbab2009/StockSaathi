@@ -82,7 +82,9 @@ export function renderRegister(main) {
               investment adviser, or research analyst, and nothing here is investment advice
               or a SEBI-regulated recommendation. I accept that disputes arising from use of
               this app are not covered by SEBI's investor-protection or grievance-redressal
-              mechanisms.</span>
+              mechanisms. I have read and agree to the
+              <a href="#/privacy" target="_blank" rel="noopener">Privacy Policy</a> and
+              <a href="#/terms" target="_blank" rel="noopener">Terms of Use</a>.</span>
             </label>
 
             <div id="reg-error" role="alert"></div>
