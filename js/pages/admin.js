@@ -115,7 +115,9 @@ function renderTokenForm(main) {
       </div>
     </div>`;
   const input = main.querySelector("#admin-token");
-  input.focus();
+  // Desktop: auto-focus the token input. Mobile: don't pop the keyboard
+  // uninvited — admins on mobile can tap the input themselves.
+  if (window.innerWidth >= 1024) input.focus();
   const submit = async () => {
     const t = input.value.trim();
     if (!t) return;

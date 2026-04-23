@@ -132,6 +132,7 @@ export function mountCoachPanel() {
   });
   document.body.appendChild(fab);
 
+  let wasOpenLastTick = false;
   const applyVisibility = () => {
     const allowed = isCoachAllowed();
     const state = getState();
@@ -140,15 +141,28 @@ export function mountCoachPanel() {
       document.body.classList.remove("coach-docked");
       root.classList.remove("open");
       root.style.display = "none";
+      wasOpenLastTick = false;
       return;
     }
     root.style.display = "";
-    if (window.innerWidth >= 1280 && state.settings.coachPanelOpen) {
+    const shouldDock = window.innerWidth >= 1280 && state.settings.coachPanelOpen;
+    const shouldOpen = !shouldDock && state.settings.coachPanelOpen;
+    if (shouldDock) {
       document.body.classList.add("coach-docked");
     } else {
       document.body.classList.remove("coach-docked");
-      root.classList.toggle("open", state.settings.coachPanelOpen);
+      root.classList.toggle("open", shouldOpen);
     }
+    // Focus the chat input ONLY on the closed → open transition, not on
+    // every applyVisibility tick (which fires on every state change and
+    // every route navigation). Previously render() called input.focus()
+    // unconditionally, which popped the mobile keyboard every time the
+    // user tapped a nav tab — even when the coach panel wasn't visible.
+    const isOpenNow = shouldDock || shouldOpen;
+    if (isOpenNow && !wasOpenLastTick) {
+      root.querySelector("#coach-input")?.focus();
+    }
+    wasOpenLastTick = isOpenNow;
   };
   applyVisibility();
   window.addEventListener("resize", applyVisibility);
@@ -306,7 +320,11 @@ function render() {
     render();
   });
 
-  root.querySelector("#coach-input")?.focus();
+  // Intentionally NOT calling input.focus() here — render() runs on every
+  // state change and every hashchange, so focusing would pop the mobile
+  // virtual keyboard every time the user tapped any nav tab (even when
+  // the coach panel itself is closed and off-screen). applyVisibility()
+  // now does a single focus on the closed → open transition instead.
 }
 
 function renderMessagesHtml(state) {

@@ -133,7 +133,10 @@ export function renderChat(main) {
     const form = main.querySelector("#chat-form");
     const messagesEl = main.querySelector("#chat-messages");
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    input.focus();
+    // Desktop: auto-focus so the user can start typing. Mobile: don't —
+    // focusing an input pops the soft keyboard, and the user hasn't
+    // asked for it yet. They can tap the input themselves to start.
+    if (window.innerWidth >= 1024) input.focus();
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -377,7 +380,9 @@ async function sendAndReply(userText) {
   if (input) {
     input.setAttribute("readonly", "readonly");
     input.placeholder = "Saathi is responding…";
-    input.focus();
+    // Don't steal focus during mobile streaming — keeps the virtual
+    // keyboard from popping up uninvited. Desktop-only.
+    if (window.innerWidth >= 1024) input.focus();
   }
   if (sendBtn) {
     sendBtn.outerHTML = `<button class="btn btn-outline" id="chat-stop" type="button" title="Stop response">◼ Stop</button>`;
@@ -402,7 +407,9 @@ async function sendAndReply(userText) {
     if (input) {
       input.removeAttribute("readonly");
       input.placeholder = "Ask about SIPs, P/E, crashes, anything...";
-      input.focus();
+      // Same rationale as above — desktop auto-focus is fine, mobile
+      // pops a keyboard the user didn't ask for.
+      if (window.innerWidth >= 1024) input.focus();
     }
     const stopBtn = outer?.querySelector("#chat-stop");
     if (stopBtn) {
