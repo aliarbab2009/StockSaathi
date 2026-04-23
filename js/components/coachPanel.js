@@ -101,6 +101,20 @@ export function mountCoachPanel() {
   root = document.getElementById("coach-root");
   if (!root) return;
 
+  // Mobile / tablet (< 1280 px) treats the coach panel as a transient
+  // drawer opened by the FAB — never a persistent overlay. But the
+  // coachPanelOpen setting is localStorage-persisted for desktop's "dock"
+  // behaviour, so if the user enabled it on desktop (or toggled it from
+  // Settings by accident on mobile) and then visits on a phone, the
+  // panel would auto-open as a full-viewport overlay they can't dismiss
+  // without finding the tiny ✕ in the header. Reset the flag on mount
+  // below the docking breakpoint so the panel starts closed on mobile
+  // every session regardless of persisted state. FAB tap still sets it
+  // true for the rest of the session.
+  if (window.innerWidth < 1280 && getState().settings.coachPanelOpen) {
+    setSetting("coachPanelOpen", false);
+  }
+
   // Pre-fetch news (best-effort) for chat context
   getNews({ limit: 12 }).then(items => { newsSnap = items || []; render(); }).catch(() => {});
 

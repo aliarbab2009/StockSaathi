@@ -34,8 +34,8 @@ export function renderSettings(main) {
               <button class="btn btn-ghost btn-sm ${state.settings.theme === "dark" ? "btn-primary" : ""}" data-theme="dark">Dark</button>
             </div>
           </div>
-          <div class="settings-row">
-            <div class="label-wrap"><div class="title">Coach panel docked</div><div class="desc">Persistent right rail on wide screens, FAB on mobile.</div></div>
+          <div class="settings-row" data-desktop-only>
+            <div class="label-wrap"><div class="title">Coach panel docked</div><div class="desc">Pin the coach as a persistent right rail — desktop only. On mobile the coach opens from the floating chat button in the corner.</div></div>
             <label class="switch"><input type="checkbox" id="toggle-coach" ${state.settings.coachPanelOpen ? "checked" : ""} /><span class="slider"></span></label>
           </div>
           <div class="settings-row">
@@ -88,7 +88,8 @@ export function renderSettings(main) {
     // Theme
     main.querySelector("[data-theme='light']").addEventListener("click", () => { document.documentElement.setAttribute("data-theme", "light"); setSetting("theme", "light"); });
     main.querySelector("[data-theme='dark']").addEventListener("click", () => { document.documentElement.setAttribute("data-theme", "dark"); setSetting("theme", "dark"); });
-    main.querySelector("#toggle-coach").addEventListener("change", (e) => setSetting("coachPanelOpen", e.target.checked));
+    // Desktop-only; safe-navigated because the row is display:none on mobile.
+    main.querySelector("#toggle-coach")?.addEventListener("change", (e) => setSetting("coachPanelOpen", e.target.checked));
     main.querySelector("#toggle-hinglish").addEventListener("change", (e) => setSetting("hinglish", e.target.checked));
 
     main.querySelector("#reset-pf-btn").addEventListener("click", async () => {

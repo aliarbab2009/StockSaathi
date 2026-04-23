@@ -327,8 +327,15 @@ hr { border: none; border-top: 1px solid var(--divider); margin: var(--sp-4) 0; 
 .grow { flex: 1; min-width: 0; }
 
 @media (min-width: 1280px) {
+  /* body.padding-right reserves the right 380 px for the docked coach panel.
+     The .nav is a child of body, so its content box is already constrained
+     to (viewport - 380 px) via the body padding. Previously we ALSO added
+     padding-right: var(--coach-w) to .nav itself, which stacked on top of
+     body's — nav-inner ended up with (viewport - 760 px) usable width and
+     the whole top bar got squeezed into the left third of the screen.
+     Removing that double-padding. Coach panel at position: fixed; right: 0
+     overlays the body's right-padding area exactly, so the layout is flush. */
   body.coach-docked { padding-right: var(--coach-w); }
-  body.coach-docked .nav { padding-right: var(--coach-w); }
 }
 
 /* -------------------- Type utilities -------------------- */

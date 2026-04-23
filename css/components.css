@@ -104,6 +104,17 @@
      "missing" until the user logged in). */
   .nav-auth-btn { display: none; }
 }
+/* When the coach panel is docked, body content shrinks by var(--coach-w) =
+   380 px. On narrow desktops (1280-1479 px) the full nav bar (brand + 6
+   links + cmdk + theme + market-status + cash + avatar) no longer fits in
+   the remaining 900-1100 px of usable width, so we hide the secondary
+   informational items (portfolio cash pill + NSE live-status pill) to
+   keep the primary navigation readable. At ≥ 1480 px there's room for
+   everything again, so they come back. */
+@media (min-width: 1280px) and (max-width: 1479px) {
+  body.coach-docked .nav-cash { display: none; }
+  body.coach-docked .market-status { display: none; }
+}
 
 /* Mobile bottom nav — fixed thumb-zone navigation bar shown only on phones.
    Replaces the old "must tap burger → drawer → item" 3-tap path with a
@@ -2791,6 +2802,13 @@
 .settings-row .label-wrap { flex: 1; min-width: 0; }
 .settings-row .label-wrap .title { font-weight: 600; color: var(--text-strong); margin-bottom: 2px; font-size: var(--text-md); }
 .settings-row .label-wrap .desc { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.55; }
+/* Rows that only make sense on desktop — e.g. "Coach panel docked" which
+   controls the persistent right rail that doesn't exist on mobile. Hidden
+   below 1280 px (the same breakpoint the coach panel itself uses to flip
+   between dock and FAB-drawer behaviour). */
+@media (max-width: 1279px) {
+  .settings-row[data-desktop-only] { display: none; }
+}
 
 .switch {
   position: relative;
