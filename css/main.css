@@ -179,10 +179,13 @@ html {
   -webkit-tap-highlight-color: transparent;   /* kill grey iOS tap flash */
   scroll-behavior: smooth;
   font-feature-settings: "ss01", "cv11";
-  /* account for notches / dynamic island */
-  padding-top: env(safe-area-inset-top);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  /* DO NOT pad html with horizontal safe-area insets. Children that use
+     100vw (coach panel, toasts, mobile-bottom-nav) overflow an html
+     padding box and create horizontal scroll + mobile auto-zoom-out on
+     iPhones in landscape. Notch/cutout padding is handled per-element
+     via env() where it matters (coach-panel, .main, .nav). viewport-fit=cover
+     in index.html's meta viewport tells iOS to paint under the notch so
+     elements can opt into the safe area on their own terms. */
 }
 body {
   margin: 0;
@@ -198,6 +201,11 @@ body {
   text-rendering: optimizeLegibility;
   letter-spacing: -0.005em;
   overscroll-behavior-y: none;    /* no iOS bounce chaining to window */
+  /* Safe-area insets sit on body, not html — putting them on html causes
+     position:fixed children using 100vw (coach panel, toasts) to overflow
+     the html padding box and create horizontal scroll. Fixed elements
+     handle their own safe-area insets via env() in their own CSS. */
+  padding-top: env(safe-area-inset-top);
 }
 /* body scroll lock when drawer / modal is open */
 body.scroll-lock {
@@ -627,6 +635,16 @@ textarea.input { min-height: 88px; resize: vertical; }
   text-decoration: none;
   padding: 2px 4px;
   border-radius: 4px;
+  /* grievance@stocksaathi.app is long — let it break rather than push the
+     nav wider than the viewport on 320px phones. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+@media (max-width: 480px) {
+  /* Drop the · separators on narrow phones so wrapped items don't leave
+     an orphan bullet at the start of a line. */
+  .disclaimer-nav span { display: none; }
+  .disclaimer-nav { gap: var(--sp-3); }
 }
 .disclaimer-nav a:hover {
   color: var(--brand);
@@ -644,17 +662,29 @@ textarea.input { min-height: 88px; resize: vertical; }
 
 /* -------------------- Responsive -------------------- */
 /* Universal mobile safeguards: prevent horizontal scroll from any rogue
-   wide element. IMPORTANT: don't use overflow-x: hidden on html/body —
-   that kills pull-to-refresh + sometimes the vertical scroll context on
-   Android. overflow-x: clip is the modern equivalent that contains
-   horizontal overflow WITHOUT creating a new scroll context. */
+   wide element. IMPORTANT: we apply overflow-x: clip to BOTH html and body.
+   - body clips normal-flow overflow.
+   - html clips overflow from position: fixed children (coach-panel,
+     mobile-bottom-nav, toasts) which escape body because fixed elements
+     are positioned relative to the viewport, not body.
+   - overflow-x: clip (not hidden) does NOT create a new scroll context,
+     so pull-to-refresh + vertical scroll context on Android are preserved. */
+/* Overflow clipping applies on every viewport where the coach panel is
+   in its drawer state (i.e. below the 1280px dock breakpoint) — the
+   drawer's translateX(100%) hide-state always extends beyond the
+   viewport and needs clipping regardless of tablet vs. phone. */
+@media (max-width: 1279px) {
+  html, body { overflow-x: clip; }
+}
 @media (max-width: 768px) {
-  body { overflow-x: clip; }
   img, svg, video, iframe { max-width: 100%; height: auto; }
   /* Tables usually need horizontal scroll rather than squished cells */
   .admin-table-wrap, .scroll-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   /* Inputs + buttons never wider than their container */
   input, textarea, select, button { max-width: 100%; }
+  /* Long unbreakable strings (URLs, emails, handles) must wrap rather
+     than pushing a paragraph wider than the viewport. */
+  p, li, td, dd { overflow-wrap: anywhere; word-break: break-word; }
 }
 @media (max-width: 768px) {
   .main {
