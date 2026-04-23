@@ -301,8 +301,21 @@ export async function generateCustomCrash(description) {
     ...companions.map(sym => fetchHistory(sym, bracket.startIso, bracket.endIso).catch(() => null)),
   ];
   const results = await Promise.all(fetches);
-  const history = results[0];
+  let history = results[0];
   const companionHistory = results.slice(1).filter(h => h && h.points && h.points.length >= 5);
+  // Fallback: if the LLM picked a specific ticker and Yahoo returned too little
+  // data, retry with ^NSEI before giving up. This catches delisted-stock
+  // events where the stock no longer exists on Yahoo (Satyam 2009 →
+  // SATYAMCOMP.NS was absorbed by Tech Mahindra and is no longer queryable;
+  // the Nifty 50 move on Raju's confession day IS captured in ^NSEI) and
+  // tickers with non-standard Yahoo suffixes that we can't guess.
+  if ((!history?.points?.length || history.points.length < 5) && primary !== "^NSEI") {
+    const fallback = await fetchHistory("^NSEI", bracket.startIso, bracket.endIso).catch(() => null);
+    if (fallback?.points?.length >= 5) {
+      history = fallback;
+      bracket.symbol = "^NSEI"; // propagate so the narrative references the right index
+    }
+  }
   if (!history?.points?.length || history.points.length < 5) {
     throw new Error("Not enough historical data for that range. Try a different event or check your date phrasing.");
   }

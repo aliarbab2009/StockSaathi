@@ -533,12 +533,29 @@ async function opReportCard(req, origin) {
 }
 
 // --- Crash-replay suggestions ------------------------------------------------
+// IMPORTANT: every phrase this prompt generates MUST be resolvable to a
+// specific date range where an Indian stock index or major single stock
+// MOVED MEANINGFULLY (a crash, panic, scam, rally, IPO flop, policy shock).
+// Generic cultural/seasonal concepts ("Diwali shopping rush", "IPL auction
+// frenzy", "monsoon surge") have no identifiable event date AND no real
+// market move behind them — the downstream generator will refuse them as
+// off-topic or "not a crash", which makes the chips look broken.
 const SYSTEM_CRASH_SUGG = `Return strict JSON: { "suggestions": ["...", "...", ...] }
-10 short (4-7 word) phrases a teen might type into a "describe any Indian market event" input. Mix famous events, niche events, colloquial phrasings, decades, sectors. Indian context only. No duplicates, no emojis, no buy/sell advice. Generate fresh phrases.`;
+
+10 short (4-8 word) phrases a teen might type into an Indian-markets event-replay input. Each phrase MUST name a SPECIFIC event in Indian market/policy/business history that had a REAL price move on the NSE/BSE — scams, panics, IPO flops, regulator bans, earnings blowups, policy shocks, short-seller reports, named crashes.
+
+Rules:
+- Every suggestion must be tied to a SPECIFIC event with a real, known date — not a recurring cultural festival, a season, a sport, or a generic concept.
+- Prefer phrasings that INCLUDE a year or clear date anchor ("Satyam scandal 2009", "Adani Hindenburg Jan 2023", "YES Bank moratorium 2020", "Paytm IPO flop 2021") — or use an unambiguous name that anchors itself ("Harshad Mehta securities scam", "demonetisation note ban", "IL&FS collapse", "Nirav Modi PNB fraud", "Ketan Parekh bull run").
+- Mix famous + niche, but niche means "less-famous specific event" (e.g. "Unitech 2G licence cancellation 2012", "Satyam matrix scam", "IDBI Fortis insurance spin"), NOT "generic cultural moment".
+- Indian context only. No duplicates. No emojis. No buy/sell advice. No weather, sports, cricket, food, festivals, movies.
+- Generate fresh phrases each call — vary across eras (1990s, 2000s, 2010s, 2020s) and sectors (banks, IT, pharma, NBFC, telecom, infra, consumer).
+
+Each phrase must be something a phase-A date-picker could confidently map to a 20-140 trading-day window where the index or a specific stock actually moved.`;
 
 async function opCrashSuggestions(req, origin) {
   const key = weekKey();
-  const hit = await cacheGet("crash_sugg", key);
+  const hit = await cacheGet("crash_sugg_v2", key);
   if (hit?.suggestions?.length) return j(200, { ...hit, source: "cache" }, origin, false);
   try {
     const text = await callLlm({
@@ -550,7 +567,7 @@ async function opCrashSuggestions(req, origin) {
     const suggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions.filter(s => typeof s === "string" && s.trim().length >= 3).slice(0, 12).map(s => s.trim().slice(0, 80)) : [];
     if (!suggestions.length) return j(502, { error: "no_suggestions" }, origin);
     const out = { suggestions };
-    cachePut("crash_sugg", key, null, out);
+    cachePut("crash_sugg_v2", key, null, out);
     return j(200, { ...out, source: "fresh" }, origin, false);
   } catch (e) {
     return j(502, { error: "generation_failed", detail: String(e.message).slice(0, 120) }, origin);
