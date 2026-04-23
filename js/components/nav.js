@@ -75,6 +75,18 @@ export function mountNav() {
     // the current route. Taps go directly to the route — no burger → drawer
     // → item indirection, which is what was causing the "laggy nav" feel on
     // Android phones.
+    // Logged-out users don't have the Settings route or a dropdown, so the
+    // only top-bar theme toggle we can offer them is the 36px nav-theme-toggle
+    // button — which on narrow phones competes for space with Log in / Sign
+    // up buttons in nav-right. To make dark-mode guaranteed-reachable in the
+    // thumb-zone on mobile, slot a dedicated theme toggle into the mobile
+    // bottom-nav for unauthed users (route === "__theme" is handled below
+    // as a button instead of an anchor). Authed users already have the
+    // drawer's "More" entry + Settings page + Settings → Appearance, so we
+    // don't add a 6th item to their bottom nav.
+    const themeIsDark = (state.settings.theme || "light") === "dark";
+    const themeIcon = themeIsDark ? "☀️" : "🌙";
+    const themeLabel = themeIsDark ? "Light" : "Dark";
     const mobileNavItems = state.isAuthed
       ? [
           { route: "portfolio",    label: "Home",   icon: "🏠" },
@@ -87,6 +99,7 @@ export function mountNav() {
           { route: "",             label: "Home",   icon: "🏠" },
           { route: "chat",         label: "Coach",  icon: "💬" },
           { route: "crash-replay", label: "Replay", icon: "⏱" },
+          { route: "__theme",      label: themeLabel, icon: themeIcon },
           { route: "login",        label: "Log in", icon: "🔑" },
         ];
     const mobileNavHtml = `
@@ -95,6 +108,12 @@ export function mountNav() {
           const isActive = item.route && active === item.route;
           if (item.route === "__menu") {
             return `<button type="button" class="mbn-link" data-mobile-menu aria-label="Open menu">
+              <span class="mbn-link-icon" aria-hidden="true">${item.icon}</span>
+              <span class="mbn-link-label">${item.label}</span>
+            </button>`;
+          }
+          if (item.route === "__theme") {
+            return `<button type="button" class="mbn-link" data-mobile-theme aria-label="Toggle dark mode">
               <span class="mbn-link-icon" aria-hidden="true">${item.icon}</span>
               <span class="mbn-link-label">${item.label}</span>
             </button>`;
@@ -203,6 +222,7 @@ export function mountNav() {
     // Mobile bottom nav "More" button opens the same drawer as the top-bar
     // burger — keeps the full nav menu reachable in one tap from anywhere.
     root.querySelector("[data-mobile-menu]")?.addEventListener("click", openDrawer);
+    root.querySelector("[data-mobile-theme]")?.addEventListener("click", toggleTheme);
     root.querySelector("#theme-toggle-btn")?.addEventListener("click", toggleTheme);
     root.querySelector("#cmdk-open-btn")?.addEventListener("click", () => {
       import("./commandPalette.js").then(m => m.openCommandPalette());
