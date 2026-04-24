@@ -1,9 +1,11 @@
 // =============================================================================
-// LEADERBOARD — Seeded competitors + real StockSaathi users (from other
-// accounts on this device). User appears inline based on their return %.
+// LEADERBOARD — Real users only. Rows come from Supabase's leaderboard_view
+// (onboarded users ordered by return_bps desc), augmented with real
+// StockSaathi accounts on the local device (other profiles stored in
+// localStorage). Current user is appended if not already present. No SEED
+// fallback — an honest short board beats a polished fake one.
 // =============================================================================
 
-import { LEADERBOARD as SEED } from "../data/leaderboard.js";
 import { getState, getPortfolioReturnPct, subscribe } from "../state.js";
 import { listAccountsPublic } from "../auth/accounts.js";
 import { dbLeaderboard } from "../db/sync.js";
@@ -16,10 +18,10 @@ export function renderLeaderboard(main) {
   let cancelled = false;
   let dbRows = null;
   let dbLoaded = false;     // flips true after the first DB poll completes (success or fail)
-  // Show a skeleton immediately so the user doesn't see the fake SEED data
-  // during the 1-2s before the first DB fetch returns. Once dbLoaded flips,
-  // renderInner() takes over with real data (or SEED as an intentional
-  // fallback if DB is unreachable).
+  // Show a skeleton immediately so the user doesn't see a blank table for
+  // the 1-2 s before the first Supabase fetch returns. Once dbLoaded
+  // flips, renderInner() takes over with whatever real rows exist —
+  // even if that's just the current user on an empty region.
   renderSkeleton(main);
   const unsub = subscribe(() => { if (!cancelled && dbLoaded) render(); });
   window.addEventListener("hashchange", () => { cancelled = true; unsub?.(); }, { once: true });
@@ -27,7 +29,7 @@ export function renderLeaderboard(main) {
   // Watchdog: if sb() or dbLeaderboard() hangs for any reason (RLS issue,
   // Supabase slow, network flaky), force dbLoaded=true after 4 seconds
   // so the user is never stuck on an infinite skeleton. renderInner()
-  // will then fall through to SEED data.
+  // will then show whatever rows we have (possibly just the current user).
   const watchdog = setTimeout(() => {
     if (!dbLoaded && !cancelled) {
       console.warn("[leaderboard] 4s watchdog: forcing dbLoaded=true");
@@ -76,27 +78,21 @@ export function renderLeaderboard(main) {
     try { myReturn = (getPortfolioReturnPct(state) || 0) * 100; } catch { myReturn = 0; }
     const myName = user.displayName || user.username || "You";
 
-    // Real rows from DB (preferred) or seeded competitors (fallback). Track
-    // which path we took so we can show an honest "sample data" banner —
-    // users kept asking why the leaderboard looked identical every visit,
-    // because when no real rows came back we were silently passing SEED
-    // off as real. Banner tells them what they're looking at.
-    let entries;
-    let usingSeed = false;
-    if (dbRows && dbRows.length) {
-      entries = dbRows.map(r => ({
-        id: r.user_id,
-        name: r.display_name,
-        school: r.school || "StockSaathi user",
-        returnPct: Math.round(Number(r.return_bps) / 10) / 10,  // bps → %
-        trades: Number(r.trades) || 0,
-        realUser: true,
-        me: r.user_id === state.user.id,
-      }));
-    } else {
-      entries = SEED.map(u => ({ ...u }));
-      usingSeed = true;
-    }
+    // Real rows from Supabase's leaderboard_view only — no more SEED
+    // fallback. An empty or tiny board is honest; fake competitors just
+    // confuse the user into trusting ranks that don't reflect reality.
+    // If there are zero real users besides self, the augmentation below
+    // (device-local accounts + self-append) still runs and we end up
+    // with at least the current user on the board.
+    let entries = (dbRows || []).map(r => ({
+      id: r.user_id,
+      name: r.display_name,
+      school: r.school || "StockSaathi user",
+      returnPct: Math.round(Number(r.return_bps) / 10) / 10,  // bps → %
+      trades: Number(r.trades) || 0,
+      realUser: true,
+      me: r.user_id === state.user.id,
+    }));
 
     // Augment with real StockSaathi users on this device (other accounts)
     let realUsers = [];
@@ -228,9 +224,8 @@ function renderRow(u) {
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 
 // Skeleton loader — shown while the first DB poll is in-flight so the user
-// doesn't see the fake SEED data being passed off as real. 10 shimmer rows
-// matching the real table layout so the transition to real data is
-// dimensionally smooth (no layout shift).
+// doesn't see a blank table. 10 shimmer rows match the real table layout
+// so the transition to real data is dimensionally smooth (no layout shift).
 function renderSkeleton(main) {
   const rows = [];
   // Widths chosen to look organic — not all rows the same.
