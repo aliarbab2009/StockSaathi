@@ -479,7 +479,10 @@ async function sendAndReply(userText) {
     }
     saveSessions(sessionsData);
     if (replyText && replyText.trim()) {
-      logChatTurn({ userText, assistantText: replyText, model: "gemini-chat" });
+      logChatTurn({
+        userText, assistantText: replyText, model: "gemini-chat",
+        sessionId: ownerSession.id, surface: "chat_page",
+      });
     }
     if (isOwnerActive()) reRenderOuter();
     restoreForm();
@@ -613,9 +616,14 @@ async function sendAndReply(userText) {
     }
     saveSessions(sessionsData);
     if (isOwnerActive()) reRenderOuter();
-    // Log the finished turn (not aborted, not error) so admin can review.
+    // Log the finished turn (not aborted, not error) so admin can review
+    // AND so rebuildChatSessionsFromDb on the next boot reconstructs
+    // the same session the user is looking at now.
     if (!result?.aborted && !result?.error && entry.text && !entry.text.startsWith("Hmm")) {
-      logChatTurn({ userText, assistantText: entry.text, model: "gemini-chat" });
+      logChatTurn({
+        userText, assistantText: entry.text, model: "gemini-chat",
+        sessionId: ownerSession.id, surface: "chat_page",
+      });
     }
   }
   restoreForm();

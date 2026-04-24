@@ -55,12 +55,10 @@ function saveChat() {
   // until the write succeeds — losing old chat history is better than
   // silently failing to persist new messages.
   let keep = 80;
-  let ok = false;
   while (keep >= 10) {
     try {
       localStorage.setItem(CHAT_LOG_KEY, JSON.stringify(chatHistory.slice(-keep)));
-      ok = true;
-      break;
+      return;
     } catch (e) {
       const isQuota = e && (e.name === "QuotaExceededError"
                             || (e.code && (e.code === 22 || e.code === 1014)));
@@ -68,15 +66,11 @@ function saveChat() {
       keep = Math.floor(keep / 2);
     }
   }
-  if (!ok) {
-    try { localStorage.removeItem(CHAT_LOG_KEY); } catch {}
-    return;
-  }
-  // Push the coach-panel log up to Supabase too so it follows the user's
-  // account across devices. Debounced in sync.js — fire-and-forget here.
-  try {
-    import("../db/sync.js").then(m => m.dbSaveCoachChatsSoon?.()).catch(() => {});
-  } catch {}
+  // Last resort: drop everything (cache wipe; DB still has the turns).
+  try { localStorage.removeItem(CHAT_LOG_KEY); } catch {}
+  // v142: DB write happens per-turn via logChatTurn in the form submit
+  // handler — no push from here. localStorage is now just the panel's
+  // instant-paint cache, not the source of truth.
 }
 
 function smartTemplateReply(userText, state) {
@@ -316,9 +310,14 @@ function render() {
       saveChat();
       pending = false;
       abortController = null;
-      // Log the finished turn to coach_messages so admin panel can see it.
+      // Log the finished turn to coach_messages so admin panel can see it
+      // AND so rebuildChatSessionsFromDb reconstructs the side-panel log
+      // on boot / after login-on-other-device.
       if (!result?.aborted && !result?.error && entry && entry.text && !entry.text.startsWith("Hmm")) {
-        logChatTurn({ userText: text, assistantText: entry.text, model: "gemini-chat" });
+        logChatTurn({
+          userText: text, assistantText: entry.text, model: "gemini-chat",
+          surface: "side_panel",
+        });
       }
       render();
       return;

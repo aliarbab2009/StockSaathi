@@ -604,12 +604,18 @@ function stripToolCallScaffolding(text) {
 }
 
 // -----------------------------------------------------------------------------
-// Persist a chat turn (user+assistant pair) to coach_messages so admins can
-// review actual conversations in the admin panel. Fire-and-forget: any DB
-// error here never affects the chat UX. Uses the existing dbAddCoachMessage
-// helper with event_type "chat_user" / "chat_assistant".
+// Persist a chat turn (user + assistant pair) to coach_messages. v142:
+// coach_messages is now the single source of truth for chat history —
+// rebuildChatSessionsFromDb on next boot reconstructs the multi-session
+// UI + side-panel log from these rows.
+//
+// `sessionId` groups the /chat multi-session UI (maps to the session.id in
+// chatSessions.js). `surface` is one of "chat_page" / "side_panel" so the
+// client can split the two surfaces when rebuilding. Both are optional —
+// missing values fall back to the 30-min time-gap session heuristic for
+// legacy rows. Fire-and-forget: any DB error never affects the chat UX.
 // -----------------------------------------------------------------------------
-export async function logChatTurn({ userText, assistantText, model }) {
+export async function logChatTurn({ userText, assistantText, model, sessionId, surface }) {
   try {
     const mod = await import("../db/sync.js");
     if (!mod?.dbAddCoachMessage) return;
@@ -619,6 +625,8 @@ export async function logChatTurn({ userText, assistantText, model }) {
         triggerSymbol: null,
         payload: { text: String(userText).slice(0, 4000) },
         model: null,
+        sessionId: sessionId || null,
+        surface: surface || null,
       }).catch(() => {});
     }
     if (assistantText && assistantText.trim()) {
@@ -627,6 +635,8 @@ export async function logChatTurn({ userText, assistantText, model }) {
         triggerSymbol: null,
         payload: { text: String(assistantText).slice(0, 8000) },
         model: model || null,
+        sessionId: sessionId || null,
+        surface: surface || null,
       }).catch(() => {});
     }
   } catch {}
