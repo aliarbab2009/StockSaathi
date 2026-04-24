@@ -65,15 +65,11 @@ export function renderLeaderboard(main) {
     try { myReturn = (getPortfolioReturnPct(state) || 0) * 100; } catch { myReturn = 0; }
     const myName = user.displayName || user.username || "You";
 
-    // Real rows from Supabase's leaderboard_view + SEED competitors as
-    // filler. An empty board (which happens whenever the user is the
-    // only onboarded account in that Supabase project) makes the whole
-    // leaderboard feature feel dead — which kills the competitive angle
-    // that is literally the point of the page. We mix real DB rows with
-    // SEED rows, no labels, sort by return, and the user slots in at
-    // their honest rank among the combined field. When real users start
-    // outnumbering SEED by volume (once the app scales) the SEED entries
-    // will naturally get pushed down into a non-visible rank range.
+    // Separate REAL competitors from PRACTICE competitors. Real =
+    // Supabase onboarded users + device-local StockSaathi accounts +
+    // current user (always included). Practice = SEED. Two clearly-
+    // labeled sections, independent ranking within each. User's row
+    // is always visible in the Real section regardless of rank.
     const realEntries = (dbRows || []).map(r => ({
       id: r.user_id,
       name: r.display_name,
@@ -82,17 +78,11 @@ export function renderLeaderboard(main) {
       trades: Number(r.trades) || 0,
       me: r.user_id === state.user.id,
     }));
-    const realIds = new Set(realEntries.map(e => e.id));
-    const seedEntries = SEED
-      .filter(s => !realIds.has(s.id))
-      .map(u => ({ ...u }));
-    let entries = [...realEntries, ...seedEntries];
 
     // Augment with real StockSaathi users on this device (other accounts)
     let realUsers = [];
     try { realUsers = (listAccountsPublic() || []).filter(u => u.id !== user.id); } catch {}
     for (const u of realUsers) {
-      // Load their state to get their return %
       try {
         const raw = localStorage.getItem(`ss.userstate.${u.id}`);
         if (!raw) continue;
@@ -100,47 +90,60 @@ export function renderLeaderboard(main) {
         if (!st?.portfolio) continue;
         const start = st.portfolio.startingCashPaise || 1_00_00_000;
         let total = st.portfolio.cashPaise || 0;
-        // Approximate with avgCost (we don't have live prices here sync)
         for (const [sym, h] of Object.entries(st.holdings || {})) {
           total += Math.round(h.qty * h.avgCostPaise);
         }
         const retPct = ((total - start) / start) * 100;
-        entries.push({
+        // De-dup against DB rows in case the DB already returned this user.
+        if (realEntries.some(e => e.id === u.id)) continue;
+        realEntries.push({
           id: u.id,
           name: u.displayName,
           school: u.school || "StockSaathi user",
-          class: "",
           returnPct: Math.round(retPct * 10) / 10,
           trades: (st.transactions || []).length,
-          daysActive: 1,
-          realUser: true,
+          me: false,
         });
       } catch {}
     }
 
-    // Append me (if not already present from DB)
-    if (!entries.some(e => e.me)) {
-      entries.push({
-        id: "me", name: myName, school: user.school || "Your school",
-        class: "", returnPct: Math.round(myReturn * 10) / 10,
-        trades: transactions.length, daysActive: 1, me: true,
+    // Always include the current user in the Real section, even at 0%.
+    if (!realEntries.some(e => e.me)) {
+      realEntries.push({
+        id: "me",
+        name: myName,
+        school: user.school || "Your school",
+        returnPct: Math.round(myReturn * 10) / 10,
+        trades: transactions.length,
+        me: true,
       });
     }
 
-    // Filter by scope
+    // Scope filters apply to REAL section only (SEED is always global
+    // practice context — nobody has "friends" among seeded characters).
+    let realScoped = realEntries.slice();
     if (scope === "SCHOOL" && user.school) {
-      entries = entries.filter(u => u.school === user.school || u.me);
+      realScoped = realScoped.filter(u => u.school === user.school || u.me);
     }
     if (scope === "FRIENDS") {
       const friendIds = new Set(friends.map(f => f && f.id).filter(Boolean));
-      entries = entries.filter(u => u.me || friendIds.has(u.id));
+      realScoped = realScoped.filter(u => u.me || friendIds.has(u.id));
     }
 
-    entries.sort((a, b) => b.returnPct - a.returnPct);
-    entries.forEach((e, i) => { e.rank = i + 1; });
+    realScoped.sort((a, b) => b.returnPct - a.returnPct);
+    realScoped.forEach((e, i) => { e.rank = i + 1; });
 
-    const top10 = entries.slice(0, 10);
-    const me = entries.find(e => e.me);
+    const seedRanked = SEED.map(u => ({ ...u }));
+    seedRanked.sort((a, b) => b.returnPct - a.returnPct);
+    seedRanked.forEach((e, i) => { e.rank = i + 1; });
+
+    const me = realScoped.find(e => e.me);
+    const realCount = realScoped.length;
+
+    // Only show the SEED "Practice" section on Global scope — on School /
+    // Friends the user is asking for THEIR peers specifically, not generic
+    // practice characters.
+    const showPractice = scope === "GLOBAL";
 
     main.innerHTML = `
       <div style="margin-bottom: var(--sp-5);">
@@ -161,7 +164,24 @@ export function renderLeaderboard(main) {
         </div>
       </div>
 
+      ${me ? `
+        <div class="card" style="margin-bottom: var(--sp-4); padding: var(--sp-4); background: color-mix(in srgb, var(--brand) 8%, var(--bg-soft)); border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--border));">
+          <div class="flex items-center gap-3 wrap">
+            <div class="lb-rank top3" style="background: var(--brand); color: white; min-width: 48px; text-align: center;">#${me.rank}</div>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 600; color: var(--text-strong);">You're rank <strong>#${me.rank}</strong> of ${realCount} real ${realCount === 1 ? "player" : "players"}</div>
+              <div class="muted text-xs" style="line-height: 1.5;">${me.returnPct > 0 ? `+${me.returnPct.toFixed(1)}%` : `${me.returnPct.toFixed(1)}%`} return · ${me.trades} ${me.trades === 1 ? "trade" : "trades"}</div>
+            </div>
+          </div>
+        </div>
+      ` : ""}
+
       <div class="card" style="padding: 0; overflow: hidden;">
+        <div style="padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--divider); display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;">
+          <strong style="color: var(--text-strong); font-size: var(--text-md);">Real players</strong>
+          <span class="pill pill-brand" style="font-size: 10px;">${realCount}</span>
+          ${scope !== "GLOBAL" ? `<span class="muted text-xs">in ${scope === "SCHOOL" ? "your school" : "your friends"}</span>` : ""}
+        </div>
         <div class="table-wrap">
           <table class="table">
             <thead>
@@ -174,22 +194,48 @@ export function renderLeaderboard(main) {
               </tr>
             </thead>
             <tbody>
-              ${top10.map(u => renderRow(u)).join("")}
-              ${!me || me.rank <= 10 ? "" : `
-                <tr><td colspan="5" style="text-align: center; padding: 12px;" class="dim">…</td></tr>
-                ${renderRow(me)}
-              `}
+              ${realScoped.length
+                ? realScoped.map(u => renderRow(u)).join("")
+                : `<tr><td colspan="5" style="text-align: center; padding: var(--sp-5);" class="muted text-sm">No real players match this filter yet.</td></tr>`}
             </tbody>
           </table>
         </div>
       </div>
 
+      ${showPractice ? `
+        <div class="card" style="padding: 0; overflow: hidden; margin-top: var(--sp-4); opacity: 0.92;">
+          <div style="padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--divider); display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;">
+            <strong style="color: var(--text-muted); font-size: var(--text-md);">Practice competitors</strong>
+            <span class="pill pill-neutral" style="font-size: 10px;">${seedRanked.length}</span>
+            <span class="muted text-xs">simulated benchmarks so you always have a board to push against</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th style="width: 72px">Rank</th>
+                  <th>Player</th>
+                  <th>School</th>
+                  <th class="num">Trades</th>
+                  <th class="num">Return</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${seedRanked.slice(0, 10).map(u => renderRow(u)).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ` : ""}
+
       <div class="card" style="margin-top: var(--sp-5);">
         <h3 style="margin-bottom: var(--sp-2);">How ranking works</h3>
         <p class="muted text-sm" style="line-height: 1.7;">
-          Ranking is based on <strong>return percentage</strong>, not absolute portfolio value —
-          everyone starts at ₹1,00,000. A high return is great, but the <em>Report Card</em> is what
-          you'll actually show your parents — it measures the quality of your decisions, not just outcomes.
+          The <strong>Real players</strong> board is other StockSaathi users pulled live from Supabase —
+          your rank here is the one that counts. The <strong>Practice competitors</strong> section below
+          is a set of simulated characters so the board is never empty while the user base grows.
+          Rankings are by <strong>return percentage</strong> — everyone starts at ₹1,00,000, and
+          the <em>Report Card</em> (not this page) is what actually measures decision quality.
         </p>
       </div>
     `;

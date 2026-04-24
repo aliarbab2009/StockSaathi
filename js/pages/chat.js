@@ -296,20 +296,22 @@ let m_pending = false;
 let m_abortController = null;
 
 function renderBubble(m) {
+  const streamAttr = m.streaming ? ` data-streaming="1"` : "";
   if (m.role === "user") {
-    // Tight chat bubbles — font drops to text-sm (13px), padding to 3/8,
-    // line-height 1.35, compact border-radius. Box hugs the text.
+    // Bubbles hug the text — padding 0.2em (≈2.6px at text-sm) vertical
+    // and 0.4em (≈5.2px) horizontal so the box sits just off the glyphs
+    // without crowding them into the border radius.
     return `
-      <div style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 3px 8px; border-radius: 10px 10px 3px 10px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
-        ${escapeHtml(m.text)}
+      <div${streamAttr} style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 0.2em 0.45em; border-radius: 10px 10px 3px 10px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
+        <span class="msg-body">${escapeHtml(m.text)}</span>
       </div>
     `;
   }
   return `
-    <div style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 6px; align-items: flex-start;">
+    <div${streamAttr} style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 6px; align-items: flex-start;">
       <div class="friend-avatar green" style="width: 20px; height: 20px; font-size: 9px; flex-shrink: 0;">SS</div>
-      <div style="background: var(--surface); border: 1px solid var(--border); padding: 3px 8px; border-radius: 10px 10px 10px 3px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
-        ${renderMarkdown(m.text)}
+      <div style="background: var(--surface); border: 1px solid var(--border); padding: 0.2em 0.45em; border-radius: 10px 10px 10px 3px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
+        <span class="msg-body">${renderMarkdown(m.text)}</span>
       </div>
     </div>
   `;
@@ -474,9 +476,57 @@ async function sendAndReply(userText) {
   ownerMessages.push({ role: "assistant", text: "", ts: Date.now(), streaming: true });
   reRenderOuter();
 
+  // Typewriter drip — decouples Gemini's burst-y token arrivals (can
+  // dump 40+ chars at once) from the on-screen reveal so the user sees
+  // a buttery character-by-character fill instead of jerky chunks. The
+  // raw tokens accumulate into `pendingFullText`; a 20ms timer advances
+  // `displayedText` one small step at a time, scaling the step with
+  // backlog so we never fall too far behind the stream. When the stream
+  // ends, the timer keeps running until the buffer is drained.
+  let pendingFullText = "";
+  let displayedText = "";
+  let streamDone = false;
+  // Target ≈ 60-90 chars/sec on short backlog, accelerates as backlog
+  // grows so the final drain after stream-end never feels stuck.
+  const dripIntervalMs = 18;
+  const typewriterDrip = () => {
+    const entry = ownerMessages[placeholderIdx];
+    if (!entry) return true;  // abandon
+    if (displayedText.length >= pendingFullText.length) {
+      if (streamDone) return true;  // all caught up, stream ended
+      return false;
+    }
+    const remaining = pendingFullText.length - displayedText.length;
+    // Base 2 chars/tick ≈ 110 chars/sec. Add backlog-scaled acceleration
+    // so a 300-char chunk doesn't take 2.7 seconds to reveal.
+    const step = Math.min(remaining, 2 + Math.floor(remaining / 40));
+    displayedText = pendingFullText.slice(0, displayedText.length + step);
+    entry.text = displayedText;
+    // In-place bubble update — only touch the streaming message, not
+    // the whole chat list. This is 10-50× cheaper than the full
+    // reRenderOuter and is what makes the reveal feel buttery.
+    const outerEl = document.getElementById("main");
+    const streamBubble = outerEl?.querySelector('#chat-messages [data-streaming="1"] .msg-body');
+    if (streamBubble) {
+      streamBubble.innerHTML = renderMarkdown(displayedText);
+      const msgs = outerEl?.querySelector("#chat-messages");
+      if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    } else {
+      // Placeholder bubble's data-streaming flag not painted yet — fall
+      // back to full re-render on the first couple of ticks.
+      reRenderOuter();
+    }
+    return false;
+  };
+  let dripTimer = setInterval(() => {
+    if (typewriterDrip()) {
+      clearInterval(dripTimer);
+      dripTimer = null;
+    }
+  }, dripIntervalMs);
+
   const system = `${SYSTEM_PROMPT}\n\n# TONE\nKeep replies conversational and short by default (1–3 sentences). Only go longer when the user asks for explanation or depth.`;
   let result = null;
-  let rafPending = false;
   try {
     result = await streamChat({
       system,
@@ -485,23 +535,40 @@ async function sendAndReply(userText) {
       signal: m_abortController.signal,
       onToken: (delta) => {
         if (!ownerMessages[placeholderIdx]) return;
-        ownerMessages[placeholderIdx].text += delta;
-        // Perf: coalesce token updates to ≤60fps. Gemini streams 100+
-        // tokens/sec; without this the main thread spends more time in
-        // innerHTML rebuild than in user code, which is what mid-range
-        // Android phones feel as 'lag'.
-        if (!rafPending) {
-          rafPending = true;
-          requestAnimationFrame(() => {
-            rafPending = false;
-            reRenderOuter();
-          });
+        pendingFullText += delta;
+        // Kick the timer if somehow it died.
+        if (!dripTimer) {
+          dripTimer = setInterval(() => {
+            if (typewriterDrip()) { clearInterval(dripTimer); dripTimer = null; }
+          }, dripIntervalMs);
         }
       },
     });
   } catch (e) {
     console.warn("coach stream error:", e);
   }
+  streamDone = true;
+  // Wait for the typewriter to drain the buffer before we restore the
+  // form. Without this the user sees the Send button come back while
+  // text is still typing, which reads as buggy.
+  await new Promise((resolve) => {
+    const waiter = setInterval(() => {
+      if (displayedText.length >= pendingFullText.length) {
+        clearInterval(waiter);
+        if (dripTimer) { clearInterval(dripTimer); dripTimer = null; }
+        resolve();
+      }
+    }, dripIntervalMs);
+    // Safety: never wait more than 2 s (short streams should finish fast;
+    // absurdly long responses will jump-to-end).
+    setTimeout(() => {
+      clearInterval(waiter);
+      if (dripTimer) { clearInterval(dripTimer); dripTimer = null; }
+      displayedText = pendingFullText;
+      if (ownerMessages[placeholderIdx]) ownerMessages[placeholderIdx].text = displayedText;
+      resolve();
+    }, 2000);
+  });
   m_pending = false;
   m_abortController = null;
   const entry = ownerMessages[placeholderIdx];
