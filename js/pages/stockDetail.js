@@ -577,13 +577,14 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
     if (btn) { btn.disabled = true; btn.textContent = "Queuing AMO…"; }
     try {
       console.log("[AMO] placing", { symbol, side: ui.side, qty, limitPaise });
-      // Hard 12 s timeout on the Supabase RPC. Without this, a hung
-      // network leaves the button stuck on "Queuing AMO…" forever with
-      // no way to retry. 12 s is generous for a Postgres rpc over a
-      // good connection but tight enough that the user doesn't give up.
+      // Generous 25 s timeout. Supabase cold-start + edge-function
+      // routing from India to an EU/US region can legitimately take
+      // 8-15 s the first time in a session; 12 s was too tight and
+      // made successful AMOs look like failures. At 25 s anything
+      // that hasn't come back is genuinely broken.
       const res = await Promise.race([
         placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("AMO request timed out after 12s — check your connection and try again.")), 12000)),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("AMO request timed out after 25s — Supabase may be unreachable. Open DevTools console for details.")), 25000)),
       ]);
       console.log("[AMO] placed", res);
       toast({

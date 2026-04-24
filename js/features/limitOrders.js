@@ -46,7 +46,9 @@ export async function listAllOrders(limit = 50) {
 }
 
 export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
+  console.log("[placeLimitOrder] start", { symbol, side, qty, limitPricePaise });
   const client = await sb();
+  console.log("[placeLimitOrder] got client:", !!client);
   if (!client) throw new Error("Backend not configured — log in first.");
   // Client-side input validation. The RPC validates too, but catching here
   // gives a readable error and avoids a round-trip for obvious mistakes.
@@ -56,13 +58,37 @@ export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
     throw new Error("Limit price must be greater than ₹0.");
   }
   if (side !== "BUY" && side !== "SELL") throw new Error("Side must be BUY or SELL.");
+  // Verify auth BEFORE the RPC — a session that silently expired will
+  // cause the RPC to hang indefinitely on some Supabase configurations
+  // (the underlying fetch blocks on a token refresh that never resolves).
+  // Checking getSession first gives us a clean error + a retry path.
+  let session = null;
+  try {
+    const { data: s } = await client.auth.getSession();
+    session = s?.session || null;
+  } catch (e) {
+    console.warn("[placeLimitOrder] getSession threw:", e);
+  }
+  console.log("[placeLimitOrder] session:", !!session, "user:", session?.user?.id);
+  if (!session?.access_token) {
+    throw new Error("Your session expired. Refresh the page and sign in again.");
+  }
+  console.log("[placeLimitOrder] calling RPC place_limit_order...");
+  const t0 = Date.now();
   const { data, error } = await client.rpc("place_limit_order", {
     p_symbol: symbol,
     p_side: side,
     p_qty: qty,
     p_limit_price_paise: Math.round(limitPricePaise),
   });
-  if (error) throw new Error(prettifyErr(error.message));
+  console.log(`[placeLimitOrder] RPC returned in ${Date.now() - t0}ms`, { data, error });
+  if (error) {
+    // Surface the underlying error code + message so we can tell the
+    // difference between a missing RPC ("Could not find function"),
+    // an RLS block, and a domain-level refusal (insufficient cash etc).
+    console.error("[placeLimitOrder] RPC error:", error);
+    throw new Error(prettifyErr(error.message || String(error)));
+  }
   return data;
 }
 

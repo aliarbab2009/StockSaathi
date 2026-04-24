@@ -298,19 +298,19 @@ let m_abortController = null;
 function renderBubble(m) {
   const streamAttr = m.streaming ? ` data-streaming="1"` : "";
   if (m.role === "user") {
-    // Bubbles hug the text — padding 0.2em (≈2.6px at text-sm) vertical
-    // and 0.4em (≈5.2px) horizontal so the box sits just off the glyphs
-    // without crowding them into the border radius.
+    // Ultra-tight hug — ≈1.7px vertical, ≈3.9px horizontal at text-sm
+    // (font unchanged). Line-height tight too so the bubble sits
+    // millimetre-off the glyphs.
     return `
-      <div${streamAttr} style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 0.2em 0.45em; border-radius: 10px 10px 3px 10px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
+      <div${streamAttr} style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 0.13em 0.3em; border-radius: 8px 8px 2px 8px; font-size: var(--text-sm); line-height: 1.3; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
         <span class="msg-body">${escapeHtml(m.text)}</span>
       </div>
     `;
   }
   return `
-    <div${streamAttr} style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 6px; align-items: flex-start;">
-      <div class="friend-avatar green" style="width: 20px; height: 20px; font-size: 9px; flex-shrink: 0;">SS</div>
-      <div style="background: var(--surface); border: 1px solid var(--border); padding: 0.2em 0.45em; border-radius: 10px 10px 10px 3px; font-size: var(--text-sm); line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
+    <div${streamAttr} style="align-self: flex-start; width: fit-content; max-width: 82%; display: flex; gap: 5px; align-items: flex-start;">
+      <div class="friend-avatar green" style="width: 18px; height: 18px; font-size: 8px; flex-shrink: 0;">SS</div>
+      <div style="background: var(--surface); border: 1px solid var(--border); padding: 0.13em 0.3em; border-radius: 8px 8px 8px 2px; font-size: var(--text-sm); line-height: 1.3; white-space: pre-wrap; word-wrap: break-word; color: var(--text); box-shadow: var(--sh-xs);">
         <span class="msg-body">${renderMarkdown(m.text)}</span>
       </div>
     </div>
