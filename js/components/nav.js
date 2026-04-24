@@ -15,7 +15,6 @@ const LINKS_AUTH = [
   { route: "news",      label: "News",      icon: "📰" },
   { route: "chat",      label: "Coach Chat", icon: "💬" },
   { route: "crash-replay", label: "Time Travel", icon: "⏱" },
-  { route: "leaderboard",  label: "Leaderboard", icon: "🏆" },
   { route: "friends",   label: "Friends",   icon: "👥" },
   { route: "report-card", label: "Report Card", icon: "📋" },
 ];
@@ -26,10 +25,10 @@ const LINKS_PUBLIC = [
   { route: "news",         label: "News",       icon: "📰" },
 ];
 
-// Top bar on desktop — keep the 6 main routes. Friends, Report card,
-// Settings live in the avatar dropdown since they're less frequently
-// accessed. Leaderboard matters (it's social/competitive) so it stays here.
-const DESKTOP_TOP_AUTH = ["portfolio", "stocks", "news", "chat", "crash-replay", "leaderboard"];
+// Top bar on desktop. Leaderboard removed Apr 24 2026 — see router.js
+// for the full reasoning. Friends, Report card, Settings live in the
+// avatar dropdown since they're less frequently accessed.
+const DESKTOP_TOP_AUTH = ["portfolio", "stocks", "news", "chat", "crash-replay"];
 
 export function mountNav() {
   const root = document.getElementById("nav-root");
@@ -182,7 +181,6 @@ export function mountNav() {
                   <div class="muted text-xs">@${escapeHtml(state.user.username || "")}</div>
                 </div>
                 <div class="dropdown-divider"></div>
-                <a class="dropdown-item" href="#/leaderboard">🏆 Leaderboard</a>
                 <a class="dropdown-item" href="#/report-card">📋 Report card</a>
                 <a class="dropdown-item" href="#/friends">👥 Friends & transfers</a>
                 <a class="dropdown-item" href="#/settings">⚙️ Settings</a>

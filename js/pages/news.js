@@ -13,7 +13,12 @@ let _newsCancel = { cancelled: false };
 // the headline text itself so duplicates across sources dedupe naturally.
 const aiTags = new Map();
 let aiQueueRunning = 0;
-const AI_MAX_CONCURRENT = 3;
+// Bumped 3 → 10. Each request is small (180-token JSON via gemini-2.5-
+// flash-lite), and Vercel's serverless function happily fans out — the
+// old cap of 3 was the visible "loads one-by-one" symptom even with
+// scroll-into-view enqueueing. With 10, a viewport of ~6 visible cards
+// fires in parallel and lands almost simultaneously.
+const AI_MAX_CONCURRENT = 10;
 const aiQueue = [];
 
 export function renderNews(main) {

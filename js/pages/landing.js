@@ -85,9 +85,9 @@ export function renderLanding(main) {
           <p>Transfer virtual cash between StockSaathi users by @username, or generate shareable redeem codes. Great for classroom challenges and friendly bets.</p>
         </div>
         <div class="feature-card">
-          <span class="icon">🏆</span>
-          <h3>Leaderboard + Report Card</h3>
-          <p>Compete with friends on return %, earn badges, and get a monthly grade that measures decision <em>quality</em>, not just returns. Self-override rate is the real flex.</p>
+          <span class="icon">📋</span>
+          <h3>Report Card</h3>
+          <p>Get a monthly grade that measures decision <em>quality</em>, not just returns. Self-override rate, panic-sell streaks, holding-discipline — all the things parents actually care about.</p>
         </div>
       </div>
     </section>

@@ -7,7 +7,11 @@ import { renderPortfolio } from "./pages/portfolio.js";
 import { renderStocks } from "./pages/stocks.js";
 import { renderStockDetail } from "./pages/stockDetail.js";
 import { renderCrashReplay } from "./pages/crashReplay.js";
-import { renderLeaderboard } from "./pages/leaderboard.js";
+// Leaderboard removed from the live app (Apr 24 2026) — kept the file
+// at js/pages/leaderboard.js for future revival, but no route, no nav
+// entry, no dropdown link. Anyone who hits /leaderboard via an old URL
+// gets bounced to /portfolio by the stub render below.
+function renderLeaderboardRedirect() { location.hash = "#/portfolio"; }
 import { renderReportCard } from "./pages/reportCard.js";
 import { renderOnboarding } from "./pages/onboarding.js";
 import { renderSettings } from "./pages/settings.js";
@@ -37,7 +41,7 @@ const ROUTES = [
   { name: "stock-detail",  match: /^\/stocks\/([A-Za-z0-9&\-_.]+)\/?$/,    render: renderStockDetail, param: "symbol", needsAuth: true, needsOnboarded: true },
   { name: "crash-replay",  match: /^\/crash-replay\/?$/,                   render: renderCrashReplay, public: true },
   { name: "crash-replay-scenario", match: /^\/crash-replay\/([A-Za-z0-9_]+)\/?$/, render: renderCrashReplay, param: "scenario", public: true },
-  { name: "leaderboard",   match: /^\/leaderboard\/?$/,                    render: renderLeaderboard, needsAuth: true, needsOnboarded: true },
+  { name: "leaderboard",   match: /^\/leaderboard\/?$/,                    render: renderLeaderboardRedirect, public: true },
   { name: "report-card",   match: /^\/report-card\/?$/,                    render: renderReportCard, needsAuth: true, needsOnboarded: true },
   { name: "friends",       match: /^\/friends\/?$/,                        render: renderFriends, needsAuth: true, needsOnboarded: true },
   { name: "news",          match: /^\/news\/?$/,                           render: renderNews, public: true },
