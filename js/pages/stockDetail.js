@@ -425,6 +425,10 @@ function nowIstDayKey() {
 }
 
 async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
+  // Abort-controller timeout so a slow Gemini response doesn't leave
+  // the card stuck on "Reading today's news + price action…" forever.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     // Pull a few recent news items for this symbol to give the model
     // real grounding instead of speculation.
@@ -448,7 +452,9 @@ async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: ctrl.signal,
     });
+    clearTimeout(timer);
     if (!r.ok) throw new Error(`http_${r.status}`);
     const d = await r.json();
     if (!d?.explanation) throw new Error("no_explanation");
@@ -459,6 +465,8 @@ async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
       el.textContent = d.explanation;
     }
   } catch (e) {
+    clearTimeout(timer);
+    console.warn("[stock-why] failed:", e?.name || e?.message || e);
     _stockWhyLast = null;
     const el = main?.querySelector("#stock-why-body");
     if (el) {

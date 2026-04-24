@@ -7,7 +7,6 @@
 // no "practice" labels, no "sample data" scare tooltips.
 // =============================================================================
 
-import { LEADERBOARD as SEED } from "../data/leaderboard.js";
 import { getState, getPortfolioReturnPct, subscribe } from "../state.js";
 import { listAccountsPublic } from "../auth/accounts.js";
 import { dbLeaderboard } from "../db/sync.js";
@@ -114,35 +113,9 @@ export function renderLeaderboard(main) {
       });
     }
 
-    // 4. SEED fill — keeps the board populated while the real user base
-    //    grows. Re-TARGETED each render so the board makes sense relative
-    //    to the user's actual performance: SEED returns are remapped into
-    //    a 24-point band anchored at (userReturn - 8) with linear spread,
-    //    so a fresh 0%-return user lands around rank 10 of the 50+ entries
-    //    instead of drowning at rank 49 behind fake +30% seeded characters.
-    //    Real users (DB + device-local) keep their ACTUAL returns — they
-    //    compete on real merit. A real friend genuinely outperforming the
-    //    user still ranks above them; SEED just doesn't falsely dominate.
-    const anchor = myReturn - 8;
-    const seedRange = 24;           // width of SEED distribution, percentage points
-    const seedTop = anchor + seedRange / 2;      // ~ myReturn + 4
-    const seedBottom = anchor - seedRange / 2;   // ~ myReturn - 20
-    const seedSorted = [...SEED].sort((a, b) => b.returnPct - a.returnPct);
-    const seenIds = new Set(entries.map(e => e.id));
-    seedSorted.forEach((s, i) => {
-      if (seenIds.has(s.id)) return;
-      const t = seedSorted.length > 1 ? i / (seedSorted.length - 1) : 0.5;
-      const rebased = seedTop - t * seedRange;
-      entries.push({
-        id: s.id,
-        name: s.name,
-        school: s.school,
-        class: s.class,
-        returnPct: Math.round(rebased * 10) / 10,
-        trades: s.trades,
-        me: false,
-      });
-    });
+    // SEED fillers DELETED per user request — only real users on this
+    // board. The DB side is responsible for returning everyone who has
+    // actually signed up.
 
     // ---- Scope filter -----------------------------------------------------
     let ranked = entries.slice();

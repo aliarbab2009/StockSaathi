@@ -167,18 +167,29 @@ async function pumpAiQueue() {
 }
 
 async function fetchAiTag({ main, n, hk }) {
+  // Abort the fetch if the AI endpoint takes longer than 12 s. Without
+  // this, a slow / hung /api/ai?op=news-tldr leaves every card stuck on
+  // "Analysing…" forever — which is exactly what the user hit on a
+  // screen of 4 news items that all timed out in parallel and never
+  // fell back to the no-skeleton state.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
   try {
     const r = await fetch("/api/ai?op=news-tldr", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ headline: n.headline, source: n.source, symbols: n.symbols || [] }),
+      signal: ctrl.signal,
     });
+    clearTimeout(timer);
     if (!r.ok) throw new Error("http_" + r.status);
     const j = await r.json();
     if (!j?.tldr) throw new Error("no_tldr");
     aiTags.set(hk, { sentiment: j.sentiment || "neutral", tldr: j.tldr, loading: false });
     patchNewsItem(main, hk);
-  } catch {
+  } catch (e) {
+    clearTimeout(timer);
+    console.warn("[news-tldr] failed for", n.headline?.slice(0, 40), "·", e?.name || e?.message || e);
     aiTags.set(hk, { loading: false });
     // Quietly remove the skeleton for failed items so the card isn't stuck on "Analysing…"
     const el = main?.querySelector(`[data-ai-hk="${cssEscape(hk)}"]`);

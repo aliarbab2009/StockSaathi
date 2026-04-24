@@ -859,8 +859,14 @@ begin
     select count(*)::int as tx
     from public.transactions t where t.user_id = p.id
   ) tcount on true
-  where p.onboarded = true
-    and (p_school is null or lower(p.school) = lower(p_school))
+  where (p_school is null or lower(p.school) = lower(p_school))
+    -- onboarded filter removed — a real user who signed up is a real
+    -- user, whether or not they completed the onboarding quiz. Keeping
+    -- them out of the leaderboard was making the board look artificially
+    -- empty (17 signed-up users, only 2 visible) and was also the root
+    -- cause of the "I only see myself" demo complaints. The handle_new_user
+    -- trigger guarantees every auth row has a profile + portfolio, so
+    -- the joins below never break.
   order by (pf.cash_paise + coalesce(hsum.hv, 0)) desc
   limit greatest(1, least(coalesce(p_limit, 100), 200));
 end;
