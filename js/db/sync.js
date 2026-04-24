@@ -525,45 +525,107 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * Hydrate localStorage from the DB row. Called from loadAllFromDb on login
- * so a brand-new device / incognito window picks up the user's chat history
- * instead of showing an empty coach. Dispatches ss:coach-sync custom events
- * afterwards so any live-mounted chat/panel view reloads from fresh disk.
+ * Hydrate localStorage from the DB row OR push local chats up to the DB.
+ * Called from loadAllFromDb on login so a brand-new device / incognito
+ * window picks up the user's chat history AND so users who've been
+ * chatting locally on pre-v140 clients finally get their existing
+ * localStorage chats uploaded to Supabase.
  *
- * Flips _hydrateAttempted = true on completion (success OR failure) so
- * dbSaveCoachChatsSoon unblocks. If the DB row exists but is functionally
- * empty (a prior buggy run blanked it), leaves localStorage alone — the
- * first real save after this will push local content UP to recover.
+ * Four-way decision matrix on (DB has content?, local has content?):
+ *   (T, F) → DB → local   (fresh device / incognito pulls history down)
+ *   (F, T) → local → DB   (one-shot boot migration — the case that
+ *                           back-fills pre-v140 users whose chats never
+ *                           left their browser)
+ *   (T, T) → DB → local   (fall back to DB as source of truth; user's
+ *                           newer local edits will push on next save)
+ *   (F, F) → no-op        (nothing to sync either way)
+ *
+ * Dispatches ss:coach-sync after any localStorage write so live chat
+ * views reload. Flips _hydrateAttempted = true on completion (success
+ * or failure) so dbSaveCoachChatsSoon unblocks.
  */
 export async function hydrateCoachChatsFromDb() {
   try {
     const row = await dbLoadCoachChats();
-    if (!row) return;
-    const dbHasSessions = hasRealSessionsJson(row.sessions_json);
-    const dbHasCoachLog = hasRealCoachLog(row.coach_log);
-    if (!dbHasSessions && !dbHasCoachLog) {
-      // DB row exists but is blank. Don't overwrite local — if local has
-      // content, the next debounced save will push it up automatically.
-      return;
-    }
-    let touched = false;
-    try {
-      if (dbHasSessions) {
-        localStorage.setItem(SESSIONS_LS_KEY, JSON.stringify(row.sessions_json));
-        touched = true;
+    const dbHasSessions = row && hasRealSessionsJson(row.sessions_json);
+    const dbHasCoachLog = row && hasRealCoachLog(row.coach_log);
+    const dbHasContent = dbHasSessions || dbHasCoachLog;
+
+    const localSessions = safeParse(localStorage.getItem(SESSIONS_LS_KEY), {});
+    const localCoachLog = safeParse(localStorage.getItem(COACHLOG_LS_KEY), []);
+    const localHasSessions = hasRealSessionsJson(localSessions);
+    const localHasCoachLog = hasRealCoachLog(localCoachLog);
+    const localHasContent = localHasSessions || localHasCoachLog;
+
+    if (dbHasContent) {
+      // DB → local. Existing pull-down flow. Always prefer DB as source
+      // of truth on initial boot — if the user made local edits they'll
+      // push up again on their next save once the gate opens.
+      let touched = false;
+      try {
+        if (dbHasSessions) {
+          localStorage.setItem(SESSIONS_LS_KEY, JSON.stringify(row.sessions_json));
+          touched = true;
+        }
+      } catch (e) { console.warn("[coach-sync] hydrate sessions failed:", e); }
+      try {
+        if (dbHasCoachLog) {
+          localStorage.setItem(COACHLOG_LS_KEY, JSON.stringify(row.coach_log));
+          touched = true;
+        }
+      } catch (e) { console.warn("[coach-sync] hydrate coach_log failed:", e); }
+      if (touched) {
+        try { window.dispatchEvent(new CustomEvent("ss:coach-sync")); } catch {}
+        console.log("[coach-sync] hydrated local from DB (pull)");
       }
-    } catch (e) { console.warn("[coach-sync] hydrate sessions failed:", e); }
-    try {
-      if (dbHasCoachLog) {
-        localStorage.setItem(COACHLOG_LS_KEY, JSON.stringify(row.coach_log));
-        touched = true;
-      }
-    } catch (e) { console.warn("[coach-sync] hydrate coach_log failed:", e); }
-    if (touched) {
-      try { window.dispatchEvent(new CustomEvent("ss:coach-sync")); } catch {}
+    } else if (localHasContent) {
+      // Local → DB. One-shot boot migration for any user whose chats
+      // only live in localStorage (everybody pre-v140, plus anybody
+      // whose earlier saves were silenced by the v139 gate bug).
+      // Upsert inline, bypassing the debounce + the _hydrateAttempted
+      // gate — we're already inside hydrate so the gate is about to
+      // flip open anyway, and we have proven-real content to push.
+      await _bootPushLocalToDb();
     }
+    // Else (no content on either side) — do nothing.
   } finally {
     _hydrateAttempted = true;
+  }
+}
+
+// One-shot local → DB upsert from inside hydrate. Bypasses the debounce
+// since hydrate's already async and we want the back-fill to land before
+// the user closes the tab. Same RLS + migration error-handling as the
+// debounced flush path.
+async function _bootPushLocalToDb() {
+  const client = await sb();
+  if (!client) return;
+  try {
+    const uid = await resolveUid(client);
+    if (!uid) {
+      console.warn("[coach-sync] boot-push skipped — no authenticated user");
+      return;
+    }
+    const sessions_json = safeParse(localStorage.getItem(SESSIONS_LS_KEY), {});
+    const coach_log = safeParse(localStorage.getItem(COACHLOG_LS_KEY), []);
+    if (!hasRealSessionsJson(sessions_json) && !hasRealCoachLog(coach_log)) return;
+    const { error } = await client.from("coach_chats").upsert({
+      user_id: uid,
+      sessions_json,
+      coach_log,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
+    if (error) {
+      if (/42P01|does not exist/i.test(String(error.message || ""))) {
+        logMigrationMissing();
+      } else {
+        console.warn("[coach-sync] boot-push failed:", error.message);
+      }
+      return;
+    }
+    console.log("[coach-sync] boot-push succeeded — uploaded local chats to Supabase");
+  } catch (e) {
+    console.warn("[coach-sync] boot-push threw:", e?.message || e);
   }
 }
 
