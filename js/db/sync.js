@@ -31,8 +31,19 @@ async function authWithTimeout(fn, name, ms = 5000) {
 export async function bootSync() {
   if (_booted) return;
   _booted = true;
+  // 10-s ultimate failsafe — even if everything below hangs or throws,
+  // the coach-chat save gate (_hydrateAttempted) opens 10 seconds after
+  // the first bootSync call so rapid-fire saves can't be lost forever
+  // just because the boot path had some unforeseen issue.
+  _scheduleHydrateFailsafe();
   const client = await sb();
-  if (!client) return;   // local mode, nothing to do
+  if (!client) {
+    // Local mode — no Supabase at all. Open the gate immediately; there's
+    // nothing to hydrate, and writes from dbSaveCoachChatsSoon would be
+    // no-ops anyway (sb() returns null inside _flushCoachSync).
+    _hydrateAttempted = true;
+    return;
+  }
 
   // Refresh user profile cache on auth changes
   client.auth.onAuthStateChange(async (event, session) => {
@@ -41,6 +52,7 @@ export async function bootSync() {
       await loadAllFromDb();
     } else {
       // sign-out — state will be cleared by the UI
+      _hydrateAttempted = true;
     }
   });
 
@@ -53,9 +65,19 @@ export async function bootSync() {
     if (sessData?.session?.user) {
       await refreshCurrentUser();
       await loadAllFromDb();
+    } else {
+      // No active session at boot — open the gate so that if the user
+      // signs in later, saves fired BEFORE loadAllFromDb races back
+      // aren't gated. The content-check guard in _flushCoachSync
+      // still protects against blank-envelope uploads.
+      _hydrateAttempted = true;
     }
   } catch (e) {
     console.warn("[sync] bootSync getSession failed:", e?.message || e);
+    // Even on failure, open the gate — the 10-s failsafe would have
+    // done it anyway, but doing it now avoids the 10-s write-silence
+    // window after a login that happens to hit this error path.
+    _hydrateAttempted = true;
   }
 }
 
@@ -182,6 +204,19 @@ export async function loadAllFromDb() {
     hydrateCoachChatsFromDb().catch(e => console.warn("[sync] coach hydrate:", e?.message || e));
   } finally {
     _syncing = false;
+    // Open the dbSaveCoachChatsSoon() gate regardless of how loadAllFromDb
+    // exited. v139 only flipped the flag inside hydrateCoachChatsFromDb()'s
+    // own finally — but loadAllFromDb has six early-return paths (no
+    // client, no uid, getUser timeout, Promise.all throw, _syncing
+    // reentrancy) that bail BEFORE hydrate is even called. When that
+    // happened the flag stayed false forever and every single coach-chat
+    // save silently no-op'd via the gate at dbSaveCoachChatsSoon. Moving
+    // the flip here ensures the gate opens after ANY loadAllFromDb
+    // invocation, success or failure — so the race window the gate was
+    // protecting against (a ~500 ms period between module-load blank-save
+    // and successful hydrate) is the ONLY thing it gates against, not
+    // the entire session.
+    _hydrateAttempted = true;
   }
 }
 
@@ -333,14 +368,37 @@ function hasRealCoachLog(log) {
 // client.auth.getUser() call if the cache hasn't settled yet. Matches
 // the pattern loadAllFromDb already uses. Cheap insurance so the sync
 // never silently no-ops on a boot where refreshCurrentUser races.
+// v140 — now logs the fallback + failure so silent no-ops are
+// diagnosable from the browser console instead of invisible.
 async function resolveUid(client) {
   let uid = currentUser()?.id || null;
   if (uid) return uid;
   try {
     const res = await authWithTimeout(() => client.auth.getUser(), "coach_sync_getUser", 3500);
     uid = res?.data?.user?.id || null;
-  } catch { /* ignored — fall through to null */ }
+    if (!uid) console.warn("[coach-sync] resolveUid: getUser returned no user — treating as signed-out");
+  } catch (e) {
+    console.warn("[coach-sync] resolveUid getUser failed:", e?.message || e);
+  }
   return uid;
+}
+
+// 10-second failsafe: open the _hydrateAttempted gate no matter what
+// else happens during boot. Separate from the setTimeout-based debounce.
+// Defensive layer for any boot-path bug we haven't thought of — it's
+// better for a bad hydrate to UPSERT-over-real-DB (still prevented by
+// _flushCoachSync's blank-envelope content-check) than for the entire
+// coach-chat sync to be permanently silenced like it was in v139.
+let _hydrateFailsafeTimer = null;
+function _scheduleHydrateFailsafe() {
+  if (_hydrateFailsafeTimer) return;
+  _hydrateFailsafeTimer = setTimeout(() => {
+    _hydrateFailsafeTimer = null;
+    if (!_hydrateAttempted) {
+      console.warn("[coach-sync] hydrate failsafe fired — gate was still closed 10 s after bootSync started. Opening so saves can proceed.");
+      _hydrateAttempted = true;
+    }
+  }, 10_000);
 }
 
 // Log "coach_chats table doesn't exist" exactly once per page load so
@@ -391,8 +449,23 @@ export async function dbLoadCoachChats() {
 // chatSessions.loadSessions persists on a fresh-localStorage mount.
 let _coachSyncTimer = null;
 let _hydrateAttempted = false;
+let _gateSuppressWarned = false;
 export function dbSaveCoachChatsSoon() {
-  if (!_hydrateAttempted) return;   // wait for boot hydrate to finish
+  if (!_hydrateAttempted) {
+    // Should essentially never fire thanks to the unconditional flip in
+    // loadAllFromDb's finally, bootSync's exit paths, and the 10 s
+    // failsafe. If it does, log once so we can see it in the console
+    // instead of the v139 bug where this was a silent no-op for the
+    // entire session. The call itself is still gated — but the user's
+    // localStorage write already happened in chatSessions.saveSessions,
+    // so content isn't lost, just not pushed yet. The next save after
+    // the gate opens will upsert whatever localStorage currently holds.
+    if (!_gateSuppressWarned) {
+      _gateSuppressWarned = true;
+      console.warn("[coach-sync] save suppressed — boot hydrate gate still closed. Will retry on next save once gate opens.");
+    }
+    return;
+  }
   if (_coachSyncTimer) clearTimeout(_coachSyncTimer);
   _coachSyncTimer = setTimeout(_flushCoachSync, 1500);
 }
@@ -403,7 +476,12 @@ async function _flushCoachSync() {
   if (!client) return;
   try {
     const uid = await resolveUid(client);
-    if (!uid) return;
+    if (!uid) {
+      // v140: previously silent. Surface this so users whose auth
+      // session is stale can actually see why writes aren't landing.
+      console.warn("[coach-sync] save skipped — no authenticated user (resolveUid returned null)");
+      return;
+    }
     const sessions_json = safeParse(localStorage.getItem(SESSIONS_LS_KEY), {});
     const coach_log = safeParse(localStorage.getItem(COACHLOG_LS_KEY), []);
     // Blank-envelope guard: the default post-loadSessions state has ONE
