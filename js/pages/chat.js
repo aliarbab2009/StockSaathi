@@ -317,9 +317,13 @@ function renderBubble(m) {
   if (m.role === "user") {
     // Ultra-tight hug — ≈1.7px vertical, ≈3.9px horizontal at text-sm
     // (font unchanged). Line-height tight too so the bubble sits
-    // millimetre-off the glyphs.
+    // millimetre-off the glyphs. Absolute width cap of 440px so
+    // on desktop (~780px chat column) a long message doesn't extend
+    // 600px leftward; mobile still uses 78% of container via the
+    // min() fallback. Assistant bubbles keep their 82% since their
+    // replies are typically longer + benefit from extra breathing room.
     return `
-      <div${streamAttr} style="align-self: flex-end; width: fit-content; max-width: 78%; background: var(--brand); color: white; padding: 0.13em 0.3em; border-radius: 8px 8px 2px 8px; font-size: var(--text-sm); line-height: 1.3; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
+      <div${streamAttr} style="align-self: flex-end; width: fit-content; max-width: min(440px, 78%); background: var(--brand); color: white; padding: 0.13em 0.3em; border-radius: 8px 8px 2px 8px; font-size: var(--text-sm); line-height: 1.3; white-space: pre-wrap; word-wrap: break-word; box-shadow: var(--sh-xs);">
         <span class="msg-body">${escapeHtml(m.text)}</span>
       </div>
     `;
