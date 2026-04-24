@@ -211,7 +211,7 @@ function renderRow(u) {
     <tr class="${u.me ? "lb-row-user" : ""}">
       <td><span class="lb-rank ${top3 ? "top3" : ""}">${u.rank}</span></td>
       <td>
-        <div class="lb-name">${escapeHtml(u.name)}${u.me ? ' <span class="pill pill-brand">YOU</span>' : u.realUser ? ' <span class="pill pill-blue">REAL</span>' : ""}</div>
+        <div class="lb-name">${escapeHtml(u.name)}${u.me ? ' <span class="pill pill-brand">YOU</span>' : ""}</div>
         ${u.class ? `<div class="lb-school">${escapeHtml(u.class)}</div>` : ""}
       </td>
       <td class="lb-school">${escapeHtml(u.school)}</td>
