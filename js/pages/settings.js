@@ -61,7 +61,7 @@ export function renderSettings(main) {
           <p class="text-sm" style="line-height: 1.7;"><strong>StockSaathi</strong> — an AI-coached investment simulator for Indian teens. Real stock data, virtual money, behavioural coach. Zero setup — just sign up and start.</p>
           <p class="dim text-xs" style="line-height: 1.7; margin-top: var(--sp-3);">
             <strong style="color: var(--text-muted);">Educational paper-trading simulator · Virtual money only.</strong>
-            All trades, portfolios, leaderboards and transfers are simulated — no real securities
+            All trades, portfolios and transfers are simulated — no real securities
             are bought, sold, or held. StockSaathi is
             <strong style="color: var(--text-muted);">not a SEBI-registered broker, investment
             adviser, research analyst, or portfolio manager</strong>, and is not affiliated with

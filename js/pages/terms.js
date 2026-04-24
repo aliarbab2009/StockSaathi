@@ -13,7 +13,7 @@ export function renderTerms(main) {
       <div class="card" style="margin-bottom: var(--sp-4); background: var(--bg-soft);">
         <p class="text-sm" style="line-height: 1.75;">
           <strong>Read this first.</strong> StockSaathi is an <strong>educational
-          paper-trading simulator</strong>. Every number, portfolio, leaderboard rank,
+          paper-trading simulator</strong>. Every number, portfolio,
           transfer and balance you see on the service is simulated. No real securities
           are bought, sold, or held. No real money is ever debited, credited, or held
           on your behalf. StockSaathi is <strong>not a SEBI-registered broker, investment
@@ -47,8 +47,8 @@ export function renderTerms(main) {
       <div class="card" style="margin-bottom: var(--sp-4);">
         <h3 style="margin-bottom: var(--sp-3);">3. No investment advice, no securities activity</h3>
         <p class="text-sm" style="line-height: 1.75;">
-          Nothing displayed on StockSaathi &mdash; quotes, charts, coach replies, leaderboard
-          ranks, news summaries, crash replays &mdash; constitutes investment advice,
+          Nothing displayed on StockSaathi &mdash; quotes, charts, coach replies,
+          news summaries, crash replays &mdash; constitutes investment advice,
           research, a solicitation to transact, or a recommendation to buy or sell any
           security. You are solely responsible for any real-world financial decision you
           make. Consult a SEBI-registered financial adviser before you commit real money

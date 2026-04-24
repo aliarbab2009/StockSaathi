@@ -808,77 +808,13 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 -- =============================================================================
--- Leaderboard view (public read, aggregates only)
+-- Leaderboard removed Apr 24 2026. The function + view are intentionally
+-- not declared here. If you're applying this schema to an existing
+-- project that previously had them, run:
+--   drop view if exists public.leaderboard_view;
+--   drop function if exists public.leaderboard(int, text);
+-- to clean them out (safe to run idempotently).
 -- =============================================================================
--- Leaderboard: a SECURITY DEFINER function bypasses the (tightened) profiles
--- RLS so the public rankings still work for anon clients. It ONLY returns
--- safe columns — never email/parent_email/age/class_code.
-create or replace function public.leaderboard(
-  p_limit int default 100,
-  p_school text default null
-)
-returns table (
-  user_id uuid,
-  username text,
-  display_name text,
-  school text,
-  avatar_color text,
-  portfolio_value_paise bigint,
-  starting_cash_paise bigint,
-  return_bps bigint,
-  trades int,
-  created_at timestamptz
-)
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  return query
-  select
-    p.id,
-    p.username,
-    p.display_name,
-    case when p_school is null then p.school else p.school end,
-    p.avatar_color,
-    (pf.cash_paise + coalesce(hsum.hv, 0))::bigint,
-    pf.starting_cash_paise,
-    case when pf.starting_cash_paise > 0 then
-      round(((pf.cash_paise + coalesce(hsum.hv, 0) - pf.starting_cash_paise)::numeric /
-             pf.starting_cash_paise::numeric) * 10000)::bigint
-    else 0::bigint end,
-    coalesce(tcount.tx, 0),
-    p.created_at
-  from public.profiles p
-  join public.portfolios pf on pf.user_id = p.id
-  left join lateral (
-    select sum(h.qty * h.avg_cost_paise)::bigint as hv
-    from public.holdings h where h.user_id = p.id
-  ) hsum on true
-  left join lateral (
-    select count(*)::int as tx
-    from public.transactions t where t.user_id = p.id
-  ) tcount on true
-  where (p_school is null or lower(p.school) = lower(p_school))
-    -- onboarded filter removed — a real user who signed up is a real
-    -- user, whether or not they completed the onboarding quiz. Keeping
-    -- them out of the leaderboard was making the board look artificially
-    -- empty (17 signed-up users, only 2 visible) and was also the root
-    -- cause of the "I only see myself" demo complaints. The handle_new_user
-    -- trigger guarantees every auth row has a profile + portfolio, so
-    -- the joins below never break.
-  order by (pf.cash_paise + coalesce(hsum.hv, 0)) desc
-  limit greatest(1, least(coalesce(p_limit, 100), 200));
-end;
-$$;
-grant execute on function public.leaderboard(int, text) to anon, authenticated;
-
--- Back-compat shim: keep the old `leaderboard_view` name as a view wrapping
--- the SECURITY DEFINER function so existing client code keeps working.
-drop view if exists public.leaderboard_view;
-create or replace view public.leaderboard_view as
-  select * from public.leaderboard(200, null);
-grant select on public.leaderboard_view to anon, authenticated;
 
 -- =============================================================================
 -- Row Level Security

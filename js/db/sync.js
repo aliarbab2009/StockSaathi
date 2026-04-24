@@ -247,23 +247,6 @@ export async function dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyK
   return data;
 }
 
-/** Fetch the public leaderboard */
-export async function dbLeaderboard({ scope = "GLOBAL", limit = 50 } = {}) {
-  const client = await sb();
-  if (!client) return [];
-  let q = client.from("leaderboard_view").select("*").order("return_bps", { ascending: false });
-  if (scope === "SCHOOL") {
-    const { data: u } = await client.auth.getUser();
-    if (u?.user) {
-      const { data: me } = await client.from("profiles").select("school").eq("id", u.user.id).maybeSingle();
-      if (me?.school) q = q.eq("school", me.school);
-    }
-  }
-  q = q.limit(limit);
-  const { data } = await q;
-  return data || [];
-}
-
 function prettifyErr(msg) {
   if (!msg) return "Something went wrong.";
   if (/insufficient cash/i.test(msg)) return "Not enough cash.";

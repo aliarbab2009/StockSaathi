@@ -14,7 +14,7 @@ Ship to real users with a real Postgres backend, cross-device accounts, email fr
    - Plan: **Free** is fine for launch (500MB DB, 50k monthly active users, 2GB file storage). Upgrade later.
 3. Wait ~90s for the project to provision.
 4. Open **SQL Editor → New query** → paste the **entire contents** of `supabase/schema.sql` → **Run**.
-   - Creates all tables, RPCs, RLS policies, triggers, the leaderboard view, and enables Realtime.
+   - Creates all tables, RPCs, RLS policies, triggers, and enables Realtime.
 5. **Authentication → Providers → Email**:
    - Confirm email: **ON** if you want the 6-digit code flow (recommended).
    - Secure email change: optional.
@@ -72,7 +72,7 @@ Ship to real users with a real Postgres backend, cross-device accounts, email fr
 Project → **Settings → Environment Variables** — add/update these:
 
 ```
-# Supabase (required for cross-device accounts, leaderboard, friends, transfers)
+# Supabase (required for cross-device accounts, friends, transfers)
 SUPABASE_URL=https://xxxxxxxx.supabase.co
 SUPABASE_ANON_KEY=eyJhbGc...
 # Service role key — server-only, never exposed to client. Enables the
@@ -189,7 +189,7 @@ Now:
 2. Open it on a **different device** (your phone) → **Log in** with the same email — you should see the same portfolio.
 3. Sign up a second account on that phone → go to **Friends** → search the first account's username → **Add**.
 4. Send them ₹500 → the first device sees it appear instantly.
-5. Both accounts appear on the **Leaderboard** with real returns.
+5. Both accounts can transact with each other and trade independently.
 
 ---
 

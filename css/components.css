@@ -2343,7 +2343,11 @@
   letter-spacing: -0.02em;
 }
 
-/* ============================== LEADERBOARD ========================= */
+/* Generic segmented-tab pill row. Originally written for the leaderboard
+   (hence the .lb- prefix), now reused by friends.js, news.js, and the
+   trade-form Market/Limit picker on stockDetail.js. Keep the class names
+   even though the leaderboard page is gone — renaming would break three
+   pages for no benefit. */
 .lb-tabs {
   display: flex;
   gap: 2px;
@@ -2365,27 +2369,6 @@
   color: var(--text-strong);
   box-shadow: var(--sh-xs);
 }
-.lb-row-user {
-  background: var(--brand-soft) !important;
-}
-.lb-rank {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: var(--text-md);
-  width: 32px;
-  display: inline-block;
-  text-align: center;
-  color: var(--text-muted);
-}
-.lb-rank.top3 {
-  background: var(--brand);
-  color: white;
-  border-radius: 50%;
-  height: 28px;
-  line-height: 28px;
-}
-.lb-name { font-weight: 600; color: var(--text-strong); }
-.lb-school { font-size: var(--text-xs); color: var(--text-dim); }
 
 /* Chat session picker menu — dropdown that lists past conversations. */
 .chat-session-menu {
@@ -2462,26 +2445,6 @@
   /* Full-width dropdown on small phones so long session titles don't get cut off */
   .chat-session-menu { left: 0; right: 0; min-width: 0; max-width: none; }
 }
-
-/* Leaderboard skeleton loader — shown while the first DB poll is in flight.
-   Shimmering grey bars mimic the real row layout so the transition to
-   actual data doesn't cause layout shift. */
-.lb-skeleton .lb-skel-line {
-  background: linear-gradient(
-    90deg,
-    var(--bg-soft) 0%,
-    var(--divider) 50%,
-    var(--bg-soft) 100%
-  );
-  background-size: 200% 100%;
-  border-radius: 4px;
-  animation: lbSkelShimmer 1.4s linear infinite;
-}
-@keyframes lbSkelShimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-.lb-skeleton .lb-tab[disabled] { opacity: 0.55; cursor: default; }
 
 /* ============================== REPORT CARD ========================= */
 .report-grade {

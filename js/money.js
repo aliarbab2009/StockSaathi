@@ -18,7 +18,7 @@ export function paiseToRupees(paise) {
  * Format paise as Indian locale currency: "₹1,23,456" or "₹1,23,456.50".
  *
  * Compact mode rules (used in stat tiles, nav cash pill, activity rows,
- * leaderboard, admin summaries, etc.):
+ * admin summaries, etc.):
  *   - under ₹1 lakh  → full Indian-grouped integer, paise dropped ("₹99,999")
  *   - ≥ ₹1 lakh      → "₹1.23L"   (no space, uppercase L)
  *   - ≥ ₹1 crore     → "₹1.23Cr"  (no space, uppercase Cr)

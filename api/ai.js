@@ -654,7 +654,7 @@ const SYSTEM_COMMAND = `You are Saathi's command router on StockSaathi. A user t
   { "action": "search",   "query": "<the search intent>", "response": "<short ack>" }
   { "action": "trade",    "side": "BUY" | "SELL", "symbol": "<NSE ticker>", "qty": <int>, "response": "<short ack>" }
 
-Navigation targets: /portfolio /stocks /news /chat /crash-replay /leaderboard /friends /report-card /settings /stocks/<TICKER>
+Navigation targets: /portfolio /stocks /news /chat /crash-replay /friends /report-card /settings /stocks/<TICKER>
 Rules: educational → answer (Saathi voice, Indian teen audience, no emojis, no buy/sell advice). Go somewhere → navigate. Filter stocks → search. Place trade → trade (qty ≥ 1). Garbage/off-scope → answer + brief redirect. Return ONLY the JSON.`;
 
 async function opCommand(req, origin) {

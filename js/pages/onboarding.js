@@ -86,7 +86,7 @@ function renderStep(s) {
         <div>
           <label class="label" for="f-class">Class / batch code (optional)</label>
           <input class="input" id="f-class" placeholder="e.g. 12-Science or FINED-A" value="${escapeAttr(form.classCode)}" />
-          <div class="dim text-xs" style="margin-top: 4px;">Useful if your teacher set up a class leaderboard.</div>
+          <div class="dim text-xs" style="margin-top: 4px;">Useful if your teacher groups your class together for challenges.</div>
         </div>
       </div>
       <div class="flex gap-2 wrap justify-between" style="margin-top: var(--sp-5);">

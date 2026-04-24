@@ -407,8 +407,8 @@ export function getHoldingPLPct(symbol, state = getState()) {
   if (!h) return 0;
   const curPx = getPriceAt(symbol, 0);
   // Guard against (a) missing current price, (b) zero avg cost (free grants).
-  // Capping at +999% / -100% keeps the UI & leaderboard sort stable; pure
-  // Infinity was breaking sorts and rendering "Infinity%".
+  // Capping at +999% / -100% keeps UI sort stable; pure Infinity was
+  // breaking sorts and rendering "Infinity%".
   if (!curPx) return 0;
   const avg = h.avgCostPaise || 0;
   if (avg <= 0) return curPx > 0 ? 9.99 : 0;
