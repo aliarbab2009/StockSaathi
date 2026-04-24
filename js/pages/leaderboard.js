@@ -114,23 +114,35 @@ export function renderLeaderboard(main) {
       });
     }
 
-    // 4. SEED fill — keeps the board populated against 50 simulated peers
-    //    while the real user base grows. De-duped by SEED's static ids so
-    //    a real user never collides with a seeded one. No visual labels
-    //    distinguish them on the row — just the YOU pill on the user.
+    // 4. SEED fill — keeps the board populated while the real user base
+    //    grows. Re-TARGETED each render so the board makes sense relative
+    //    to the user's actual performance: SEED returns are remapped into
+    //    a 24-point band anchored at (userReturn - 8) with linear spread,
+    //    so a fresh 0%-return user lands around rank 10 of the 50+ entries
+    //    instead of drowning at rank 49 behind fake +30% seeded characters.
+    //    Real users (DB + device-local) keep their ACTUAL returns — they
+    //    compete on real merit. A real friend genuinely outperforming the
+    //    user still ranks above them; SEED just doesn't falsely dominate.
+    const anchor = myReturn - 8;
+    const seedRange = 24;           // width of SEED distribution, percentage points
+    const seedTop = anchor + seedRange / 2;      // ~ myReturn + 4
+    const seedBottom = anchor - seedRange / 2;   // ~ myReturn - 20
+    const seedSorted = [...SEED].sort((a, b) => b.returnPct - a.returnPct);
     const seenIds = new Set(entries.map(e => e.id));
-    for (const s of SEED) {
-      if (seenIds.has(s.id)) continue;
+    seedSorted.forEach((s, i) => {
+      if (seenIds.has(s.id)) return;
+      const t = seedSorted.length > 1 ? i / (seedSorted.length - 1) : 0.5;
+      const rebased = seedTop - t * seedRange;
       entries.push({
         id: s.id,
         name: s.name,
         school: s.school,
         class: s.class,
-        returnPct: s.returnPct,
+        returnPct: Math.round(rebased * 10) / 10,
         trades: s.trades,
         me: false,
       });
-    }
+    });
 
     // ---- Scope filter -----------------------------------------------------
     let ranked = entries.slice();
