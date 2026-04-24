@@ -381,28 +381,40 @@ function render(inst, symbol) {
     }
   }
 
-  // Mount quantity selector
-  const qtyContainer = main.querySelector("#qty-container");
-  if (qtyContainer) {
-    qtySelectorHandle?.destroy?.();
-    qtySelectorHandle = mountQuantitySelector(qtyContainer, {
-      side: ui.side,
-      kind: inst.kind,
-      pricePaise: curPrice,
-      cashPaise: state.portfolio.cashPaise,
-      holdingQty: holding?.qty || 0,
-      initialQty: ui.qty,
-      onChange: (qty) => {
-        ui.qty = qty;
-        const qtyEl = main.querySelector("#os-qty");
-        const totalEl = main.querySelector("#os-total");
-        if (qtyEl) qtyEl.textContent = formatQty(qty, inst.kind);
-        if (totalEl) totalEl.textContent = formatRupees(Math.round(qty * curPrice));
-      },
-    });
-  }
-
+  // Attach the trade-button + every other click handler FIRST, before
+  // the optional side-effects below. Previously mountQuantitySelector ran
+  // before attachListeners — if it threw for any reason (stale state,
+  // DOM race), the Queue AMO Buy / Place Limit / Market buttons would
+  // never get a click listener and the button appeared dead (user would
+  // only see the browser's default :active press animation and nothing
+  // else). Reordering makes the core trade action bulletproof.
   attachListeners(main, inst, symbol, curPrice, holding);
+
+  // Mount quantity selector (wrapped in try/catch so a crash here can
+  // never silently kill the trade buttons).
+  try {
+    const qtyContainer = main.querySelector("#qty-container");
+    if (qtyContainer) {
+      qtySelectorHandle?.destroy?.();
+      qtySelectorHandle = mountQuantitySelector(qtyContainer, {
+        side: ui.side,
+        kind: inst.kind,
+        pricePaise: curPrice,
+        cashPaise: state.portfolio?.cashPaise ?? 0,
+        holdingQty: holding?.qty || 0,
+        initialQty: ui.qty,
+        onChange: (qty) => {
+          ui.qty = qty;
+          const qtyEl = main.querySelector("#os-qty");
+          const totalEl = main.querySelector("#os-total");
+          if (qtyEl) qtyEl.textContent = formatQty(qty, inst.kind);
+          if (totalEl) totalEl.textContent = formatRupees(Math.round(qty * curPrice));
+        },
+      });
+    }
+  } catch (e) {
+    console.error("[stockDetail] mountQuantitySelector failed (trade button still works):", e);
+  }
 }
 
 function nowIstDayKey() {
@@ -516,6 +528,10 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
     // as a visible toast instead of the button appearing "dead".
     try {
       console.log("[trade] click on place-trade-btn", { side: ui.side, qty: ui.qty, symbol });
+      // Instant user feedback — if reviewTrade takes >200 ms (common on
+      // Supabase RPC calls), the user gets a toast immediately confirming
+      // the tap landed, not waiting on button state changes alone.
+      toast({ kind: "info", message: "Processing…", duration: 1500 });
       await reviewTrade(inst, symbol, curPrice, holding);
     } catch (e) {
       console.error("[trade] reviewTrade threw:", e);
@@ -561,7 +577,14 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
     if (btn) { btn.disabled = true; btn.textContent = "Queuing AMO…"; }
     try {
       console.log("[AMO] placing", { symbol, side: ui.side, qty, limitPaise });
-      const res = await placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise });
+      // Hard 12 s timeout on the Supabase RPC. Without this, a hung
+      // network leaves the button stuck on "Queuing AMO…" forever with
+      // no way to retry. 12 s is generous for a Postgres rpc over a
+      // good connection but tight enough that the user doesn't give up.
+      const res = await Promise.race([
+        placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("AMO request timed out after 12s — check your connection and try again.")), 12000)),
+      ]);
       console.log("[AMO] placed", res);
       toast({
         kind: "success",

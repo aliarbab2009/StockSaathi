@@ -8,7 +8,7 @@ import {
 } from "../state.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import { getInstrument } from "../data/universe.js";
-import { getPriceAt, getTodayChange } from "../data/prices.js";
+import { getPriceAt, getTodayChange, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes } from "../data/marketData.js";
 import { listPendingOrders, cancelOrder } from "../features/limitOrders.js";
 import { getNews, fmtRelativeTime, labelSentiment } from "../data/news.js";
@@ -170,11 +170,13 @@ export function renderPortfolio(main) {
 
       ${renderDigestCard()}
 
+      ${pendingOrders.length ? renderAmoBanner(pendingOrders) : ""}
+
       <div class="portfolio-stats">
         <div class="stat-tile"><div class="l">Cash</div><div class="v tabular">${formatRupees(cash, { compact: true })}</div></div>
         <div class="stat-tile"><div class="l">Invested</div><div class="v tabular">${formatRupees(holdValue, { compact: true })}</div></div>
         <div class="stat-tile"><div class="l">Holdings</div><div class="v tabular">${holdings.length}</div></div>
-        <div class="stat-tile"><div class="l">Trades</div><div class="v tabular">${state.transactions.length}</div></div>
+        <div class="stat-tile ${pendingOrders.length ? 'has-pending' : ''}"><div class="l">Queued AMOs</div><div class="v tabular">${pendingOrders.length}</div></div>
       </div>
 
       <div class="portfolio-grid">
@@ -204,19 +206,24 @@ export function renderPortfolio(main) {
           </div>
 
           ${pendingOrders.length ? `
-            <div class="card">
+            <div class="card" id="order-list" style="border: 1px solid color-mix(in srgb, var(--brand) 40%, var(--border));">
               <div class="card-head">
-                <h3>Pending limit orders (${pendingOrders.length})</h3>
+                <h3>
+                  <span style="color: var(--brand);">🕗</span>
+                  Queued AMOs &amp; Limit orders
+                  <span class="pill pill-brand" style="margin-left: 6px; font-size: 11px;">${pendingOrders.length}</span>
+                </h3>
               </div>
               <div class="flex-col gap-2">
                 ${pendingOrders.map(o => {
                   const inst = getInstrument(o.symbol) || { name: o.symbol };
                   const limitRupees = Number(o.limit_price_paise) / 100;
+                  const reserveRupees = o.side === "BUY" ? (Number(o.reserved_cash || 0) / 100) : null;
                   return `
                     <div class="flex items-center justify-between" style="padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);">
                       <div>
-                        <div class="text-md"><span class="pill ${o.side === "BUY" ? "pill-green" : "pill-red"}">${o.side} LIMIT</span> ${escapeHtml(inst.name)}</div>
-                        <div class="dim text-xs">${o.qty} × ₹${limitRupees.toFixed(2)} · ${timeSince(new Date(o.created_at))} ago</div>
+                        <div class="text-md"><span class="pill ${o.side === "BUY" ? "pill-green" : "pill-red"}">${o.side} LIMIT</span> <strong>${escapeHtml(inst.name)}</strong></div>
+                        <div class="dim text-xs">${o.qty} × ₹${limitRupees.toFixed(2)} · queued ${timeSince(new Date(o.created_at))} ago${reserveRupees != null ? ` · ₹${reserveRupees.toFixed(2)} reserved` : ""}</div>
                       </div>
                       <button class="btn btn-ghost btn-sm" data-cancel-order="${o.id}">Cancel</button>
                     </div>
@@ -263,6 +270,33 @@ export function renderPortfolio(main) {
         </div>
       </div>
     `;
+
+    // Wire up Cancel buttons on Pending orders. Without this the buttons
+    // looked active but did nothing — users assumed the AMO system was
+    // broken when they couldn't cancel a queued order.
+    main.querySelectorAll("[data-cancel-order]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.cancelOrder;
+        if (!id) return;
+        btn.disabled = true;
+        btn.textContent = "Cancelling…";
+        try {
+          await cancelOrder(id);
+          // Refresh the pending-orders list + portfolio cash (the cancelled
+          // order's reserved cash should now be back in the wallet).
+          try {
+            pendingOrders = await listPendingOrders();
+            const { loadAllFromDb } = await import("../db/sync.js");
+            await loadAllFromDb();
+          } catch {}
+          render();
+        } catch (e) {
+          console.error("[portfolio] cancel order failed:", e);
+          btn.disabled = false;
+          btn.textContent = "Cancel";
+        }
+      });
+    });
   }
 
   function renderDigestCard() {
@@ -393,3 +427,46 @@ function renderActivity(state) {
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
+
+// Human-readable "X ago" for Pending-orders queued timestamps.
+function timeSince(d) {
+  const ms = Date.now() - d.getTime();
+  const s = Math.max(1, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+// Hero-style banner shown above the stat tiles whenever the user has at
+// least one pending AMO / limit order. Makes it unmissable that money
+// is reserved for an order queued at the next market open — previously
+// the pending-orders card was tucked below Holdings and users wondered
+// where their cash went after queuing an AMO.
+function renderAmoBanner(pendingOrders) {
+  const ms = marketStatus();
+  const countLabel = `${pendingOrders.length} order${pendingOrders.length > 1 ? "s" : ""}`;
+  const buyCount = pendingOrders.filter(o => o.side === "BUY").length;
+  const sellCount = pendingOrders.length - buyCount;
+  const breakdown = [
+    buyCount ? `${buyCount} buy` : null,
+    sellCount ? `${sellCount} sell` : null,
+  ].filter(Boolean).join(" · ");
+  const timingLine = ms.open
+    ? "Fills when the market price crosses your limit."
+    : `Fills at ${escapeHtml(ms.nextOpenLabel || "the next market open")} at the opening tick.`;
+  return `
+    <div class="card" style="margin-bottom: var(--sp-4); padding: var(--sp-4); background: color-mix(in srgb, var(--brand) 8%, var(--bg-soft)); border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--border));">
+      <div class="flex items-center gap-3 wrap">
+        <span style="font-size: 22px;" aria-hidden="true">🕗</span>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-weight: 600; color: var(--text-strong);">${countLabel} queued${breakdown ? ` · ${escapeHtml(breakdown)}` : ""}</div>
+          <div class="muted text-xs" style="margin-top: 2px; line-height: 1.5;">${timingLine} Scroll down to review or cancel.</div>
+        </div>
+        <a href="#order-list" class="btn btn-ghost btn-sm" onclick="document.querySelector('#order-list')?.scrollIntoView({behavior:'smooth'});event.preventDefault();">Jump to orders</a>
+      </div>
+    </div>
+  `;
+}

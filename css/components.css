@@ -1191,6 +1191,11 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
+.stat-tile.has-pending {
+  border-color: color-mix(in srgb, var(--brand) 50%, var(--border));
+  background: color-mix(in srgb, var(--brand) 6%, var(--surface));
+}
+.stat-tile.has-pending .l { color: var(--brand); }
 .stat-tile .l {
   font-size: var(--text-10);
   color: var(--text-dim);

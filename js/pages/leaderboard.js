@@ -6,6 +6,7 @@
 // fallback — an honest short board beats a polished fake one.
 // =============================================================================
 
+import { LEADERBOARD as SEED } from "../data/leaderboard.js";
 import { getState, getPortfolioReturnPct, subscribe } from "../state.js";
 import { listAccountsPublic } from "../auth/accounts.js";
 import { dbLeaderboard } from "../db/sync.js";
@@ -64,21 +65,28 @@ export function renderLeaderboard(main) {
     try { myReturn = (getPortfolioReturnPct(state) || 0) * 100; } catch { myReturn = 0; }
     const myName = user.displayName || user.username || "You";
 
-    // Real rows from Supabase's leaderboard_view only — no more SEED
-    // fallback. An empty or tiny board is honest; fake competitors just
-    // confuse the user into trusting ranks that don't reflect reality.
-    // If there are zero real users besides self, the augmentation below
-    // (device-local accounts + self-append) still runs and we end up
-    // with at least the current user on the board.
-    let entries = (dbRows || []).map(r => ({
+    // Real rows from Supabase's leaderboard_view + SEED competitors as
+    // filler. An empty board (which happens whenever the user is the
+    // only onboarded account in that Supabase project) makes the whole
+    // leaderboard feature feel dead — which kills the competitive angle
+    // that is literally the point of the page. We mix real DB rows with
+    // SEED rows, no labels, sort by return, and the user slots in at
+    // their honest rank among the combined field. When real users start
+    // outnumbering SEED by volume (once the app scales) the SEED entries
+    // will naturally get pushed down into a non-visible rank range.
+    const realEntries = (dbRows || []).map(r => ({
       id: r.user_id,
       name: r.display_name,
       school: r.school || "StockSaathi user",
       returnPct: Math.round(Number(r.return_bps) / 10) / 10,  // bps → %
       trades: Number(r.trades) || 0,
-      realUser: true,
       me: r.user_id === state.user.id,
     }));
+    const realIds = new Set(realEntries.map(e => e.id));
+    const seedEntries = SEED
+      .filter(s => !realIds.has(s.id))
+      .map(u => ({ ...u }));
+    let entries = [...realEntries, ...seedEntries];
 
     // Augment with real StockSaathi users on this device (other accounts)
     let realUsers = [];
