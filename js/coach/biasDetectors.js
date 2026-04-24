@@ -121,7 +121,8 @@ export function detectSectorBias({ holdingsAfter, portfolioValue }) {
     if (!inst) continue;
     const px = getPriceAt(sym, 0);
     const v = Math.round(h.qty * px);
-    bySector[inst.sector] = (bySector[inst.sector] || 0) + v;
+    const key = inst.sector || "Unknown";
+    bySector[key] = (bySector[key] || 0) + v;
   }
   const entries = Object.entries(bySector);
   if (!entries.length) return null;
@@ -173,6 +174,9 @@ export function detectDisposition({ transactions }) {
 export function detectAnchoring({ trade }) {
   if (!trade || trade.side !== "BUY") return null;
   const { hi, lo } = get52wRange(trade.symbol);
+  // Bail if no seeded series (Tier-2 imported stock with no price history) —
+  // get52wRange returns ±Infinity in that case, which makes distHi/distLo NaN.
+  if (!Number.isFinite(hi) || !Number.isFinite(lo) || hi <= 0 || lo <= 0) return null;
   const distHi = Math.abs(pctChange(hi, trade.pricePaise));
   const distLo = Math.abs(pctChange(lo, trade.pricePaise));
   if (distHi > 0.02 && distLo > 0.02) return null;

@@ -19,6 +19,8 @@ let _stopFn = null;
 let _matching = false;              // guard: never run two passes in parallel
 const _inFlight = new Set();        // order-ids currently being filled
 const _recentFills = new Map();     // order-id → ts, debounce re-fires
+const _noQuoteAttempts = new Map(); // order-id → count of ticks with no upstream quote
+const _NO_QUOTE_CANCEL_AFTER = 12;  // ~2 min at 12s tick — auto-cancel stuck orders
 
 // AUTH LOCK CONTENTION — why no getSession / getUser here anymore.
 //
@@ -195,9 +197,39 @@ async function matchOnce() {
     const quotes = await getQuoteBatch(symbols);
 
     let filled = 0;
+    let autoCancelled = 0;
     for (const order of pending) {
       const q = quotes[order.symbol];
-      if (!q) continue;
+      if (!q) {
+        // B5: imported-but-uncurated symbols sometimes have no upstream
+        // quote, so the matcher can silently loop forever while cash stays
+        // reserved. Track consecutive no-quote ticks per order; auto-cancel
+        // after ~2 min so the user gets their cash back + a visible toast.
+        const n = (_noQuoteAttempts.get(order.id) || 0) + 1;
+        _noQuoteAttempts.set(order.id, n);
+        if (n >= _NO_QUOTE_CANCEL_AFTER) {
+          try {
+            await cancelOrder(order.id);
+            autoCancelled++;
+            _noQuoteAttempts.delete(order.id);
+            console.warn(`[limit] auto-cancelled ${order.symbol} order ${order.id} after ${n} no-quote ticks`);
+            // Surface to the user if toast is reachable from here — imported
+            // dynamically to avoid a circular import from components/toast.js.
+            try {
+              const { toast } = await import("../components/toast.js");
+              toast({
+                kind: "warn",
+                message: `Cancelled limit ${order.side} ${order.symbol} — no live price available after 2 min. Cash returned.`,
+                duration: 6000,
+              });
+            } catch {}
+          } catch (e) {
+            console.warn("[limit] auto-cancel failed:", e);
+          }
+        }
+        continue;
+      }
+      _noQuoteAttempts.delete(order.id);   // reset on any successful quote
       const cur = q.pricePaise;
       const limit = Number(order.limit_price_paise);
       const matches = order.side === "BUY" ? cur <= limit : cur >= limit;
@@ -206,7 +238,7 @@ async function matchOnce() {
         if (result?.ok) filled++;
       }
     }
-    return { checked: pending.length, filled };
+    return { checked: pending.length, filled, autoCancelled };
   } finally {
     _matching = false;
   }

@@ -536,7 +536,7 @@ function render(inst, symbol) {
       <div class="flex items-center gap-2">
         <a href="#/stocks" class="btn btn-ghost btn-sm">← Markets</a>
         <span class="dim">/</span>
-        <span class="dim text-sm">${escapeHtml(inst.sector)}</span>
+        <span class="dim text-sm">${escapeHtml(inst.sector || "—")}</span>
       </div>
     </div>
 
@@ -546,9 +546,9 @@ function render(inst, symbol) {
           <div class="flex items-center gap-3">
             <div class="stock-avatar" style="width: 52px; height: 52px; font-size: 13px;">${escapeHtml(inst.logo || symbol.slice(0, 3))}</div>
             <div>
-              <h1 style="font-size: var(--text-2xl); margin-bottom: 2px;">${escapeHtml(inst.name)}</h1>
+              <h1 style="font-size: var(--text-2xl); margin-bottom: 2px;">${escapeHtml(inst.name || symbol)}</h1>
               <div class="dim text-xs">
-                ${symbol} · ${inst.kind === "MF" ? "Mutual Fund" : "NSE"} · ${escapeHtml(inst.sector)}
+                ${symbol} · ${inst.kind === "MF" ? "Mutual Fund" : "NSE"} · ${escapeHtml(inst.sector || "—")}
                 <span class="data-badge market-status" tabindex="0" style="margin-left: 8px; position: relative;" data-ms-state="${ms.state}">
                   <span class="dot ${ms.open ? "" : ms.state === "pre-open" ? "preopen" : "closed"}"></span>
                   NSE · ${ms.state === "open" ? "Live" : ms.state === "pre-open" ? "Pre-open" : "Closed"}${ms.state !== "open" ? " · " + escapeHtml(ms.istTime) : ""}
@@ -1273,6 +1273,13 @@ async function executeTrade(inst, side, qty, pricePaise, biasResult) {
   // Simulate real-market execution: routing → match → fill, with small
   // slippage (±0.08%) so prices feel like real fills, not simulator magic.
   try {
+    // Key is generated ONCE at call time — deterministic for this click
+    // intent. If the RPC times out and any internal layer retries, the
+    // same key dedupes on the server. Math.random() used to be in here,
+    // which defeated idempotency entirely.
+    const clickTs = Date.now();
+    const idempotencyKey = `${clickTs}_${inst.symbol}_${side}_${qty}`;
+
     toast({ kind: "info", message: `Routing ${side.toLowerCase()} order…`, duration: 900 });
     // Simulate exchange latency + matching
     await new Promise(r => setTimeout(r, 400 + Math.random() * 500));
@@ -1284,13 +1291,20 @@ async function executeTrade(inst, side, qty, pricePaise, biasResult) {
       if (q && !q.stale) fillPrice = q.pricePaise;
     } catch {}
 
+    // Guard: if we reached here with no valid price (Tier-2 imported stock
+    // with no seed series AND no live upstream), refuse the trade rather
+    // than debit NaN from cash. This is the B3 NaN-fillPrice fix.
+    if (!Number.isFinite(fillPrice) || fillPrice <= 0) {
+      toast({ kind: "error", message: "No live price available right now — try again in a moment." });
+      return;
+    }
+
     // Realistic market slippage — BUY usually pays a hair above, SELL gets a
     // hair below the mid. Max ±0.08% for liquid names.
     const slipBps = (Math.random() * 8);
     const slipFactor = side === "BUY" ? (1 + slipBps / 10000) : (1 - slipBps / 10000);
     fillPrice = Math.round(fillPrice * slipFactor);
 
-    const idempotencyKey = `${Date.now()}_${inst.symbol}_${side}_${qty}_${Math.random()}`;
     const txn = await applyTrade({
       symbol: inst.symbol, side, qty, pricePaise: fillPrice, idempotencyKey,
       biasFlags: biasResult ? [biasResult] : [],
@@ -1392,9 +1406,9 @@ function renderFundamentals(inst, live, hi52, lo52) {
     eps ? fundRow(termHtml("EPS", "EPS (TTM)"), eps) : "",
     fma ? fundRow(termHtml("50-day moving average", "50-day avg"), fma) : "",
     tma ? fundRow(termHtml("200-day moving average", "200-day avg"), tma) : "",
-    fundRow(termHtml("Risk tier"), `<span class="risk-pill ${inst.risk}">${inst.risk.toUpperCase()}</span>`, true),
-    inst.kind === "MF" ? fundRow(termHtml("Expense Ratio"), `${inst.expenseRatio}%`) : "",
-    inst.kind === "MF" ? fundRow(termHtml("AUM"), inst.aum) : "",
+    fundRow(termHtml("Risk tier"), `<span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "med").toUpperCase()}</span>`, true),
+    inst.kind === "MF" ? fundRow(termHtml("Expense Ratio"), inst.expenseRatio != null ? `${inst.expenseRatio}%` : "—") : "",
+    inst.kind === "MF" ? fundRow(termHtml("AUM"), inst.aum || "—") : "",
   ].filter(Boolean).join("");
 }
 

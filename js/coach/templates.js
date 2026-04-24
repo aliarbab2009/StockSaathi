@@ -93,7 +93,7 @@ const CONCENTRATION_VARIANTS = [
     reflection: `Your ${tick.name} position is now ${tick.concentration}% of your entire portfolio. Not wrong — just worth noticing. Single-stock concentration is how both biggest wins and biggest losses happen.`,
     historical_context: null,
     warning_level: "info",
-    suggested_q: "If ${tick.name.split(' ')[0]} fell 30% overnight, how would you feel?",
+    suggested_q: `If ${(tick.name || "").split(" ")[0] || "this stock"} fell 30% overnight, how would you feel?`,
   }),
 ];
 
