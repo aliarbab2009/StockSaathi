@@ -392,21 +392,35 @@ function renderStockCard(inst, state) {
     badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV — refreshed once per day after market close">NAV</span>`;
   } else if (ms.state !== "open") {
     const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
-    // Rich hover popover rather than a native title= tooltip.
+    // Stock-specific tooltip. The market-hours explainer already lives on
+    // the nav's global market-status pill — no need to duplicate it on
+    // every stock card. Here we show information relevant to THIS stock:
+    // last closing price, change for the last session, day range, sector,
+    // market cap, P/E if available.
+    const lblLong = ms.state === "pre-open" ? "Pre-open" : "Closed";
+    const rows = [];
+    if (hasLive) {
+      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Last close</span><span class="tabular">${formatRupees(price)}</span></div>`);
+      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Change</span><span class="tabular ${deltaClass(change)}">${formatPct(change, { sign: true })}</span></div>`);
+      if (quote.high && quote.low && quote.high > 0 && quote.low > 0 && quote.high !== quote.low) {
+        rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Day range</span><span class="tabular">${formatRupees(quote.low)} – ${formatRupees(quote.high)}</span></div>`);
+      }
+    }
+    if (inst.sector) {
+      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Sector</span><span>${escapeHtml(inst.sector)}</span></div>`);
+    }
+    if (inst.marketCap) {
+      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Market cap</span><span>${escapeHtml(inst.marketCap)}</span></div>`);
+    }
+    if (inst.pe != null && !isNaN(inst.pe)) {
+      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">P/E</span><span class="tabular">${Number(inst.pe).toFixed(1)}</span></div>`);
+    }
     const pop = `
       <div class="market-status-pop" role="tooltip">
         <div class="ms-pop-head">
-          <span class="ms-pop-label">NSE · ${ms.state === "pre-open" ? "Pre-open" : "Closed"}</span>
+          <span class="ms-pop-label">NSE · ${lblLong}</span>
         </div>
-        <div class="ms-pop-row"><span class="ms-pop-key">Now</span><span>${escapeHtml(ms.istDate)} · ${escapeHtml(ms.istTime)}</span></div>
-        ${ms.state === "pre-open"
-          ? `<div class="ms-pop-row"><span class="ms-pop-key">Opens</span><span>9:15 AM IST today</span></div>`
-          : `<div class="ms-pop-row"><span class="ms-pop-key">Last close</span><span>${escapeHtml(ms.lastCloseLabel || "—")}</span></div>`
-        }
-        ${ms.nextOpenLabel ? `<div class="ms-pop-row"><span class="ms-pop-key">Next open</span><span>${escapeHtml(ms.nextOpenLabel)}</span></div>` : ""}
-        ${ms.isHoliday ? `<div class="ms-pop-row"><span class="ms-pop-key">Holiday</span><span>Yes</span></div>` : ""}
-        <div class="ms-pop-row"><span class="ms-pop-key">Hours</span><span>Mon–Fri · 9:15–3:30 IST</span></div>
-        <div class="ms-pop-foot">Clock is server-trusted.</div>
+        ${rows.join("")}
       </div>
     `;
     badge = `<span class="pill stock-card-ms-pill market-status" tabindex="0" data-ms-state="${ms.state}" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim); position: relative;">${lbl}${pop}</span>`;
