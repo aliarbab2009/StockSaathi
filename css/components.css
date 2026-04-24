@@ -2762,13 +2762,19 @@
 .coach-chat-input button:disabled { opacity: 0.5; cursor: not-allowed; }
 .coach-user-msg {
   align-self: flex-end;
+  width: fit-content;
   max-width: 82%;
   background: var(--brand);
   color: white;
-  padding: 8px 12px;
-  border-radius: 14px 14px 4px 14px;
+  /* Match the chat-page user-bubble — was 8px/12px + line-height 1.5
+     which made the pill look button-chunky for short messages like
+     "HELLO". Now hugs the text the same way /chat does. */
+  padding: 3px 8px;
+  border-radius: 10px 10px 2px 10px;
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-wrap: break-word;
   box-shadow: var(--sh-xs);
   animation: slideUp 280ms var(--ease);
 }
