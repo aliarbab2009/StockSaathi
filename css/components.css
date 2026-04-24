@@ -971,7 +971,11 @@
 .ai-term-tooltip {
   position: absolute;
   z-index: 999;
-  max-width: 280px;
+  /* Width bounds. min-width gives us room for a full sentence even while
+     the explanation is still loading ("…" placeholder). max-width caps
+     growth so a chatty LLM can't blow past the card grid. */
+  min-width: 240px;
+  max-width: 320px;
   background: var(--surface-elev, var(--surface));
   color: var(--text);
   border: 1px solid var(--border-strong, var(--border));
@@ -982,6 +986,12 @@
   box-shadow: var(--sh-lg, var(--sh-md));
   pointer-events: none;
   animation: ai-tip-in 140ms var(--ease, ease-out);
+  /* Explicit text-flow rules so no inherited or global nowrap / overflow
+     can clip the body to a single-token width (observed symptom: tooltip
+     only showed "The P/E" or "A" instead of the full sentence). */
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .ai-term-tooltip-head {
   font-weight: 700;
@@ -990,8 +1000,18 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 4px;
+  white-space: normal;
 }
-.ai-term-tooltip-body { color: var(--text); }
+.ai-term-tooltip-body {
+  color: var(--text);
+  /* Block + explicit wrap rules so the body always fills the tooltip
+     width and wraps. Prevents any text-overflow / nowrap / clip from
+     an ancestor rule from accidentally truncating the explanation. */
+  display: block;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 @keyframes ai-tip-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
