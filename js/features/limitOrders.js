@@ -20,41 +20,39 @@ let _matching = false;              // guard: never run two passes in parallel
 const _inFlight = new Set();        // order-ids currently being filled
 const _recentFills = new Map();     // order-id → ts, debounce re-fires
 
-// Same GoTrue-lock concern as placeLimitOrder — getUser() internally
-// touches the same session state that can deadlock. Portfolio polls
-// listPendingOrders every 15 s; a stuck call here would silently break
-// the live-refresh. Bound it with the same 5-s race.
-async function getUserWithTimeout(client) {
-  const userP = client.auth.getUser();
-  const timeoutP = new Promise((_, rej) =>
-    setTimeout(() => rej(new Error("user_timeout")), 5000));
-  return Promise.race([userP, timeoutP]);
-}
+// AUTH LOCK CONTENTION — why no getSession / getUser here anymore.
+//
+// v135 wrapped placeLimitOrder's client.auth.getSession() and this file's
+// two list functions' client.auth.getUser() in 5-second Promise.race
+// timeouts to avoid the GoTrue `_acquireLock` deadlock documented in
+// supabase-js 2.45.4 (issues #936, #740). That didn't just mask the
+// deadlock — it MADE IT WORSE. Because every one of these calls shares
+// a single module-level mutex inside supabase-js, any two overlapping
+// auth calls contend for the same lock. The matcher loop below fires
+// listPendingOrders every 12 s (globally, any page). The portfolio
+// page's poll fires it every 15 s. Both were taking the lock just to
+// read the user id. The user's Place Buy Limit click then took the
+// lock for a third time. On unlucky overlaps the 5-second race fired
+// first with 'session_timeout', leaving the user stuck.
+//
+// v136 fix: drop every auth preflight from the hot path. PostgREST
+// enforces `user_id = auth.uid()` automatically via RLS policy
+// `orders_self_all` (schema.sql:985-987). An expired or missing JWT
+// returns HTTP 401 from the server; we catch it inside `placeLimitOrder`
+// and surface a user-friendly "session expired" toast. The `.from()`
+// select operations here rely on RLS to filter to the authenticated
+// user's rows, so an unauthenticated or expired-session tab simply
+// gets an empty array — no lock, no timeout, no spam.
 
 export async function listPendingOrders() {
   const client = await sb();
   if (!client) return [];
-  let u = null;
-  try {
-    const res = await getUserWithTimeout(client);
-    u = res?.data;
-  } catch (e) {
-    if (e?.message === "user_timeout") {
-      console.warn("[limit] listPendingOrders getUser timed out");
-    }
-    return [];
-  }
-  if (!u?.user) return [];
-  // CRITICAL: destructure `error`. Previously only `data` was pulled, so a
-  // PostgREST 401 / 403 / 5xx / RLS block silently collapsed to [] with no
-  // console signal. Portfolio's 15-s poll would then wipe a previously-
-  // populated pendingOrders list despite the user's orders still being in
-  // the DB. Now we log any error and return [] so the caller's UI-level
-  // ride-out logic (emptyStreak in portfolio.js) can distinguish a
-  // transient flap from a genuine empty state.
+  // RLS filters by auth.uid() = user_id automatically. No client-side
+  // user-id fetch needed — one fewer lock acquisition per 15-s poll
+  // tick. Unauthenticated tabs get an empty array (RLS returns zero
+  // rows), matching the old behaviour without the 5-s timeout spam.
   const { data, error } = await client.from("limit_orders")
     .select("*")
-    .eq("user_id", u.user.id)
     .eq("status", "pending")
     .order("created_at", { ascending: false });
   if (error) {
@@ -67,17 +65,8 @@ export async function listPendingOrders() {
 export async function listAllOrders(limit = 50) {
   const client = await sb();
   if (!client) return [];
-  let u = null;
-  try {
-    const res = await getUserWithTimeout(client);
-    u = res?.data;
-  } catch {
-    return [];
-  }
-  if (!u?.user) return [];
   const { data, error } = await client.from("limit_orders")
     .select("*")
-    .eq("user_id", u.user.id)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) {
@@ -85,29 +74,6 @@ export async function listAllOrders(limit = 50) {
     return [];
   }
   return data || [];
-}
-
-// 5-second timeout on getSession(). supabase-js 2.45.4 has a documented
-// GoTrue `_acquireLock` deadlock: when autoRefreshToken:true races with
-// an in-flight getSession() on a stale refresh token, the internal lock
-// is never released and getSession() never resolves. A healthy
-// getSession returns in ~50 ms, so 5 seconds is far wide of any
-// legitimate slow case but saves us from an indefinite hang.
-async function sessionWithTimeout(client) {
-  const sessionP = client.auth.getSession();
-  const timeoutP = new Promise((_, rej) =>
-    setTimeout(() => rej(new Error("session_timeout")), 5000));
-  return Promise.race([sessionP, timeoutP]);
-}
-
-// If getSession times out, the local auth state is corrupt (GoTrue lock
-// stuck, stale refresh token, or similar). Clearing it with
-// scope:"local" wipes the in-memory + localStorage session WITHOUT
-// calling the Supabase server (which would be another potentially-hung
-// request). The next click starts from a clean slate — the user just
-// needs to log in again.
-async function clearCorruptSession(client) {
-  try { await client.auth.signOut({ scope: "local" }); } catch {}
 }
 
 export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
@@ -122,28 +88,9 @@ export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
     throw new Error("Limit price must be greater than ₹0.");
   }
   if (side !== "BUY" && side !== "SELL") throw new Error("Side must be BUY or SELL.");
-  // Verify auth BEFORE the RPC. If getSession hangs (GoTrue lock deadlock
-  // in supabase-js 2.45.4), the 5-s race below fires instead of waiting
-  // forever. On timeout we clear local auth state so the NEXT retry
-  // doesn't hit the same stuck lock.
-  console.info("[limit] getSession start");
-  const tSession = Date.now();
-  let session = null;
-  try {
-    const result = await sessionWithTimeout(client);
-    session = result?.data?.session || null;
-    console.info(`[limit] getSession done in ${Date.now() - tSession}ms, session:`, !!session);
-  } catch (e) {
-    console.error(`[limit] getSession failed after ${Date.now() - tSession}ms:`, e?.message || e);
-    await clearCorruptSession(client);
-    if (e?.message === "session_timeout") {
-      throw new Error("Session check timed out — refresh the page and sign in again.");
-    }
-    throw e;
-  }
-  if (!session?.access_token) {
-    throw new Error("Your session expired. Refresh the page and sign in again.");
-  }
+  // NO pre-flight getSession in v136 — see the block comment above.
+  // The RPC call itself enforces auth via RLS; missing/expired JWT
+  // bubbles back as a PostgREST error we can catch below.
   console.info("[limit] RPC start");
   const t0 = Date.now();
   const { data, error } = await client.rpc("place_limit_order", {
@@ -154,11 +101,16 @@ export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
   });
   console.info(`[limit] RPC done in ${Date.now() - t0}ms`, { ok: !error, hasData: !!data });
   if (error) {
-    // Surface the underlying error code + message so we can tell the
-    // difference between a missing RPC ("Could not find function"),
-    // an RLS block, and a domain-level refusal (insufficient cash etc).
     console.error("[limit] RPC error:", error);
-    throw new Error(prettifyErr(error.message || String(error)));
+    // Map any JWT-related PostgREST error to a single friendly message.
+    // PostgREST error codes: PGRST301 = "JWT expired", PGRST302 = "JWT
+    // invalid", and the RPC itself can raise "not logged in" when
+    // auth.uid() is null. All three route the user to refresh + relog.
+    const msg = error.message || String(error);
+    if (/jwt|not logged in|401/i.test(msg) || error.code === "PGRST301" || error.code === "PGRST302") {
+      throw new Error("Your session expired — please refresh the page and sign in again.");
+    }
+    throw new Error(prettifyErr(msg));
   }
   return data;
 }
