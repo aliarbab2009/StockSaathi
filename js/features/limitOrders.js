@@ -19,10 +19,30 @@ let _matching = false;              // guard: never run two passes in parallel
 const _inFlight = new Set();        // order-ids currently being filled
 const _recentFills = new Map();     // order-id → ts, debounce re-fires
 
+// Same GoTrue-lock concern as placeLimitOrder — getUser() internally
+// touches the same session state that can deadlock. Portfolio polls
+// listPendingOrders every 15 s; a stuck call here would silently break
+// the live-refresh. Bound it with the same 5-s race.
+async function getUserWithTimeout(client) {
+  const userP = client.auth.getUser();
+  const timeoutP = new Promise((_, rej) =>
+    setTimeout(() => rej(new Error("user_timeout")), 5000));
+  return Promise.race([userP, timeoutP]);
+}
+
 export async function listPendingOrders() {
   const client = await sb();
   if (!client) return [];
-  const { data: u } = await client.auth.getUser();
+  let u = null;
+  try {
+    const res = await getUserWithTimeout(client);
+    u = res?.data;
+  } catch (e) {
+    if (e?.message === "user_timeout") {
+      console.warn("[limit] listPendingOrders getUser timed out");
+    }
+    return [];
+  }
   if (!u?.user) return [];
   const { data } = await client.from("limit_orders")
     .select("*")
@@ -35,7 +55,13 @@ export async function listPendingOrders() {
 export async function listAllOrders(limit = 50) {
   const client = await sb();
   if (!client) return [];
-  const { data: u } = await client.auth.getUser();
+  let u = null;
+  try {
+    const res = await getUserWithTimeout(client);
+    u = res?.data;
+  } catch {
+    return [];
+  }
   if (!u?.user) return [];
   const { data } = await client.from("limit_orders")
     .select("*")
@@ -45,10 +71,32 @@ export async function listAllOrders(limit = 50) {
   return data || [];
 }
 
+// 5-second timeout on getSession(). supabase-js 2.45.4 has a documented
+// GoTrue `_acquireLock` deadlock: when autoRefreshToken:true races with
+// an in-flight getSession() on a stale refresh token, the internal lock
+// is never released and getSession() never resolves. A healthy
+// getSession returns in ~50 ms, so 5 seconds is far wide of any
+// legitimate slow case but saves us from an indefinite hang.
+async function sessionWithTimeout(client) {
+  const sessionP = client.auth.getSession();
+  const timeoutP = new Promise((_, rej) =>
+    setTimeout(() => rej(new Error("session_timeout")), 5000));
+  return Promise.race([sessionP, timeoutP]);
+}
+
+// If getSession times out, the local auth state is corrupt (GoTrue lock
+// stuck, stale refresh token, or similar). Clearing it with
+// scope:"local" wipes the in-memory + localStorage session WITHOUT
+// calling the Supabase server (which would be another potentially-hung
+// request). The next click starts from a clean slate — the user just
+// needs to log in again.
+async function clearCorruptSession(client) {
+  try { await client.auth.signOut({ scope: "local" }); } catch {}
+}
+
 export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
-  console.log("[placeLimitOrder] start", { symbol, side, qty, limitPricePaise });
+  console.info("[limit] placeLimitOrder start", { symbol, side, qty, limitPricePaise });
   const client = await sb();
-  console.log("[placeLimitOrder] got client:", !!client);
   if (!client) throw new Error("Backend not configured — log in first.");
   // Client-side input validation. The RPC validates too, but catching here
   // gives a readable error and avoids a round-trip for obvious mistakes.
@@ -58,22 +106,29 @@ export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
     throw new Error("Limit price must be greater than ₹0.");
   }
   if (side !== "BUY" && side !== "SELL") throw new Error("Side must be BUY or SELL.");
-  // Verify auth BEFORE the RPC — a session that silently expired will
-  // cause the RPC to hang indefinitely on some Supabase configurations
-  // (the underlying fetch blocks on a token refresh that never resolves).
-  // Checking getSession first gives us a clean error + a retry path.
+  // Verify auth BEFORE the RPC. If getSession hangs (GoTrue lock deadlock
+  // in supabase-js 2.45.4), the 5-s race below fires instead of waiting
+  // forever. On timeout we clear local auth state so the NEXT retry
+  // doesn't hit the same stuck lock.
+  console.info("[limit] getSession start");
+  const tSession = Date.now();
   let session = null;
   try {
-    const { data: s } = await client.auth.getSession();
-    session = s?.session || null;
+    const result = await sessionWithTimeout(client);
+    session = result?.data?.session || null;
+    console.info(`[limit] getSession done in ${Date.now() - tSession}ms, session:`, !!session);
   } catch (e) {
-    console.warn("[placeLimitOrder] getSession threw:", e);
+    console.error(`[limit] getSession failed after ${Date.now() - tSession}ms:`, e?.message || e);
+    await clearCorruptSession(client);
+    if (e?.message === "session_timeout") {
+      throw new Error("Session check timed out — refresh the page and sign in again.");
+    }
+    throw e;
   }
-  console.log("[placeLimitOrder] session:", !!session, "user:", session?.user?.id);
   if (!session?.access_token) {
     throw new Error("Your session expired. Refresh the page and sign in again.");
   }
-  console.log("[placeLimitOrder] calling RPC place_limit_order...");
+  console.info("[limit] RPC start");
   const t0 = Date.now();
   const { data, error } = await client.rpc("place_limit_order", {
     p_symbol: symbol,
@@ -81,12 +136,12 @@ export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
     p_qty: qty,
     p_limit_price_paise: Math.round(limitPricePaise),
   });
-  console.log(`[placeLimitOrder] RPC returned in ${Date.now() - t0}ms`, { data, error });
+  console.info(`[limit] RPC done in ${Date.now() - t0}ms`, { ok: !error, hasData: !!data });
   if (error) {
     // Surface the underlying error code + message so we can tell the
     // difference between a missing RPC ("Could not find function"),
     // an RLS block, and a domain-level refusal (insufficient cash etc).
-    console.error("[placeLimitOrder] RPC error:", error);
+    console.error("[limit] RPC error:", error);
     throw new Error(prettifyErr(error.message || String(error)));
   }
   return data;

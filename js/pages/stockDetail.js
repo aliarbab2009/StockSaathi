@@ -1052,13 +1052,24 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
       return;
     }
     const limitPaise = Math.round(limitRupees * 100);
+    console.info("[limit] click fired", { symbol, side: ui.side, qty, limitRupees, limitPaise, curPrice });
     // Basic UX sanity: BUY limit above current price or SELL limit below
     // current price would fire immediately — still valid, but warn once.
     const wouldFireNow =
       (ui.side === "BUY" && curPrice <= limitPaise) ||
       (ui.side === "SELL" && curPrice >= limitPaise);
-    if (wouldFireNow && !confirm(`Your limit is already ${ui.side === "BUY" ? "above" : "below"} the market (${formatRupees(curPrice)}). The order will fill immediately. Continue?`)) {
-      return;
+    if (wouldFireNow) {
+      // Previously used the native confirm() dialog. Two problems: (a) a
+      // mobile WebView can silently auto-dismiss it with no user input,
+      // and (b) even on desktop, clicking Cancel returned without any
+      // toast so the user saw "Processing…" fade to nothing and thought
+      // the feature was broken. Replace with a confirm() call that still
+      // blocks the hot path BUT always toasts the outcome.
+      const ok = confirm(`Your limit is already ${ui.side === "BUY" ? "above" : "below"} the market (${formatRupees(curPrice)}). The order will fill immediately. Continue?`);
+      if (!ok) {
+        toast({ kind: "info", message: "Limit order cancelled." });
+        return;
+      }
     }
     // Mirror AMO's 25-s Promise.race timeout pattern. The LIMIT path
     // previously did a bare `await placeLimitOrder(...)` with no
