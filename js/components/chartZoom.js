@@ -222,9 +222,10 @@ export function attachChartZoom(container, opts) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     container.setPointerCapture?.(e.pointerId);
     pointerMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    setGestureActive(true);
     if (pointerMap.size === 2) {
-      // Pinch begin.
+      // Pinch begin — only NOW flip gesture-active. (A single tap should
+      // not freeze the render pipeline for its ~20 ms duration.)
+      setGestureActive(true);
       const [a, b] = [...pointerMap.values()];
       const s = getState();
       const midX = clientToVbX(midpoint(a, b).x);
@@ -240,11 +241,14 @@ export function attachChartZoom(container, opts) {
       // Single-pointer drag = pan, but only if already zoomed in.
       const s = getState();
       if ((s.scale || 1) > MIN_SCALE) {
+        setGestureActive(true);
         panStart = {
           x: e.clientX,
           startCenterMs: s.centerMs ?? ((s.fromMs + s.toMs) / 2),
         };
       }
+      // If scale is 1, a single tap isn't a gesture — let hover /
+      // native tap-through work normally.
     }
   }
 
