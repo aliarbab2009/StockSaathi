@@ -545,19 +545,51 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
       ? parseFloat(ui.limitPrice)
       : fallbackRupees;
     const limitPaise = Math.round(limitRupees * 100);
-    if (ui.side === "BUY" && Math.round(qty * limitPaise) > getState().portfolio.cashPaise) {
+    if (!Number.isFinite(limitPaise) || limitPaise <= 0) {
+      toast({ kind: "error", message: "Couldn't read the AMO price. Edit the limit price field and try again." });
+      return;
+    }
+    if (ui.side === "BUY" && Math.round(qty * limitPaise) > (getState().portfolio?.cashPaise || 0)) {
       toast({ kind: "error", message: "Not enough cash to reserve for this AMO." });
       return;
     }
+    // Disable the button + show "Queuing…" so the user gets instant
+    // feedback that their tap landed — previously a slow Supabase round
+    // trip left the button looking dead for 1-3 seconds.
+    const btn = document.getElementById("place-trade-btn");
+    const originalLabel = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = "Queuing AMO…"; }
     try {
-      await placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise });
+      console.log("[AMO] placing", { symbol, side: ui.side, qty, limitPaise });
+      const res = await placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise });
+      console.log("[AMO] placed", res);
       toast({
         kind: "success",
         message: `AMO queued: ${ui.side} ${formatQty(qty, inst.kind)} ${symbol} @ ₹${limitRupees.toFixed(2)}. Fills at ${ms.nextOpenLabel || "next market open"}.`,
         duration: 5000,
       });
+      // Refresh local state from DB so the user sees the cash reservation
+      // reflected in the UI (portfolio cashPaise drops by the reserve
+      // amount). Without this, the page still shows full cash and the
+      // user thinks nothing happened. Best-effort — don't block the nav.
+      try {
+        const { loadAllFromDb } = await import("../db/sync.js");
+        await loadAllFromDb();
+      } catch (syncErr) {
+        console.warn("[AMO] post-queue sync failed (non-critical):", syncErr);
+      }
+      // Navigate to portfolio so the queued order is visible in the
+      // "Pending limit orders" card — gives the user concrete evidence
+      // the AMO landed, not just a toast.
+      location.hash = "#/portfolio";
     } catch (e) {
-      toast({ kind: "error", message: e?.message || "Could not queue AMO." });
+      console.error("[AMO] placeLimitOrder failed:", e);
+      toast({
+        kind: "error",
+        message: e?.message || "Could not queue AMO. Check console for details.",
+        duration: 6000,
+      });
+      if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
     }
     return;
   }
