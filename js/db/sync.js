@@ -313,12 +313,56 @@ function safeParse(raw, fallback) {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
 
+// Functionally-empty detectors. A fresh loadSessions() envelope has one
+// session titled "New chat" with zero messages — length > 0, but NO
+// actual content. Before v139 we treated that as "real" on both read and
+// write paths, which meant a slow-hydrate incognito boot could upsert
+// the blank over the user's real DB row (write side), and a subsequent
+// source-browser boot could overwrite its real localStorage from that
+// blank DB row (read side). Both sides now gate on real content.
+function hasRealSessionsJson(json) {
+  return json && typeof json === "object" &&
+    Array.isArray(json.sessions) &&
+    json.sessions.some(s => Array.isArray(s?.messages) && s.messages.length > 0);
+}
+function hasRealCoachLog(log) {
+  return Array.isArray(log) && log.length > 0;
+}
+
+// Resolve the user's uid from cache first, falling back to a bounded
+// client.auth.getUser() call if the cache hasn't settled yet. Matches
+// the pattern loadAllFromDb already uses. Cheap insurance so the sync
+// never silently no-ops on a boot where refreshCurrentUser races.
+async function resolveUid(client) {
+  let uid = currentUser()?.id || null;
+  if (uid) return uid;
+  try {
+    const res = await authWithTimeout(() => client.auth.getUser(), "coach_sync_getUser", 3500);
+    uid = res?.data?.user?.id || null;
+  } catch { /* ignored — fall through to null */ }
+  return uid;
+}
+
+// Log "coach_chats table doesn't exist" exactly once per page load so
+// users who forgot to run the migration actually see the message
+// instead of the silent-swallow we had in v138.
+let _migrationMissingWarned = false;
+function logMigrationMissing() {
+  if (_migrationMissingWarned) return;
+  _migrationMissingWarned = true;
+  console.warn(
+    "[coach-sync] coach_chats table not found in Supabase.\n" +
+    "Apply supabase/migrations/2026-04-24g_coach_chats_sync.sql in the\n" +
+    "SQL editor or sync will stay local-only."
+  );
+}
+
 /** Fetch the current user's coach-chat row. Returns null on error / missing. */
 export async function dbLoadCoachChats() {
   const client = await sb();
   if (!client) return null;
   try {
-    const uid = currentUser()?.id;
+    const uid = await resolveUid(client);
     if (!uid) return null;
     const { data, error } = await client
       .from("coach_chats")
@@ -326,10 +370,9 @@ export async function dbLoadCoachChats() {
       .eq("user_id", uid)
       .maybeSingle();
     if (error) {
-      // Table-missing errors (42P01) are expected on pre-migration Supabase
-      // projects; swallow them silently so the client keeps working from
-      // localStorage alone. Other errors get a console breadcrumb.
-      if (!/42P01|does not exist/i.test(String(error.message || ""))) {
+      if (/42P01|does not exist/i.test(String(error.message || ""))) {
+        logMigrationMissing();
+      } else {
         console.warn("[coach-sync] load:", error.message);
       }
       return null;
@@ -342,11 +385,14 @@ export async function dbLoadCoachChats() {
 }
 
 // Debounced push of the current localStorage coach state up to Supabase.
-// Snapshots from localStorage at FLUSH time so callers don't need to pass
-// either blob and so we always upsert the most-recent content, not a
-// stale snapshot from when debouncing started.
+// Snapshots from localStorage at FLUSH time so we always upsert the
+// most-recent content. Gated behind _hydrateAttempted so the initial
+// boot race can't overwrite real DB data with the blank envelope that
+// chatSessions.loadSessions persists on a fresh-localStorage mount.
 let _coachSyncTimer = null;
+let _hydrateAttempted = false;
 export function dbSaveCoachChatsSoon() {
+  if (!_hydrateAttempted) return;   // wait for boot hydrate to finish
   if (_coachSyncTimer) clearTimeout(_coachSyncTimer);
   _coachSyncTimer = setTimeout(_flushCoachSync, 1500);
 }
@@ -356,22 +402,48 @@ async function _flushCoachSync() {
   const client = await sb();
   if (!client) return;
   try {
-    const uid = currentUser()?.id;
+    const uid = await resolveUid(client);
     if (!uid) return;
     const sessions_json = safeParse(localStorage.getItem(SESSIONS_LS_KEY), {});
     const coach_log = safeParse(localStorage.getItem(COACHLOG_LS_KEY), []);
+    // Blank-envelope guard: the default post-loadSessions state has ONE
+    // "New chat" session with zero messages. Upserting that would blank
+    // the user's real DB row on another device / earlier tab. Refuse.
+    if (!hasRealSessionsJson(sessions_json) && !hasRealCoachLog(coach_log)) {
+      return;
+    }
     const { error } = await client.from("coach_chats").upsert({
       user_id: uid,
       sessions_json,
       coach_log,
       updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" });
-    if (error && !/42P01|does not exist/i.test(String(error.message || ""))) {
-      console.warn("[coach-sync] save:", error.message);
+    if (error) {
+      if (/42P01|does not exist/i.test(String(error.message || ""))) {
+        logMigrationMissing();
+      } else {
+        console.warn("[coach-sync] save:", error.message);
+      }
     }
   } catch (e) {
     console.warn("[coach-sync] save threw:", e?.message || e);
   }
+}
+
+// Best-effort flush on tab close. beforeunload can't reliably await a
+// fetch, but the Supabase upsert is a single short POST that most
+// browsers allow to complete if dispatched synchronously before unload.
+// Users who close the tab within 1.5 s of a save still have a chance.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    if (_coachSyncTimer) {
+      clearTimeout(_coachSyncTimer);
+      _coachSyncTimer = null;
+      // Fire-and-forget. No await possible in beforeunload; browser
+      // will usually let the fetch complete anyway.
+      _flushCoachSync();
+    }
+  });
 }
 
 /**
@@ -379,26 +451,41 @@ async function _flushCoachSync() {
  * so a brand-new device / incognito window picks up the user's chat history
  * instead of showing an empty coach. Dispatches ss:coach-sync custom events
  * afterwards so any live-mounted chat/panel view reloads from fresh disk.
+ *
+ * Flips _hydrateAttempted = true on completion (success OR failure) so
+ * dbSaveCoachChatsSoon unblocks. If the DB row exists but is functionally
+ * empty (a prior buggy run blanked it), leaves localStorage alone — the
+ * first real save after this will push local content UP to recover.
  */
 export async function hydrateCoachChatsFromDb() {
-  const row = await dbLoadCoachChats();
-  if (!row) return;
-  let touched = false;
   try {
-    if (row.sessions_json && typeof row.sessions_json === "object" &&
-        Array.isArray(row.sessions_json.sessions) && row.sessions_json.sessions.length) {
-      localStorage.setItem(SESSIONS_LS_KEY, JSON.stringify(row.sessions_json));
-      touched = true;
+    const row = await dbLoadCoachChats();
+    if (!row) return;
+    const dbHasSessions = hasRealSessionsJson(row.sessions_json);
+    const dbHasCoachLog = hasRealCoachLog(row.coach_log);
+    if (!dbHasSessions && !dbHasCoachLog) {
+      // DB row exists but is blank. Don't overwrite local — if local has
+      // content, the next debounced save will push it up automatically.
+      return;
     }
-  } catch (e) { console.warn("[coach-sync] hydrate sessions failed:", e); }
-  try {
-    if (Array.isArray(row.coach_log) && row.coach_log.length) {
-      localStorage.setItem(COACHLOG_LS_KEY, JSON.stringify(row.coach_log));
-      touched = true;
+    let touched = false;
+    try {
+      if (dbHasSessions) {
+        localStorage.setItem(SESSIONS_LS_KEY, JSON.stringify(row.sessions_json));
+        touched = true;
+      }
+    } catch (e) { console.warn("[coach-sync] hydrate sessions failed:", e); }
+    try {
+      if (dbHasCoachLog) {
+        localStorage.setItem(COACHLOG_LS_KEY, JSON.stringify(row.coach_log));
+        touched = true;
+      }
+    } catch (e) { console.warn("[coach-sync] hydrate coach_log failed:", e); }
+    if (touched) {
+      try { window.dispatchEvent(new CustomEvent("ss:coach-sync")); } catch {}
     }
-  } catch (e) { console.warn("[coach-sync] hydrate coach_log failed:", e); }
-  if (touched) {
-    try { window.dispatchEvent(new CustomEvent("ss:coach-sync")); } catch {}
+  } finally {
+    _hydrateAttempted = true;
   }
 }
 
