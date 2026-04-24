@@ -111,11 +111,24 @@ function render(main) {
     });
   });
 
-  // Lazy-fire AI tagging for each visible item that hasn't been analysed.
-  // Cached hits come back instant; fresh ones take ~1 s and stream in
-  // as they complete. The retail-angle line replaces the "Analysing…"
-  // skeleton without a re-render.
-  visible.slice(0, 20).forEach(n => enqueueAiTag(main, n));
+  // Viewport-aware AI tagging. Previously we eagerly enqueued the first
+  // 20 items, which (a) left items 21+ permanently stuck on "Analysing…"
+  // because they never ran, and (b) blocked items the user actually had
+  // on screen behind items that were off-screen. Now we observe each
+  // news-item card and only enqueue when it scrolls into view — so items
+  // load in the order the user reads them, and items that are never
+  // scrolled to are never queued (no wasted API calls, no stuck skeleton).
+  const visibleMap = new Map(visible.map((n, i) => [headlineKey(n.headline), n]));
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const hk = entry.target.dataset.aiHk;
+      const n = hk && visibleMap.get(hk);
+      if (n) enqueueAiTag(main, n);
+      observer.unobserve(entry.target);  // one-shot per card
+    }
+  }, { rootMargin: "100px 0px" });  // fire ~100px before card is fully visible
+  main.querySelectorAll("[data-ai-hk]").forEach(el => observer.observe(el));
 }
 
 function renderNewsItem(n) {
