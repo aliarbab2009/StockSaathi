@@ -13,13 +13,23 @@ let _newsCancel = { cancelled: false };
 // the headline text itself so duplicates across sources dedupe naturally.
 const aiTags = new Map();
 let aiQueueRunning = 0;
-// Bumped 3 → 10. Each request is small (180-token JSON via gemini-2.5-
-// flash-lite), and Vercel's serverless function happily fans out — the
-// old cap of 3 was the visible "loads one-by-one" symptom even with
-// scroll-into-view enqueueing. With 10, a viewport of ~6 visible cards
-// fires in parallel and lands almost simultaneously.
-const AI_MAX_CONCURRENT = 10;
+// Concurrency = 4. Now that we ONLY queue items the user is actually
+// staring at (viewport-strict observer + 350 ms dwell debounce + abort
+// on scroll-out), a typical viewport never has more than ~4-5 cards on
+// screen at once — so 4 parallel fetches is plenty and leaves headroom
+// against rate limits. Keeping above 4 is wasted budget.
+const AI_MAX_CONCURRENT = 4;
 const aiQueue = [];
+
+// AbortController + debounce-timer plumbing per headline-key.
+//   debounceTimers: cards must be visible for 350 ms before they queue,
+//     so a fast scroll-past doesn't fire any API calls.
+//   aborters: every queued/in-flight job has a controller; if the card
+//     scrolls out of view before completion, ctrl.abort() cancels it
+//     and the queue slot is freed via the existing .finally in pumpAiQueue.
+const debounceTimers = new Map();
+const aborters = new Map();
+const VIEWPORT_DWELL_MS = 350;
 
 export function renderNews(main) {
   _newsCancel.cancelled = true;
@@ -116,23 +126,52 @@ function render(main) {
     });
   });
 
-  // Viewport-aware AI tagging. Previously we eagerly enqueued the first
-  // 20 items, which (a) left items 21+ permanently stuck on "Analysing…"
-  // because they never ran, and (b) blocked items the user actually had
-  // on screen behind items that were off-screen. Now we observe each
-  // news-item card and only enqueue when it scrolls into view — so items
-  // load in the order the user reads them, and items that are never
-  // scrolled to are never queued (no wasted API calls, no stuck skeleton).
+  // Strict viewport-aware AI tagging.
+  //   - rootMargin: "0px" so we never pre-fire items below the fold.
+  //   - threshold: [0, 0.25, 0.5] so a card needs to be at least 25 %
+  //     visible before it counts (handles tall mobile cards in tight
+  //     viewports without false-firing on a sliver entering the screen).
+  //   - 350 ms dwell debounce — a card has to STAY visible long enough
+  //     to imply the user is reading it, not just scrolling past.
+  //   - on isIntersecting=false: cancel the dwell timer, splice from the
+  //     queue if not yet running, abort the fetch if already in flight.
+  //   - cards remain observed until their fetch SUCCEEDS, so a scroll-
+  //     back-up triggers a fresh queue.
   const visibleMap = new Map(visible.map((n, i) => [headlineKey(n.headline), n]));
   const observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const hk = entry.target.dataset.aiHk;
-      const n = hk && visibleMap.get(hk);
-      if (n) enqueueAiTag(main, n);
-      observer.unobserve(entry.target);  // one-shot per card
+      const el = entry.target;
+      const hk = el.dataset.aiHk;
+      if (!hk) continue;
+      const n = visibleMap.get(hk);
+      if (!n) continue;
+      const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.25;
+      if (isVisible) {
+        // Already tagged or in flight? Skip.
+        const existing = aiTags.get(hk);
+        if (existing && (existing.tldr || existing.loading)) continue;
+        // Start the dwell timer.
+        if (debounceTimers.has(hk)) continue;
+        const t = setTimeout(() => {
+          debounceTimers.delete(hk);
+          enqueueAiTag(main, n);
+        }, VIEWPORT_DWELL_MS);
+        debounceTimers.set(hk, t);
+      } else {
+        // Cancel anything pending for this card.
+        const t = debounceTimers.get(hk);
+        if (t) { clearTimeout(t); debounceTimers.delete(hk); }
+        // Splice from the queue if it's still waiting.
+        const qIdx = aiQueue.findIndex(j => j.hk === hk);
+        if (qIdx >= 0) aiQueue.splice(qIdx, 1);
+        // Abort in-flight fetch.
+        const ctrl = aborters.get(hk);
+        if (ctrl) { try { ctrl.abort(); } catch {} aborters.delete(hk); }
+        // Reset state so re-entry can re-queue cleanly.
+        if (aiTags.get(hk)?.loading) aiTags.set(hk, {});
+      }
     }
-  }, { rootMargin: "100px 0px" });  // fire ~100px before card is fully visible
+  }, { rootMargin: "0px", threshold: [0, 0.25, 0.5] });
   main.querySelectorAll("[data-ai-hk]").forEach(el => observer.observe(el));
 }
 
@@ -169,7 +208,12 @@ function enqueueAiTag(main, n) {
   const existing = aiTags.get(hk);
   if (existing && (existing.tldr || existing.loading)) return;
   aiTags.set(hk, { loading: true });
-  aiQueue.push({ main, n, hk });
+  // Create the AbortController NOW (not inside fetchAiTag) so the
+  // observer can find and abort it the instant the card scrolls out
+  // of view, even before the queue slot opens up.
+  const ctrl = new AbortController();
+  aborters.set(hk, ctrl);
+  aiQueue.push({ main, n, hk, ctrl });
   pumpAiQueue();
 }
 
@@ -184,14 +228,13 @@ async function pumpAiQueue() {
   }
 }
 
-async function fetchAiTag({ main, n, hk }) {
-  // Abort the fetch if the AI endpoint takes longer than 12 s. Without
-  // this, a slow / hung /api/ai?op=news-tldr leaves every card stuck on
-  // "Analysing…" forever — which is exactly what the user hit on a
-  // screen of 4 news items that all timed out in parallel and never
-  // fell back to the no-skeleton state.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
+async function fetchAiTag({ main, n, hk, ctrl }) {
+  // The AbortController was created in enqueueAiTag and stored in the
+  // aborters Map so the IntersectionObserver can find and abort it the
+  // moment the card scrolls out of view. We layer on a 12 s timeout so
+  // a hung endpoint can't leave a stuck skeleton even for a card the
+  // user is still looking at.
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 12000);
   try {
     const r = await fetch("/api/ai?op=news-tldr", {
       method: "POST",
@@ -207,11 +250,18 @@ async function fetchAiTag({ main, n, hk }) {
     patchNewsItem(main, hk);
   } catch (e) {
     clearTimeout(timer);
-    console.warn("[news-tldr] failed for", n.headline?.slice(0, 40), "·", e?.name || e?.message || e);
-    aiTags.set(hk, { loading: false });
-    // Quietly remove the skeleton for failed items so the card isn't stuck on "Analysing…"
-    const el = main?.querySelector(`[data-ai-hk="${cssEscape(hk)}"]`);
-    if (el) el.remove();
+    const isAbort = e?.name === "AbortError";
+    if (!isAbort) console.warn("[news-tldr] failed for", n.headline?.slice(0, 40), "·", e?.name || e?.message || e);
+    // For abort: just clear loading, leave the skeleton in place — if the
+    // user scrolls back the observer will re-queue. For real errors:
+    // remove the skeleton so the card falls back to headline-only.
+    aiTags.set(hk, isAbort ? {} : { loading: false });
+    if (!isAbort) {
+      const el = main?.querySelector(`[data-ai-hk="${cssEscape(hk)}"]`);
+      if (el) el.remove();
+    }
+  } finally {
+    aborters.delete(hk);
   }
 }
 

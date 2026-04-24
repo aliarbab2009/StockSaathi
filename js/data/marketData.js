@@ -196,9 +196,12 @@ function _isNseOpen(nowMs) {
 
 // ---------- Public API -----------------------------------------------------
 
-export async function getQuote(symbol) {
-  const cached = _quoteCache.get(symbol);
-  if (cached && Date.now() - cached.ts < QUOTE_TTL_MS) return cached.data;
+export async function getQuote(symbol, opts = {}) {
+  const bustCache = opts.bustCache === true;
+  if (!bustCache) {
+    const cached = _quoteCache.get(symbol);
+    if (cached && Date.now() - cached.ts < QUOTE_TTL_MS) return cached.data;
+  }
 
   const inst = getInstrument(symbol);
   if (!inst) return null;
@@ -210,8 +213,13 @@ export async function getQuote(symbol) {
     return q;
   }
 
-  // 1. New normalized single endpoint
-  const apiRes = await fetchJsonWithTimeout(`/api/quote?symbol=${encodeURIComponent(symbol)}`);
+  // 1. New normalized single endpoint. Append nocache=1 when bustCache
+  // is requested so the SERVER also bypasses its own cache (and Vercel
+  // edge cache via the no-store header the server adds when it sees
+  // nocache=1) — otherwise the server might hand back its own cached
+  // value that's still seconds old.
+  const qs = bustCache ? `?symbol=${encodeURIComponent(symbol)}&nocache=1&_=${Date.now()}` : `?symbol=${encodeURIComponent(symbol)}`;
+  const apiRes = await fetchJsonWithTimeout(`/api/quote${qs}`);
   const apiQuote = normalizeFromApi(apiRes, symbol);
   if (apiQuote) {
     _quoteCache.set(symbol, { data: apiQuote, ts: Date.now() });
@@ -321,10 +329,21 @@ async function _getQuoteBatchInner(uniq) {
   return out;
 }
 
-export async function getHistory(symbol, range = "1y", interval = "1d") {
+export async function getHistory(symbol, range = "1y", interval = "1d", opts = {}) {
   const key = `${symbol}|${range}|${interval}`;
-  const cached = _historyCache.get(key);
-  if (cached && Date.now() - cached.ts < HISTORY_TTL_MS) return cached.data;
+  // Caller-provided AbortSignal (from the stockDetail live-refresh path).
+  // When set, any in-flight fetch aborts cleanly and the function throws
+  // an AbortError so the caller can drop the result. Cached hits still
+  // return synchronously regardless of signal state — no point aborting
+  // a zero-cost lookup. Cache bypass is explicit via opts.noCache.
+  const sig = opts.signal || null;
+  if (!opts.noCache) {
+    const cached = _historyCache.get(key);
+    if (cached && Date.now() - cached.ts < HISTORY_TTL_MS) return cached.data;
+  }
+  if (sig?.aborted) {
+    const err = new Error("aborted"); err.name = "AbortError"; throw err;
+  }
   const inst = getInstrument(symbol);
   if (!inst) return { ohlc: [], source: "none" };
 
@@ -334,14 +353,26 @@ export async function getHistory(symbol, range = "1y", interval = "1d") {
     // Falls through to legacy fetchYahooHistory → synthHistory on failure.
     try {
       const res = await fetchJsonWithTimeout(
-        `/api/history?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`
+        `/api/history?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`,
+        { signal: sig }
       );
+      if (sig?.aborted) {
+        const err = new Error("aborted"); err.name = "AbortError"; throw err;
+      }
       if (res?.ok && Array.isArray(res.ohlc) && res.ohlc.length) {
         h = { ohlc: res.ohlc, source: "yahoo", host: res.host };
       }
-    } catch {}
+    } catch (e) {
+      if (e?.name === "AbortError") throw e;
+    }
     if (!h) {
-      h = await fetchYahooHistory(symbol, range, interval).catch(() => null);
+      h = await fetchYahooHistory(symbol, range, interval, { signal: sig }).catch((e) => {
+        if (e?.name === "AbortError") throw e;
+        return null;
+      });
+      if (sig?.aborted) {
+        const err = new Error("aborted"); err.name = "AbortError"; throw err;
+      }
     }
   }
   if (!h) h = synthHistory(symbol);
@@ -392,16 +423,20 @@ export async function getFundamentals(symbol) {
 const YAHOO_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 function yahooTicker(sym) { return sym.includes(".") ? sym : `${sym}.NS`; }
 
-async function fetchYahooUrl(yahooUrl) {
+async function fetchYahooUrl(yahooUrl, opts = {}) {
+  const sig = opts.signal || null;
   // Direct first (works in some browsers / same-origin proxies)
-  let res = await fetchJsonWithTimeout(yahooUrl);
+  let res = await fetchJsonWithTimeout(yahooUrl, { signal: sig });
+  if (sig?.aborted) { const e = new Error("aborted"); e.name = "AbortError"; throw e; }
   if (res) return res;
   // Public CORS proxies as last resort
   const p1 = `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`;
-  res = await fetchJsonWithTimeout(p1);
+  res = await fetchJsonWithTimeout(p1, { signal: sig });
+  if (sig?.aborted) { const e = new Error("aborted"); e.name = "AbortError"; throw e; }
   if (res) return res;
   const p2 = `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`;
-  const w = await fetchJsonWithTimeout(p2);
+  const w = await fetchJsonWithTimeout(p2, { signal: sig });
+  if (sig?.aborted) { const e = new Error("aborted"); e.name = "AbortError"; throw e; }
   if (w?.contents) { try { return JSON.parse(w.contents); } catch {} }
   return null;
 }
@@ -430,9 +465,9 @@ async function fetchYahooQuote(symbol) {
   };
 }
 
-async function fetchYahooHistory(symbol, range, interval) {
+async function fetchYahooHistory(symbol, range, interval, opts = {}) {
   const url = `${YAHOO_BASE}/${encodeURIComponent(yahooTicker(symbol))}?interval=${interval}&range=${range}`;
-  const data = await fetchYahooUrl(url);
+  const data = await fetchYahooUrl(url, { signal: opts.signal });
   const r = data?.chart?.result?.[0];
   if (!r) return null;
   const timestamps = r.timestamp || [];
@@ -480,16 +515,46 @@ function synthQuote(symbol) {
 function synthHistory(symbol) { return { ohlc: synthSeries(symbol), source: "synthetic" }; }
 
 function fetchJsonWithTimeout(url, options = {}) {
-  return new Promise((resolve) => {
+  // Honour a caller-provided AbortSignal in addition to the internal timeout.
+  // If the caller's signal fires first, we reject with AbortError so callers
+  // (e.g. stockDetail.refreshHistory) can distinguish "user left the page /
+  // switched timeframe" from "network failed". If the timeout fires first,
+  // we resolve to null — same silent-degrade behaviour the rest of this
+  // module relies on for best-effort quote refreshes.
+  const external = options.signal || null;
+  // If the external signal is already aborted, short-circuit.
+  if (external?.aborted) {
+    return Promise.reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+  }
+  return new Promise((resolve, reject) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-    fetch(url, { ...options, signal: ctrl.signal, cache: "no-store" })
+    let externalAborted = false;
+    const onExternalAbort = () => {
+      externalAborted = true;
+      clearTimeout(t);
+      try { ctrl.abort(); } catch {}
+      if (external) external.removeEventListener("abort", onExternalAbort);
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    };
+    if (external) external.addEventListener("abort", onExternalAbort, { once: true });
+    // Build a fetch-safe options bag: drop our `signal` key so we control it.
+    const fetchOpts = { ...options };
+    delete fetchOpts.signal;
+    fetch(url, { ...fetchOpts, signal: ctrl.signal, cache: "no-store" })
       .then(r => {
         clearTimeout(t);
+        if (external) external.removeEventListener("abort", onExternalAbort);
+        if (externalAborted) return;
         if (!r.ok) { resolve(null); return; }
         return r.json();
       })
-      .then(j => resolve(j || null))
-      .catch(() => { clearTimeout(t); resolve(null); });
+      .then(j => { if (!externalAborted) resolve(j || null); })
+      .catch(() => {
+        clearTimeout(t);
+        if (external) external.removeEventListener("abort", onExternalAbort);
+        if (externalAborted) return;   // reject already fired
+        resolve(null);
+      });
   });
 }

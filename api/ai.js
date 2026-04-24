@@ -96,6 +96,30 @@ function cachePut(bucket, cacheKey, display, payload) {
     body: JSON.stringify({ bucket, cache_key: cacheKey, display_key: display || null, payload }),
   }).catch(() => {});
 }
+// AWAITED variant — used on cache-poisoning recovery where we must
+// guarantee the good value lands BEFORE we return to the caller, so
+// the next request from anyone gets the good value, not the poison.
+async function cachePutAwait(bucket, cacheKey, display, payload) {
+  try {
+    await supabaseReq("/rest/v1/ai_response_cache", {
+      method: "POST",
+      serviceRole: true,
+      prefer: "resolution=merge-duplicates,return=minimal",
+      body: JSON.stringify({ bucket, cache_key: cacheKey, display_key: display || null, payload }),
+    });
+  } catch { /* swallow — caller already has the live response */ }
+}
+// AWAITED delete — used to evict known-poison rows so a fresh fetch can
+// repopulate cleanly. Must be awaited to avoid a race where the bad row
+// is still present when the next user hovers the same term.
+async function cacheDelete(bucket, cacheKey) {
+  try {
+    await supabaseReq(
+      `/rest/v1/ai_response_cache?bucket=eq.${encodeURIComponent(bucket)}&cache_key=eq.${encodeURIComponent(cacheKey)}`,
+      { method: "DELETE", serviceRole: true, prefer: "return=minimal" }
+    );
+  } catch { /* nothing we can do; the in-line gate still protects this request */ }
+}
 
 // -----------------------------------------------------------------------------
 // LLM helper — talks directly to the same upstreams /api/chat supports,
@@ -250,12 +274,34 @@ async function opCachePut(req, origin) {
 // --- Finance-term explainer --------------------------------------------------
 const SYSTEM_EXPLAIN = `You are Saathi, a finance coach for Indian teens. A user hovered over a financial term they don't know. Explain it in ONE sentence (20-30 words max). Plain English with an Indian-context example where natural (rupees, Nifty, SIP). No jargon cascade, no quotes around the term. Just the one-sentence definition, period.`;
 
+// Quality gate for tooltip explanations. Reject anything that's clearly
+// truncated or stubby — short responses like "A 5" used to slip through
+// and get cached forever, so the user saw garbage tooltips for life.
+// Real one-sentence definitions are always at least 3 words and 15
+// chars (e.g. "EPS = profit per share" → 21 chars, 5 words).
+function explanationLooksGood(text) {
+  if (!text) return false;
+  const trimmed = String(text).trim();
+  if (trimmed.length < 15) return false;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length < 3) return false;
+  return /\s/.test(trimmed);
+}
+
 async function opExplain(req, origin, url) {
   const term = (url.searchParams.get("term") || "").trim().slice(0, 60);
   if (!term) return j(400, { error: "missing_term" }, origin);
   const key = normalizeKey(term);
   const hit = await cacheGet("explain", key);
-  if (hit?.explanation) return j(200, { explanation: hit.explanation, source: "cache" }, origin, false);
+  if (hit?.explanation) {
+    if (explanationLooksGood(hit.explanation)) {
+      return j(200, { explanation: hit.explanation, source: "cache" }, origin, false);
+    }
+    // Poison detected. Evict the row (awaited) so the next request
+    // anyone makes for this term goes straight to a fresh fetch instead
+    // of serving the same garbage. Then fall through to fetch a good one.
+    await cacheDelete("explain", key);
+  }
   try {
     const text = await callLlm({
       messages: [
@@ -266,9 +312,14 @@ async function opExplain(req, origin, url) {
       temperature: 0.3,
       profile: "fast",
     });
-    const explanation = text.trim().replace(/^["'""]|["'""]$/g, "").trim();
-    if (!explanation) return j(502, { error: "empty" }, origin);
-    cachePut("explain", key, term, { explanation });
+    const explanation = String(text || "").trim().replace(/^["'""]|["'""]$/g, "").trim();
+    if (!explanationLooksGood(explanation)) {
+      return j(502, { error: "too_short", detail: explanation.slice(0, 60) }, origin);
+    }
+    // AWAITED so the good value is durably written before we respond,
+    // closing the race where the user closes the tab mid-request and
+    // the fire-and-forget write never lands.
+    await cachePutAwait("explain", key, term, { explanation });
     return j(200, { explanation, source: "fresh" }, origin, false);
   } catch (e) {
     return j(502, { error: "generation_failed", detail: String(e.message).slice(0, 120) }, origin);

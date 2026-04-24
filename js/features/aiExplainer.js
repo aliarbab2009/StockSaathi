@@ -36,8 +36,32 @@ function ensureTooltipEl() {
   el.className = "ai-term-tooltip";
   el.setAttribute("role", "tooltip");
   el.style.display = "none";
+  // Inline width forcing — belt-and-suspenders so even a stale CSS cache
+  // can never collapse the tooltip to a single-token width like "A 5".
+  // The CSS file's min-width: 240px is the primary defence; this is the
+  // backup that survives even if components.css fails to load.
+  el.style.minWidth = "260px";
+  el.style.maxWidth = "360px";
+  el.style.width = "max-content";
+  el.style.whiteSpace = "normal";
+  el.style.overflowWrap = "break-word";
+  el.style.wordBreak = "normal";
   document.body.appendChild(el);
   return el;
+}
+
+// Mirrors the server's gate in api/ai.js opExplain(). If the backend ever
+// regresses or serves a cached short value, the frontend rejects it too
+// so the user sees "No explanation available" instead of garbage like
+// "A 5". Kept in sync with the server definition deliberately — both
+// must agree or one will let bad values through.
+function explanationLooksGood(text) {
+  if (!text) return false;
+  const trimmed = String(text).trim();
+  if (trimmed.length < 15) return false;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length < 3) return false;
+  return /\s/.test(trimmed);
 }
 
 function escapeHtml(s) {
@@ -61,7 +85,12 @@ export function termHtml(term, display) {
 }
 
 async function fetchExplanation(term) {
-  if (memoryCache.has(term)) return memoryCache.get(term);
+  if (memoryCache.has(term)) {
+    const cached = memoryCache.get(term);
+    if (explanationLooksGood(cached)) return cached;
+    // In-memory poison — drop it so a fresh fetch can repopulate.
+    memoryCache.delete(term);
+  }
   if (inflight.has(term)) return inflight.get(term);
   const p = (async () => {
     try {
@@ -69,7 +98,15 @@ async function fetchExplanation(term) {
       if (!r.ok) throw new Error("http_" + r.status);
       const j = await r.json();
       const text = j?.explanation || "";
-      if (text) memoryCache.set(term, text);
+      // Quality gate mirrors the server. Even if the server somehow
+      // serves a poisoned cached value (e.g. mid-deploy), we reject
+      // it here so the tooltip shows "No explanation available right
+      // now." instead of garbage like "A 5".
+      if (!explanationLooksGood(text)) {
+        memoryCache.delete(term);
+        return "";
+      }
+      memoryCache.set(term, text);
       return text;
     } catch (e) {
       return "";   // silently degrade — no tooltip rather than a broken one

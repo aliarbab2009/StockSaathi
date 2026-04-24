@@ -91,14 +91,19 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         q = parse_qs(urlparse(self.path).query)
         symbol = (q.get("symbol") or [""])[0].strip().upper()
+        # nocache=1 is the refresh-button path — the frontend has explicitly
+        # asked for an uncached tick. Signal downstream (Vercel edge, the
+        # browser, any HTTP-aware proxy) to hand back a no-store response
+        # rather than a recent cached one.
+        nocache = (q.get("nocache") or ["0"])[0] == "1"
         if not symbol or not _SYMBOL_RE.match(symbol):
-            self._json(400, {"ok": False, "error": "bad_symbol"})
+            self._json(400, {"ok": False, "error": "bad_symbol"}, nocache=nocache)
             return
         data = fetch_one(symbol)
         if data.get("error"):
-            self._json(502, {"ok": False, **data})
+            self._json(502, {"ok": False, **data}, nocache=nocache)
             return
-        self._json(200, {"ok": True, **data})
+        self._json(200, {"ok": True, **data}, nocache=nocache)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -106,12 +111,19 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
 
-    def _json(self, code, obj):
+    def _json(self, code, obj, nocache=False):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "public, max-age=8")
+        # Refresh-button path: tell every upstream cache "do NOT store this".
+        # Normal path: 8-second edge cache — matches the client-side TTL and
+        # absorbs burst traffic without going stale.
+        if nocache:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+        else:
+            self.send_header("Cache-Control", "public, max-age=8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)

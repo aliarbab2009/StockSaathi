@@ -211,6 +211,15 @@ export function stockChart(ohlc, {
   mode = "candle",          // "candle" | "area"
   max: maxArg = null, min: minArg = null,
   showVolume = false,       // reserved for later
+  // OPTIONAL time-axis. When set, candles are positioned by their actual
+  // timestamp inside [fromMs, toMs] instead of the default index-mapping.
+  // For 1D intraday charts this means the x-axis ALWAYS spans 09:15 to
+  // 15:30 IST regardless of how much of the session has actually elapsed,
+  // so the chart "draws itself" left → right as the day progresses
+  // instead of stretching today's 1.5 hours of candles to fill the
+  // whole plot. Other timeframes (1W/1M/etc.) leave this null and use
+  // the original index-based mapping.
+  xAxisRange = null,
 } = {}) {
   if (!ohlc.length) return "";
   const allHighs = ohlc.map(k => k.h ?? k.c);
@@ -224,7 +233,17 @@ export function stockChart(ohlc, {
   const paddingLeft = 60, paddingRight = 56, paddingTop = 16, paddingBottom = 30;
   const plotW = width - paddingLeft - paddingRight;
   const plotH = height - paddingTop - paddingBottom;
-  const toX = (i) => paddingLeft + (ohlc.length > 1 ? (i / (ohlc.length - 1)) * plotW : 0);
+  const useTimeAxis = xAxisRange && Number.isFinite(xAxisRange.fromMs) && Number.isFinite(xAxisRange.toMs) && xAxisRange.toMs > xAxisRange.fromMs;
+  // Two coordinate-mapping functions:
+  //   toXi(i) — index-based (original behaviour, used for non-time-axis).
+  //   toXt(t) — time-based (used when xAxisRange is set).
+  // Code below picks one based on useTimeAxis.
+  const toXi = (i) => paddingLeft + (ohlc.length > 1 ? (i / (ohlc.length - 1)) * plotW : 0);
+  const toXt = (t) => {
+    const r = xAxisRange.toMs - xAxisRange.fromMs;
+    return paddingLeft + ((t - xAxisRange.fromMs) / r) * plotW;
+  };
+  const toXk = useTimeAxis ? (k) => toXt(k.t) : (k, i) => toXi(i);
   const toY = (v) => paddingTop + plotH - ((v - min) / (max - min)) * plotH;
 
   // Y gridlines + labels
@@ -236,35 +255,67 @@ export function stockChart(ohlc, {
     yLabels += `<text class="chart-axis-label" x="${paddingLeft - 8}" y="${y + 4}" text-anchor="end">₹${formatAxisNumber(v / 100)}</text>`;
   }
 
-  // X-axis ticks: 5 evenly-spaced labels from first to last candle.
-  // Format depends on how tightly the data is packed in time.
+  // X-axis ticks.
   let xLabels = "";
-  const nTicks = Math.min(5, ohlc.length);
-  const spanMs = ohlc[ohlc.length - 1].t - ohlc[0].t;
-  const isIntraday = spanMs > 0 && spanMs < 3 * 86400000;  // <3 days
-  const fmtT = (tms) => {
-    const d = new Date(tms);
-    if (isIntraday) {
-      return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+  const fmtTime = (tms) => new Date(tms).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+  const fmtDate = (tms) => new Date(tms).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" });
+  if (useTimeAxis) {
+    // Five fixed wall-clock ticks across the trading day. The 09:15 →
+    // 11:15 → 12:30 → 14:30 → 15:30 sequence picks human-friendly round
+    // times (open, mid-morning, lunch, late-afternoon, close).
+    const dayMs = 24 * 60 * 60 * 1000;
+    const open = xAxisRange.fromMs;
+    const close = xAxisRange.toMs;
+    const isFullDayWindow = (close - open) <= dayMs;
+    if (isFullDayWindow) {
+      const day = new Date(open);
+      day.setMinutes(0, 0, 0);
+      const tickTimes = [
+        open,
+        open + 2 * 60 * 60 * 1000,        // +2h ≈ 11:15 from 09:15
+        open + 3 * 60 * 60 * 1000 + 15 * 60 * 1000, // +3h15 ≈ 12:30
+        close - 60 * 60 * 1000,           // -1h ≈ 14:30
+        close,
+      ];
+      for (const t of tickTimes) {
+        const x = toXt(t);
+        xLabels += `<text class="chart-axis-label" x="${x}" y="${height - 10}" text-anchor="middle">${fmtTime(t)}</text>`;
+      }
+    } else {
+      // Multi-day xAxisRange (rare) — evenly-spaced fallback.
+      for (let i = 0; i < 5; i++) {
+        const t = xAxisRange.fromMs + (i / 4) * (xAxisRange.toMs - xAxisRange.fromMs);
+        const x = toXt(t);
+        xLabels += `<text class="chart-axis-label" x="${x}" y="${height - 10}" text-anchor="middle">${fmtDate(t)}</text>`;
+      }
     }
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" });
-  };
-  for (let i = 0; i < nTicks; i++) {
-    const idx = Math.round(i * (ohlc.length - 1) / (nTicks - 1 || 1));
-    const x = toX(idx);
-    const k = ohlc[idx];
-    xLabels += `<text class="chart-axis-label" x="${x}" y="${height - 10}" text-anchor="middle">${fmtT(k.t)}</text>`;
+  } else {
+    // Original: 5 evenly-spaced labels keyed off the data array.
+    const nTicks = Math.min(5, ohlc.length);
+    const spanMs = ohlc[ohlc.length - 1].t - ohlc[0].t;
+    const isIntraday = spanMs > 0 && spanMs < 3 * 86400000;
+    for (let i = 0; i < nTicks; i++) {
+      const idx = Math.round(i * (ohlc.length - 1) / (nTicks - 1 || 1));
+      const x = toXi(idx);
+      const k = ohlc[idx];
+      xLabels += `<text class="chart-axis-label" x="${x}" y="${height - 10}" text-anchor="middle">${isIntraday ? fmtTime(k.t) : fmtDate(k.t)}</text>`;
+    }
   }
 
   // Body
   let body = "";
   if (mode === "area") {
-    // Build path from close prices
     let d = "";
     for (let i = 0; i < ohlc.length; i++) {
-      d += (i === 0 ? "M" : "L") + toX(i).toFixed(2) + "," + toY(ohlc[i].c).toFixed(2) + " ";
+      d += (i === 0 ? "M" : "L") + toXk(ohlc[i], i).toFixed(2) + "," + toY(ohlc[i].c).toFixed(2) + " ";
     }
-    const areaD = d + ` L${toX(ohlc.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z`;
+    // Bottom edge of the fill polygon: anchor to the FIRST and LAST
+    // candle's actual x positions, not the plot edges. Otherwise the
+    // fill would extend rightward into empty future space when the
+    // time axis is wider than the data.
+    const xFirst = toXk(ohlc[0], 0);
+    const xLast  = toXk(ohlc[ohlc.length - 1], ohlc.length - 1);
+    const areaD = d + ` L${xLast.toFixed(2)},${paddingTop + plotH} L${xFirst.toFixed(2)},${paddingTop + plotH} Z`;
     const firstClose = ohlc[0].c;
     const lastClose = ohlc[ohlc.length - 1].c;
     const up = lastClose >= firstClose;
@@ -274,11 +325,20 @@ export function stockChart(ohlc, {
       <path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
     `;
   } else {
-    // Candles
-    const candleW = Math.max(1.5, plotW / ohlc.length * 0.6);
+    // Candles. When using a time axis, derive candleW from the time-step
+    // between consecutive candles so adjacent candles abut without
+    // overlapping. For index axis: keep the original even-spacing math.
+    let candleW;
+    if (useTimeAxis && ohlc.length > 1) {
+      const stepMs = ohlc[1].t - ohlc[0].t || (5 * 60 * 1000);
+      const stepPx = (stepMs / (xAxisRange.toMs - xAxisRange.fromMs)) * plotW;
+      candleW = Math.max(1.5, stepPx * 0.6);
+    } else {
+      candleW = Math.max(1.5, plotW / ohlc.length * 0.6);
+    }
     for (let i = 0; i < ohlc.length; i++) {
       const k = ohlc[i];
-      const x = toX(i);
+      const x = toXk(k, i);
       const up = k.c >= k.o;
       const cls = up ? "chart-candle-up" : "chart-candle-down";
       const yH = toY(k.h), yL = toY(k.l), yO = toY(k.o), yC = toY(k.c);
@@ -291,16 +351,23 @@ export function stockChart(ohlc, {
     }
   }
 
-  // Previous-close baseline (first candle's open as anchor)
+  // Previous-close baseline (first candle's open as anchor) — spans the
+  // full plot width regardless of axis mode (it's a horizontal reference).
   const baseY = toY(ohlc[0].o ?? ohlc[0].c);
   const baseline = `<line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${baseY}" y2="${baseY}" stroke="var(--text-dim, #878E9C)" stroke-width="1" stroke-dasharray="3,4" opacity="0.4" />`;
 
-  // Last-price label on right edge
-  const lastY = toY(ohlc[ohlc.length - 1].c);
+  // Last-price label — anchors to the LAST candle's actual x position
+  // (not the plot's right edge) so when the time axis extends past
+  // current data the badge hugs the latest candle, leaving the empty
+  // future space cleanly empty.
+  const lastIdx = ohlc.length - 1;
+  const lastY = toY(ohlc[lastIdx].c);
+  const lastX = toXk(ohlc[lastIdx], lastIdx);
+  const labelOffset = useTimeAxis ? 4 : (width - paddingRight + 2 - lastX);
   const lastLabel = `
-    <g transform="translate(${width - paddingRight + 2}, ${lastY})">
+    <g transform="translate(${lastX + labelOffset}, ${lastY})">
       <rect x="0" y="-10" width="52" height="20" rx="4" fill="var(--brand, #00B386)" />
-      <text x="26" y="4" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="var(--font-mono, monospace)">₹${(ohlc[ohlc.length - 1].c / 100).toFixed(2)}</text>
+      <text x="26" y="4" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="var(--font-mono, monospace)">₹${(ohlc[lastIdx].c / 100).toFixed(2)}</text>
     </g>`;
 
   // Subtle "paper trading" watermark — sits behind the chart at very low
@@ -311,12 +378,18 @@ export function stockChart(ohlc, {
   const wmX = paddingLeft + plotW / 2;
   const watermark = `<text class="chart-watermark" x="${wmX}" y="${wmY}" text-anchor="middle" font-size="${Math.round(height * 0.055)}" font-weight="700" fill="currentColor" opacity="0.055" style="pointer-events:none; user-select:none; letter-spacing:0.12em;">PAPER TRADING · VIRTUAL MONEY</text>`;
 
+  // Time-axis range exposed via data-attrs so attachStockChartHover can
+  // read them without us having to plumb the value through a second arg.
+  const xAxisAttrs = useTimeAxis
+    ? `data-x-from="${xAxisRange.fromMs}" data-x-to="${xAxisRange.toMs}"`
+    : "";
   return `
     <div class="stock-chart" style="position:relative;">
       <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
            data-w="${width}" data-h="${height}"
            data-pl="${paddingLeft}" data-pr="${paddingRight}"
            data-pt="${paddingTop}" data-pb="${paddingBottom}"
+           ${xAxisAttrs}
            data-min="${min}" data-max="${max}" data-n="${ohlc.length}">
         <g class="chart-grid">${grid}</g>
         ${watermark}
@@ -368,9 +441,43 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
   const N = +svg.dataset.n;
   const plotW = W - PL - PR;
   const plotH = H - PT - PB;
-  const toX = (i) => PL + (N > 1 ? (i / (N - 1)) * plotW : 0);
+  // Read the time-axis range directly from the SVG data-attrs that
+  // stockChart() set. If absent, use null and fall back to index mode.
+  const xFromAttr = +svg.dataset.xFrom;
+  const xToAttr   = +svg.dataset.xTo;
+  const useTimeAxis = Number.isFinite(xFromAttr) && Number.isFinite(xToAttr) && xToAttr > xFromAttr;
+  const xFromMs = useTimeAxis ? xFromAttr : ohlc[0].t;
+  const xToMs   = useTimeAxis ? xToAttr   : ohlc[N - 1].t;
+  // Last candle's actual x position. When using time-axis with the cursor
+  // BEYOND this point, we're hovering over future/empty space and must
+  // not pretend a price exists there.
+  const lastDataMs = ohlc[N - 1].t;
+  const firstDataMs = ohlc[0].t;
   const toY = (v) => PT + plotH - ((v - MIN) / (MAX - MIN)) * plotH;
   let lastColor = "";
+
+  // Map cursor x-pixel → timestamp on the chart's x-axis.
+  function pxToMs(px) {
+    const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
+    return xFromMs + rel * (xToMs - xFromMs);
+  }
+  // Find the nearest candle index for a given timestamp.
+  function nearestIdxAt(tMs) {
+    if (!useTimeAxis) {
+      // Original index-based mode.
+      const rel = Math.max(0, Math.min(1, (tMs - xFromMs) / (xToMs - xFromMs)));
+      return Math.max(0, Math.min(N - 1, Math.round(rel * (N - 1))));
+    }
+    // Time-based: binary search for closest by absolute delta.
+    let lo = 0, hi = N - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (ohlc[mid].t < tMs) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0 && Math.abs(ohlc[lo - 1].t - tMs) < Math.abs(ohlc[lo].t - tMs)) lo--;
+    return lo;
+  }
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -382,65 +489,98 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       return;
     }
 
-    // Continuous sub-pixel position along the price line. We linearly
-    // interpolate the close between the two adjacent bars, so as the
-    // cursor moves 1px the dot's Y shifts to the exact point on the
-    // line segment — no bar-snap, no teleport.
-    const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
-    const exactPos = rel * (N - 1);
-    const i0 = Math.floor(exactPos);
-    const i1 = Math.min(N - 1, i0 + 1);
-    const frac = exactPos - i0;
-    const interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
-    // Nearest bar supplies the OHLC + date shown in the tooltip — you
-    // can't interpolate open/high/low across candles, only close is
-    // continuous.
-    const idx = Math.max(0, Math.min(N - 1, Math.round(exactPos)));
-    const k = ohlc[idx];
+    // Cursor's exact timestamp (always — independent of candle snap).
+    const cursorMs = pxToMs(px);
+    // Detect "no data at this time" — cursor in dead space (future or
+    // pre-history). Skip the price interpolation + hide the dot.
+    const beforeData = cursorMs < firstDataMs;
+    const afterData  = cursorMs > lastDataMs;
+    const noDataHere = useTimeAxis && (beforeData || afterData);
 
-    // Vertical cursor line + dot both track the raw cursor X sub-pixel.
+    let interpClose, idx, k;
+    if (noDataHere) {
+      idx = afterData ? N - 1 : 0;
+      k = ohlc[idx];
+      interpClose = null;
+    } else {
+      // Interpolate close along the line at this cursor position.
+      idx = nearestIdxAt(cursorMs);
+      // For area-mode line drag: find adjacent candles that bracket
+      // cursorMs and linear-interpolate.
+      let i0 = idx, i1 = idx;
+      if (idx > 0 && ohlc[idx].t > cursorMs) { i0 = idx - 1; i1 = idx; }
+      else if (idx < N - 1 && ohlc[idx].t < cursorMs) { i0 = idx; i1 = idx + 1; }
+      const span = ohlc[i1].t - ohlc[i0].t;
+      const frac = span > 0 ? (cursorMs - ohlc[i0].t) / span : 0;
+      interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+      k = ohlc[idx];
+    }
+
+    // Vertical cursor line always tracks the cursor — even in dead space.
     cursorX.setAttribute("x1", px);
     cursorX.setAttribute("x2", px);
-    const by = toY(interpClose);
-    if (dotHalo) { dotHalo.setAttribute("cx", px); dotHalo.setAttribute("cy", by); }
-    if (dotCore) { dotCore.setAttribute("cx", px); dotCore.setAttribute("cy", by); }
-
-    // Price-responding colour flips based on the interpolated close vs
-    // the range's first close. Only write fill when it actually flips
-    // so we don't churn the DOM every frame.
-    const dotColor = interpClose >= ohlc[0].c
-      ? "var(--positive, #00B386)"
-      : "var(--negative, #EB5757)";
-    if (dotColor !== lastColor) {
-      lastColor = dotColor;
-      if (dotHalo) dotHalo.setAttribute("fill", dotColor);
-      if (dotCore) dotCore.setAttribute("fill", dotColor);
+    if (noDataHere || interpClose == null) {
+      // Hide the dot completely — no price exists at this cursor point.
+      if (dotHalo) { dotHalo.setAttribute("cx", -100); dotHalo.setAttribute("cy", -100); }
+      if (dotCore) { dotCore.setAttribute("cx", -100); dotCore.setAttribute("cy", -100); }
+    } else {
+      const by = toY(interpClose);
+      if (dotHalo) { dotHalo.setAttribute("cx", px); dotHalo.setAttribute("cy", by); }
+      if (dotCore) { dotCore.setAttribute("cx", px); dotCore.setAttribute("cy", by); }
+      const dotColor = interpClose >= ohlc[0].c
+        ? "var(--positive, #00B386)"
+        : "var(--negative, #EB5757)";
+      if (dotColor !== lastColor) {
+        lastColor = dotColor;
+        if (dotHalo) dotHalo.setAttribute("fill", dotColor);
+        if (dotCore) dotCore.setAttribute("fill", dotColor);
+      }
     }
     cursor.style.display = "";
 
-    const d = new Date(k.t);
-    const dateStr = d.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit", month: "short", year: "numeric",
-      hour: "2-digit", minute: "2-digit",
-    });
+    // Cursor-time format. For intraday we show HH:MM precise to the
+    // pixel cursor (e.g. "11:32"), not the candle's snapped timestamp.
+    // Date format only when the chart spans multiple days.
+    const cursorDate = new Date(cursorMs);
+    const totalSpan = xToMs - xFromMs;
+    const isIntraday = totalSpan > 0 && totalSpan < 3 * 86400000;
+    const cursorTimeStr = isIntraday
+      ? cursorDate.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
+      : cursorDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+    const cursorDateStr = isIntraday
+      ? cursorDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" })
+      : "";
     const fmt = (p) => "₹" + (p / 100).toFixed(2);
-    // Area mode: show the interpolated close front and centre (that's
-    // what the dot is sitting on).
-    // Candle mode: still show the interpolated close at the top so it
-    // tracks the dot 1:1, then the nearest bar's OHLC+Vol beneath.
-    const tipLines = mode === "area"
-      ? [
-          `<span style="color:var(--text-dim)">${dateStr}</span>`,
-          `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
-        ]
-      : [
-          `<span style="color:var(--text-dim)">${dateStr}</span>`,
-          `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
-          `<span>O <strong>${fmt(k.o)}</strong>  H <strong style="color:var(--positive)">${fmt(k.h)}</strong></span>`,
-          `<span>L <strong style="color:var(--negative)">${fmt(k.l)}</strong>  C <strong>${fmt(k.c)}</strong></span>`,
-          k.v ? `<span style="color:var(--text-dim)">Vol ${k.v.toLocaleString("en-IN")}</span>` : "",
-        ].filter(Boolean);
+
+    // Tooltip layout:
+    //   Row 1: cursor's exact time (always — even in no-data space)
+    //   Row 2: interpolated close at the cursor (if data exists)
+    //   Row 3 (candle mode only): O/H/L of the nearest candle
+    //   Row 4 (candle, when data): Vol of the nearest candle
+    //   If no data here: row 2 says "(no candle yet)"
+    const headerRow = isIntraday
+      ? `<span style="color:var(--text-dim)">${cursorTimeStr} IST · ${cursorDateStr}</span>`
+      : `<span style="color:var(--text-dim)">${cursorTimeStr}</span>`;
+    let tipLines;
+    if (noDataHere) {
+      tipLines = [
+        headerRow,
+        `<span style="color:var(--text-dim); font-style: italic;">(no candle yet)</span>`,
+      ];
+    } else if (mode === "area") {
+      tipLines = [
+        headerRow,
+        `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
+      ];
+    } else {
+      tipLines = [
+        headerRow,
+        `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
+        `<span>O <strong>${fmt(k.o)}</strong>  H <strong style="color:var(--positive)">${fmt(k.h)}</strong></span>`,
+        `<span>L <strong style="color:var(--negative)">${fmt(k.l)}</strong>  C <strong>${fmt(k.c)}</strong></span>`,
+        k.v ? `<span style="color:var(--text-dim)">Vol ${k.v.toLocaleString("en-IN")}</span>` : "",
+      ].filter(Boolean);
+    }
 
     tooltip.innerHTML = tipLines.join("<br>");
     tooltip.style.display = "";

@@ -47,6 +47,32 @@ let qtySelectorHandle = null;
 let _cancelToken = { cancelled: false };    // shared per-mount token
 let _stockWhyKey = null;                     // "SYMBOL_day" — prevents refire on live-quote refresh
 let _stockWhyLast = null;                    // last explanation rendered for this mount
+let _historyAbortCtrl = null;                // cancel a previous in-flight refresh
+let _historyPoll = null;                     // setInterval for periodic 1D refresh
+
+// Compute today's IST market session boundaries (09:15 → 15:30) as ms
+// timestamps. Using an explicit "+05:30" offset string makes this work
+// regardless of the user's machine timezone — pacific, eastern,
+// anywhere. Returns null on holidays / weekends so the chart falls
+// back to its default index-axis behaviour for previous-session data.
+function todaysMarketWindowMs() {
+  const ms = marketStatus();
+  // marketStatus exposes istDate ("DD MMM YYYY"), istTime, isHoliday, weekday.
+  // For a robust IST date, derive YYYY-MM-DD via Intl in IST and use the
+  // explicit offset string for parseable construction.
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const parts = fmt.formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
+  const ymd = `${parts.year}-${parts.month}-${parts.day}`;
+  const fromMs = new Date(`${ymd}T09:15:00+05:30`).getTime();
+  const toMs   = new Date(`${ymd}T15:30:00+05:30`).getTime();
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
+  // Treat holidays + weekends as "no session today" — chart reverts to
+  // the data-bounded index axis showing yesterday's session.
+  if (ms.isHoliday) return null;
+  return { fromMs, toMs, isWeekend: ms.weekday === "sat" || ms.weekday === "sun" };
+}
 
 export function renderStockDetail(main, params) {
   const symbol = params.symbol;
@@ -94,7 +120,13 @@ export function renderStockDetail(main, params) {
     if (myToken.cancelled) return;
     if (quotes[symbol]) { liveQuote = quotes[symbol]; render(inst, symbol); }
   }, 12_000);  // 12s refresh on the currently-open stock
-  const onLeave = () => { myToken.cancelled = true; unsub?.(); pollUnsub?.(); };
+  const onLeave = () => {
+    myToken.cancelled = true;
+    unsub?.();
+    pollUnsub?.();
+    if (_historyPoll) { clearInterval(_historyPoll); _historyPoll = null; }
+    if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} _historyAbortCtrl = null; }
+  };
   window.addEventListener("hashchange", onLeave, { once: true });
   // Fetch history
   (async () => {
@@ -105,6 +137,14 @@ export function renderStockDetail(main, params) {
       if (h) { liveHistory = h; render(inst, symbol); }
     } catch (e) { console.warn("history:", e); }
   })();
+
+  // For 1D intraday, poll history every 30 s during market hours so new
+  // 5-min candles appear without a page reload. Uses refreshHistory()
+  // (NOT reloadHistory) so liveHistory is never null'd mid-render —
+  // that would flash the skeleton every 30s, which is worse UX than
+  // staleness. AbortController prevents in-flight pile-ups when polls
+  // overlap.
+  startHistoryPoll(inst, symbol);
 
   // Fetch fundamentals. This was missing — liveFundamentals was declared
   // but never populated, so the Fundamentals card sat on "Loading…" forever
@@ -129,6 +169,9 @@ export function renderStockDetail(main, params) {
   }
 }
 
+// Reload — used on TF change. Nulls liveHistory first so the skeleton
+// shows while the new TF loads (intentional UX — switching TF is an
+// explicit action so the user expects to wait).
 async function reloadHistory(inst, symbol) {
   const myToken = _cancelToken;
   const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
@@ -137,6 +180,41 @@ async function reloadHistory(inst, symbol) {
   const h = await getHistory(symbol, tf.range, tf.interval).catch(() => null);
   if (myToken.cancelled) return;
   if (h) { liveHistory = h; render(inst, symbol); }
+}
+
+// Refresh — used by the 30-second 1D poll. Does NOT null liveHistory
+// (no skeleton flash); the new fetch silently replaces the old data
+// and the next render paints the additional candle. AbortController
+// cancels any previous in-flight refresh so slow responses can't
+// overwrite a fresher one.
+async function refreshHistory(inst, symbol) {
+  const myToken = _cancelToken;
+  if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} }
+  _historyAbortCtrl = new AbortController();
+  const sig = _historyAbortCtrl.signal;
+  try {
+    const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
+    const h = await getHistory(symbol, tf.range, tf.interval, { signal: sig });
+    if (sig.aborted || myToken.cancelled) return;
+    if (h?.ohlc?.length) {
+      liveHistory = h;
+      render(inst, symbol);
+    }
+  } catch (e) {
+    if (e?.name !== "AbortError") console.warn("[refreshHistory]", e?.message || e);
+  }
+}
+
+// Start (or restart) the 30-second 1D refresh poll. Idempotent — clears
+// the previous interval first so calling twice doesn't double-fire.
+function startHistoryPoll(inst, symbol) {
+  if (_historyPoll) clearInterval(_historyPoll);
+  _historyPoll = setInterval(() => {
+    if (_cancelToken.cancelled) return;
+    if (ui.timeframe !== "1D") return;
+    if (!marketStatus().open) return;
+    refreshHistory(inst, symbol);
+  }, 30_000);
 }
 
 function render(inst, symbol) {
@@ -158,6 +236,25 @@ function render(inst, symbol) {
   const historyLoading = inst.kind !== "MF" && !liveHistory;
   const history = liveHistory?.ohlc?.length ? liveHistory.ohlc : getSeries(symbol).slice(-tfSpec.days);
   const closes = history.map(k => k.c);
+
+  // For the 1D timeframe during the trading day (and 30 minutes after
+  // close to avoid a jarring axis-reflow at 15:30 sharp), compute the
+  // time range 09:15 IST → 15:30 IST so the chart spans the full
+  // session and "draws itself" left-to-right as the day progresses.
+  // Other timeframes / holidays / late post-close fall back to the
+  // chart's default index-based mapping.
+  let chartXAxisRange = null;
+  if (ui.timeframe === "1D" && inst.kind !== "MF") {
+    const win = todaysMarketWindowMs();
+    if (win) {
+      const POST_CLOSE_GRACE_MS = 30 * 60 * 1000;
+      const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
+      const isWeekday = !win.isWeekend;
+      if (inWindow && isWeekday) {
+        chartXAxisRange = { fromMs: win.fromMs, toMs: win.toMs };
+      }
+    }
+  }
 
   const { hi, lo } = get52wRange(symbol);
   const isWatched = state.watchlist.includes(symbol);
@@ -233,6 +330,7 @@ function render(inst, symbol) {
             <div class="change ${deltaClass(change)} tabular">
               ${formatRupees(dayChangeVal, { sign: true })} (${formatPct(change, { sign: true })}) today
             </div>
+            ${renderPriceFreshness(liveQuote)}
           `}
         </div>
 
@@ -262,7 +360,7 @@ function render(inst, symbol) {
             </div>
           ` : inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
-            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800 })}</div>`}
+            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800, xAxisRange: chartXAxisRange })}</div>`}
         </div>
 
         <div class="card stock-why-card" id="stock-why-card" style="margin-top: var(--sp-4);">
@@ -481,7 +579,35 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
     btn.addEventListener("click", () => {
       ui.timeframe = btn.dataset.tf;
       reloadHistory(inst, symbol);
+      // Restart the 1D poll lifecycle on TF changes — entering 1D
+      // starts the 30-s refresh; leaving it lets the existing
+      // interval's internal guard skip-without-fetching but we still
+      // re-call to ensure idempotency.
+      startHistoryPoll(inst, symbol);
     });
+  });
+  // Refresh button — forces a fresh upstream fetch (bypasses our cache
+  // AND Vercel's edge cache) so the user can pull the absolute latest
+  // tick on demand. Useful when the visible "as of" timestamp lags
+  // noticeably behind real-time (e.g. Yahoo's free feed is officially
+  // 15-min delayed but in practice often only 1-2 min).
+  main.querySelector("#price-refresh-btn")?.addEventListener("click", async () => {
+    const btn = main.querySelector("#price-refresh-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+    try {
+      const fresh = await getQuote(symbol, { bustCache: true });
+      if (fresh) {
+        liveQuote = fresh;
+        render(inst, symbol);
+      }
+    } catch (e) {
+      console.warn("[price-refresh]", e?.message || e);
+    } finally {
+      // The render above already re-paints the button if successful;
+      // restore here only matters on the no-refresh-no-render path.
+      const btn2 = main.querySelector("#price-refresh-btn");
+      if (btn2) { btn2.disabled = false; btn2.textContent = "↻ Refresh"; }
+    }
   });
   // Candle/Line mode toggle — no refetch, just re-render with other mode.
   main.querySelectorAll(".chart-mode-btn").forEach(btn => {
@@ -861,6 +987,40 @@ async function executeTrade(inst, side, qty, pricePaise, biasResult) {
     toast({ kind: "error", message: e.message || "Trade failed" });
     console.error(e);
   }
+}
+
+// Source-aware "as of HH:MM:SS" line shown beneath the price block.
+// liveQuote.ts is in MILLISECONDS (mirrors Date.now()) — confirmed in
+// marketData.js normalizeFromApi() which reads payload.ts_ms. Don't
+// multiply by 1000 thinking it's seconds. The timestamp here is the
+// upstream tick time (when Yahoo/Dhan recorded the price), not when
+// our server fetched it — so the user sees the honest data age, not
+// just the cache freshness.
+function renderPriceFreshness(quote) {
+  if (!quote || !quote.ts) return "";
+  const asOf = new Date(quote.ts).toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const src = quote.source || "—";
+  // Caveat copy reflects the actual upstream. Yahoo's free NSE feed is
+  // officially 15 min delayed; Dhan is real-time when configured;
+  // anything else (synthetic / mf-static / unknown) just labels itself.
+  let srcLabel;
+  if (src === "yahoo") srcLabel = "via Yahoo (~15-min officially)";
+  else if (src === "dhan") srcLabel = "via Dhan (real-time)";
+  else if (src === "mf-static") srcLabel = "MF NAV (end-of-day)";
+  else if (src === "synthetic") srcLabel = "via synthetic fallback";
+  else srcLabel = `via ${escapeHtml(src)}`;
+  const staleChip = quote.stale
+    ? ` <span style="color: var(--warning, #F39C12); font-weight: 600;">· stale</span>`
+    : "";
+  return `
+    <div class="dim text-xs" style="margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+      <span>As of ${asOf} · ${srcLabel}${staleChip}</span>
+      <button class="btn btn-ghost btn-sm" id="price-refresh-btn" title="Force a fresh upstream fetch (bypasses our cache)" style="padding: 2px 8px; font-size: 11px; min-height: 0;">↻ Refresh</button>
+    </div>
+  `;
 }
 
 function fundRow(l, v, html = false) {

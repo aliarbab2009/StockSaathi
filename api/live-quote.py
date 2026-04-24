@@ -33,18 +33,69 @@ import time
 import urllib.request
 import urllib.error
 import concurrent.futures
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote as url_quote
+
+try:
+    from zoneinfo import ZoneInfo  # py3.9+
+    _IST = ZoneInfo("Asia/Kolkata")
+except Exception:   # pragma: no cover — older Pythons fall back to UTC offset
+    _IST = None
 
 SUPA_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPA_SRV = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 DHAN_TOKEN = os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
 DHAN_CLIENT = os.environ.get("DHAN_CLIENT_ID", "").strip()
 
-# Cache TTL — shorter = fresher but more upstream calls. 10s is a sweet spot:
-# humans can't tell the difference, and even 1000 users all polling the same
-# stocks only hit Yahoo/Dhan 6 times/minute total.
-CACHE_TTL_MS = int(os.environ.get("QUOTE_CACHE_TTL_MS", "10000"))
+# Cache TTL — tuned per market state instead of a single constant.
+# Reasoning:
+#   * Market OPEN (Mon-Fri 09:15-15:30 IST): prices tick every second, so we
+#     want a short cache so the displayed number never lags more than a few
+#     seconds. 5s is short enough that humans can't tell it's cached but long
+#     enough that a burst of clients all polling the same symbol only hits
+#     Yahoo/Dhan once per 5-second window.
+#   * Market CLOSED: the official closing tick is frozen until next session,
+#     so there is nothing to refresh for. 5 minutes keeps the number in memory
+#     between pageloads while virtually eliminating upstream traffic.
+# The env var QUOTE_CACHE_TTL_MS still wins if explicitly set — infra people
+# can override without touching the code path.
+CACHE_TTL_OPEN_MS = int(os.environ.get("QUOTE_CACHE_TTL_OPEN_MS", "5000"))
+CACHE_TTL_CLOSED_MS = int(os.environ.get("QUOTE_CACHE_TTL_CLOSED_MS", "300000"))
+CACHE_TTL_MS_DEFAULT = int(os.environ.get("QUOTE_CACHE_TTL_MS", "0"))   # 0 → use open/closed split
+
+
+def is_market_open_ist(now_ms=None):
+    """True during IST market hours (Mon-Fri 09:15-15:30). Holidays ignored
+    (they are rare and the cost of treating them as 'open' is one upstream
+    hit per 5s that returns yesterday's close)."""
+    if _IST is None:
+        # Pre-3.9 runtime with no zoneinfo — be conservative and behave as
+        # "closed" so we don't accidentally spam upstream with a 5s TTL over
+        # a wrong timezone guess. Vercel Python runtime is 3.9+ so this
+        # branch is dead code in practice; kept for local-dev safety.
+        return False
+    try:
+        ms = now_ms if now_ms is not None else int(time.time() * 1000)
+        t = datetime.fromtimestamp(ms / 1000, tz=_IST)
+        if t.weekday() >= 5:   # 5 = Sat, 6 = Sun
+            return False
+        mins = t.hour * 60 + t.minute
+        return (9 * 60 + 15) <= mins < (15 * 60 + 30)
+    except Exception:
+        return False
+
+
+def current_ttl_ms():
+    """Active TTL for this moment. Honours QUOTE_CACHE_TTL_MS override."""
+    if CACHE_TTL_MS_DEFAULT:
+        return CACHE_TTL_MS_DEFAULT
+    return CACHE_TTL_OPEN_MS if is_market_open_ist() else CACHE_TTL_CLOSED_MS
+
+
+# Back-compat: module-level constant still exported (used by other parts of
+# the codebase that introspect it for `cache_ttl_ms` in the JSON response).
+CACHE_TTL_MS = CACHE_TTL_OPEN_MS   # "worst case" default for static refs
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-\^=_&]{1,24}$")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -70,13 +121,14 @@ def _supa_headers():
     }
 
 
-def read_cache(symbols):
-    """Returns {symbol: row_dict} for rows WRITTEN to cache within CACHE_TTL_MS.
+def read_cache(symbols, ttl_ms=None):
+    """Returns {symbol: row_dict} for rows WRITTEN to cache within ttl_ms.
     Filters on cached_at_ms (when our server wrote), NOT ts_ms (Yahoo market
     time, which can be hours stale during Yahoo lag)."""
     if not (SUPA_URL and SUPA_SRV) or not symbols:
         return {}
-    cutoff = int(time.time() * 1000) - CACHE_TTL_MS
+    effective_ttl = ttl_ms if ttl_ms is not None else current_ttl_ms()
+    cutoff = int(time.time() * 1000) - effective_ttl
     sym_list = ",".join(f'"{s}"' for s in symbols)
     url = (f"{SUPA_URL}/rest/v1/quote_cache"
            f"?symbol=in.({sym_list})"
@@ -308,17 +360,28 @@ def _quote_from_cache_row(row):
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         q = parse_qs(urlparse(self.path).query)
+        # Accept either `symbols=A,B` (batch) or `symbol=X` (single, for the
+        # refresh-button path which hits /api/quote but we support here too
+        # for the StockDetail freshness refresh button).
         raw = (q.get("symbols") or [""])[0]
+        if not raw:
+            raw = (q.get("symbol") or [""])[0]
         raw_syms = [s.strip().upper() for s in raw.split(",") if s.strip()][:MAX_SYMBOLS]
         syms = [s for s in raw_syms if _SYMBOL_RE.match(s)]
+        # nocache=1 skips the Supabase cache read entirely and forces an
+        # upstream fetch. Response gets a no-store Cache-Control so the
+        # Vercel edge + browser can't serve their own cached copy.
+        nocache = (q.get("nocache") or ["0"])[0] == "1"
         if not syms:
-            self._json(400, {"ok": False, "error": "no_valid_symbols"})
+            self._json(400, {"ok": False, "error": "no_valid_symbols"}, nocache=nocache)
             return
 
         t0 = time.time()
+        ttl_ms = current_ttl_ms()
+        market_open = is_market_open_ist()
 
-        # 1. Cache sweep
-        cached = read_cache(syms)
+        # 1. Cache sweep (skipped when nocache=1)
+        cached = {} if nocache else read_cache(syms, ttl_ms=ttl_ms)
         missing = [s for s in syms if s not in cached]
 
         # 2. Source chain for misses: Dhan → Yahoo
@@ -355,13 +418,14 @@ class handler(BaseHTTPRequestHandler):
             "cached_count": len(cached),
             "fresh_count": len(fresh),
             "latency_ms": latency_ms,
-            "cache_ttl_ms": CACHE_TTL_MS,
+            "cache_ttl_ms": ttl_ms,
+            "market_open": market_open,
             "sources_enabled": {
                 "dhan": bool(DHAN_TOKEN),
                 "yahoo": True,
                 "cache": bool(SUPA_URL and SUPA_SRV),
             },
-        })
+        }, nocache=nocache, ttl_ms=ttl_ms)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -370,16 +434,21 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
 
-    def _json(self, code, obj):
+    def _json(self, code, obj, nocache=False, ttl_ms=None):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
-        # Cache at the Vercel edge for the same TTL — extra user-less fanout
-        # without even hitting our function. Safe because our own cache has
-        # matching TTL.
-        self.send_header("Cache-Control", f"public, max-age={CACHE_TTL_MS // 1000}")
+        if nocache:
+            # Refresh-button path — propagate no-store all the way out.
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+        else:
+            # Edge-cache in lockstep with our Supabase TTL (market-aware).
+            # Open: 5s edge TTL. Closed: 300s edge TTL.
+            edge_ttl = max(1, (ttl_ms if ttl_ms is not None else current_ttl_ms()) // 1000)
+            self.send_header("Cache-Control", f"public, max-age={edge_ttl}")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
