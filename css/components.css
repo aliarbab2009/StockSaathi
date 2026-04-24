@@ -634,6 +634,19 @@
 .chart-grid line { stroke: var(--divider); stroke-dasharray: 2 3; }
 .chart-line { fill: none; stroke-width: 2; }
 .chart-area { fill-opacity: 0.12; }
+/* Zoom-gesture capture on the stock chart. touch-action:none tells the
+   browser "this element handles its own touch events" — without it an
+   iOS Safari two-finger pinch gets hijacked by the page-zoom layer and
+   our chartZoom handler never sees the touchmove events. pan-y would
+   let vertical page scroll pass through, but pan-x doesn't exist as a
+   value; none is the reliable choice. Only applied to .stock-chart
+   (the container rendered by stockChart()), NOT to .chart-svg used by
+   lineChart/areaChart/candleChart elsewhere. */
+.stock-chart { touch-action: none; }
+/* Tiny transition on the plot-area group so wheel-tick steps feel
+   smooth instead of stepping per-discrete-wheel-event. 40ms is below
+   human motion threshold (~50ms) so it reads as direct manipulation. */
+.stock-chart .chart-plot-area { transition: transform 40ms linear; }
 .chart-tooltip {
   position: absolute;
   background: var(--surface);

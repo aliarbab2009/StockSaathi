@@ -391,22 +391,29 @@ export function stockChart(ohlc, {
            data-pt="${paddingTop}" data-pb="${paddingBottom}"
            ${xAxisAttrs}
            data-min="${min}" data-max="${max}" data-n="${ohlc.length}">
-        <g class="chart-grid">${grid}</g>
+        <!-- chart-plot-area wraps the zoomable/pannable plot content. The
+             zoom gesture engine (chartZoom.js) applies a transient
+             transform="translate(tx) scale(sx, 1)" to THIS group during a
+             gesture so Y-axis labels and the watermark stay crisp and
+             un-stretched. On gesture-commit the transform is cleared and
+             stockChart re-renders with the new xAxisRange. -->
+        <g class="chart-plot-area">
+          <g class="chart-grid">${grid}</g>
+          ${baseline}
+          ${body}
+          ${lastLabel}
+        </g>
         ${watermark}
-        ${baseline}
-        ${body}
         ${yLabels}
         ${xLabels}
-        ${lastLabel}
         <g class="chart-cursor" style="display:none;">
-          <!-- Single vertical line tracks the cursor X. The dot sits on the
-               NEAREST bar's close (same data the tooltip reports — so the
-               mark is never "off" relative to the numbers next to it), with
-               a soft breathing halo + a punch-out surface ring on the core
-               for contrast against any chart colour. Halo pulses by
-               animating r directly (not transform:scale) — scale-on-SVG is
-               inconsistent across browsers and caused the drift the user
-               saw. -->
+          <!-- Single vertical line tracks the cursor X. In candle mode
+               the dot snaps to the nearest bar's (x, close) so the mark
+               is never "off" relative to the numbers next to it. In
+               area mode the dot slides smoothly along the line via
+               interpolated close. Halo pulses by animating r directly
+               (not transform:scale) — scale-on-SVG is inconsistent
+               across browsers. -->
           <line class="chart-cursor-x" x1="0" x2="0" y1="${paddingTop}" y2="${paddingTop + plotH}"
                 stroke="var(--text, #E2E5EC)" stroke-width="1.5" opacity="0.7" />
           <circle class="chart-dot-halo breathing" cx="-50" cy="-50" r="10" fill="currentColor" />

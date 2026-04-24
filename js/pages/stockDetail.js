@@ -9,6 +9,7 @@ import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange, marketStatus } from "../data/prices.js";
 import { candleChart, lineChart, stockChart, attachStockChartHover } from "../components/charts.js";
+import { attachChartZoom, intervalForScale } from "../components/chartZoom.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import {
   getState, subscribe, applyTrade, recordCoachMessage, genId, addToWatchlist, removeFromWatchlist,
@@ -39,6 +40,15 @@ let ui = {
   timeframe: "1M",
   chartMode: "candle",   // "candle" | "area"
   orderType: "MARKET", limitPrice: 0,
+  // Zoom state — only meaningful on the 1D intraday chart. scale=1 means
+  // the whole session (09:15-15:30 IST) is visible. scale>1 zooms in,
+  // centered on centerMs. manualPan=true once the user has explicitly
+  // panned horizontally; disables the sticky-right-edge auto-follow.
+  zoom: { scale: 1, centerMs: null, manualPan: false },
+  // When zoomed in, overrides TF_MAP[timeframe].interval with a finer
+  // granularity ("5m" default → "2m" → "1m" as scale climbs). null =
+  // use the timeframe's default interval.
+  interval: null,
 };
 let liveQuote = null;
 let liveHistory = null;
@@ -49,6 +59,9 @@ let _stockWhyKey = null;                     // "SYMBOL_day" — prevents refire
 let _stockWhyLast = null;                    // last explanation rendered for this mount
 let _historyAbortCtrl = null;                // cancel a previous in-flight refresh
 let _historyPoll = null;                     // setInterval for periodic 1D refresh
+let _zoomDetach = null;                      // cleanup fn returned by attachChartZoom
+let _gestureActive = false;                  // true while a zoom/pan gesture is in flight
+let _prevLastDataMs = null;                  // tracked for sticky-right-edge logic in refreshHistory
 
 // Compute today's IST market session boundaries (09:15 → 15:30) as ms
 // timestamps. Using an explicit "+05:30" offset string makes this work
@@ -98,7 +111,11 @@ export function renderStockDetail(main, params) {
     timeframe: "1M",
     chartMode: "candle",
     orderType: "MARKET", limitPrice: 0,
+    zoom: { scale: 1, centerMs: null, manualPan: false },
+    interval: null,
   };
+  _prevLastDataMs = null;
+  _gestureActive = false;
   liveQuote = null;
   liveHistory = null;
   liveFundamentals = null;
@@ -115,10 +132,22 @@ export function renderStockDetail(main, params) {
   if (preQuote) liveQuote = preQuote;
 
   render(inst, symbol);
-  const unsub = subscribe(() => { if (!myToken.cancelled) render(inst, symbol); });
+  // Guard: any render() call during an in-flight zoom/pan gesture replaces
+  // main.innerHTML and wipes the SVG mid-gesture. Defer until the next
+  // tick lands after the gesture ends. render() is idempotent so skipping
+  // a single tick produces no user-visible side-effect other than a
+  // slightly-staler-by-12s price that auto-heals on the next tick.
+  const unsub = subscribe(() => {
+    if (myToken.cancelled || _gestureActive) return;
+    render(inst, symbol);
+  });
   const pollUnsub = subscribeToQuotes([symbol], (quotes) => {
     if (myToken.cancelled) return;
-    if (quotes[symbol]) { liveQuote = quotes[symbol]; render(inst, symbol); }
+    if (quotes[symbol]) {
+      liveQuote = quotes[symbol];
+      if (_gestureActive) return;    // defer render until gesture ends
+      render(inst, symbol);
+    }
   }, 12_000);  // 12s refresh on the currently-open stock
   const onLeave = () => {
     myToken.cancelled = true;
@@ -126,15 +155,24 @@ export function renderStockDetail(main, params) {
     pollUnsub?.();
     if (_historyPoll) { clearInterval(_historyPoll); _historyPoll = null; }
     if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} _historyAbortCtrl = null; }
+    if (_zoomDetach) { _zoomDetach(); _zoomDetach = null; }
+    _gestureActive = false;
   };
   window.addEventListener("hashchange", onLeave, { once: true });
   // Fetch history
   (async () => {
     try {
       const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
-      const h = await getHistory(symbol, tf.range, tf.interval);
+      // Honour ui.interval if the user has zoomed in (overrides the
+      // timeframe's default granularity with a finer one, e.g. "1m").
+      const interval = ui.interval ?? tf.interval;
+      const h = await getHistory(symbol, tf.range, interval);
       if (myToken.cancelled) return;
-      if (h) { liveHistory = h; render(inst, symbol); }
+      if (h) {
+        liveHistory = h;
+        if (h.ohlc?.length) _prevLastDataMs = h.ohlc[h.ohlc.length - 1].t;
+        render(inst, symbol);
+      }
     } catch (e) { console.warn("history:", e); }
   })();
 
@@ -175,11 +213,20 @@ export function renderStockDetail(main, params) {
 async function reloadHistory(inst, symbol) {
   const myToken = _cancelToken;
   const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
+  const interval = ui.interval ?? tf.interval;
   liveHistory = null;
+  // Clear sticky-edge baseline — the next fetch belongs to a different
+  // (timeframe, interval) combo, and comparing timestamps across those
+  // would produce nonsense sticky-shift math.
+  _prevLastDataMs = null;
   render(inst, symbol);
-  const h = await getHistory(symbol, tf.range, tf.interval).catch(() => null);
+  const h = await getHistory(symbol, tf.range, interval).catch(() => null);
   if (myToken.cancelled) return;
-  if (h) { liveHistory = h; render(inst, symbol); }
+  if (h) {
+    liveHistory = h;
+    if (h.ohlc?.length) _prevLastDataMs = h.ohlc[h.ohlc.length - 1].t;
+    render(inst, symbol);
+  }
 }
 
 // Refresh — used by the 30-second 1D poll. Does NOT null liveHistory
@@ -197,20 +244,115 @@ async function reloadHistory(inst, symbol) {
 // still absorbs the load; only OUR in-memory cache is bypassed here.
 async function refreshHistory(inst, symbol) {
   const myToken = _cancelToken;
+  // Defer the refresh if the user is in the middle of a zoom/pan gesture.
+  // Replacing main.innerHTML mid-gesture would wipe the in-flight SVG
+  // transform and break the pinch halfway. The next 30-s tick picks it up.
+  if (_gestureActive) return;
   if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} }
   _historyAbortCtrl = new AbortController();
   const sig = _historyAbortCtrl.signal;
   try {
     const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
-    const h = await getHistory(symbol, tf.range, tf.interval, { signal: sig, noCache: true });
+    // Honour ui.interval if the user has zoomed in. The Vercel edge cache
+    // on /api/history keys per (symbol, range, interval) so switching
+    // intervals gets a distinct cache entry, not a stale hit.
+    const interval = ui.interval ?? tf.interval;
+    const h = await getHistory(symbol, tf.range, interval, { signal: sig, noCache: true });
     if (sig.aborted || myToken.cancelled) return;
     if (h?.ohlc?.length) {
+      // Sticky-right-edge: if we are zoomed in AND the user has not
+      // explicitly panned, shift centerMs forward by the delta between
+      // the new latest candle and the old one so the zoomed window
+      // keeps tracking live. Detection: the rightmost visible edge
+      // before this refresh must have been at/past the prev lastDataMs
+      // (the user was watching live). Otherwise freeze the window
+      // (user panned left at some point without flipping manualPan).
+      const prevLast = _prevLastDataMs;
+      const newLast = h.ohlc[h.ohlc.length - 1].t;
+      if (
+        ui.timeframe === "1D"
+        && ui.zoom.scale > 1
+        && !ui.zoom.manualPan
+        && Number.isFinite(prevLast)
+        && Number.isFinite(newLast)
+        && newLast > prevLast
+        && ui.zoom.centerMs != null
+      ) {
+        // Was the previous visible right edge at or past prevLast?
+        const win = todaysMarketWindowMs();
+        if (win) {
+          const totalSpan = win.toMs - win.fromMs;
+          const prevSpan = totalSpan / ui.zoom.scale;
+          const prevRightEdge = ui.zoom.centerMs + prevSpan / 2;
+          if (prevRightEdge >= prevLast - 1000) {
+            // User was watching live — scoot centerMs forward to follow.
+            ui.zoom.centerMs += (newLast - prevLast);
+          }
+        }
+      }
+      _prevLastDataMs = newLast;
       liveHistory = h;
       render(inst, symbol);
     }
   } catch (e) {
     if (e?.name !== "AbortError") console.warn("[refreshHistory]", e?.message || e);
   }
+}
+
+// Apply a zoom commit from chartZoom.js. Called on wheel-stop / pinch-end
+// / pan-end. Updates ui.zoom, swaps ui.interval if the granularity ladder
+// crosses a threshold (5m → 2m → 1m), triggers a fresh getHistory if
+// the interval changed, and re-renders. Scoped to 1D.
+async function applyZoomCommit(inst, symbol, next) {
+  if (ui.timeframe !== "1D") return;
+  const newScale = next.scale;
+  const newCenter = next.centerMs;
+  const newManualPan = next.manualPan;
+
+  // Granularity ladder: 5m default → 2m at mid-zoom → 1m at max zoom.
+  // Defined in chartZoom.intervalForScale so the UI label in the reset
+  // pill can reuse the same mapping.
+  const newInterval = intervalForScale(newScale);
+  const curInterval = ui.interval ?? (TF_MAP["1D"]?.interval ?? "5m");
+  const intervalChanged = newInterval !== curInterval;
+
+  // Persist state first so render() sees the new zoom.
+  ui.zoom = { scale: newScale, centerMs: newCenter, manualPan: newManualPan };
+  // At scale 1 we fall back to the timeframe's default interval.
+  ui.interval = (newScale <= 1) ? null : newInterval;
+
+  if (intervalChanged) {
+    // Fire a fresh fetch for the new granularity. No skeleton flash —
+    // we reuse refreshHistory's "update in place" semantics. If the
+    // fetch is slow the old candles stay visible until it lands.
+    const myToken = _cancelToken;
+    if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} }
+    _historyAbortCtrl = new AbortController();
+    const sig = _historyAbortCtrl.signal;
+    try {
+      const tf = TF_MAP["1D"];
+      const h = await getHistory(symbol, tf.range, newInterval, { signal: sig });
+      if (sig.aborted || myToken.cancelled) return;
+      if (h?.ohlc?.length) {
+        liveHistory = h;
+        _prevLastDataMs = h.ohlc[h.ohlc.length - 1].t;
+      }
+    } catch (e) {
+      if (e?.name !== "AbortError") console.warn("[applyZoomCommit]", e?.message || e);
+    }
+  }
+  render(inst, symbol);
+}
+
+// Reset zoom back to full session 1x. Dropped back to TF_MAP default
+// interval so the user sees the same "stable" 5m view they started with.
+function resetZoom(inst, symbol) {
+  if (ui.zoom.scale === 1 && ui.interval == null) return;   // already reset
+  ui.zoom = { scale: 1, centerMs: null, manualPan: false };
+  ui.interval = null;
+  // Refetch at the coarser interval — reuse reloadHistory so the
+  // skeleton flashes briefly (acceptable for an explicit user action).
+  reloadHistory(inst, symbol);
 }
 
 // Start (or restart) the 30-second 1D refresh poll. Idempotent — clears
@@ -226,6 +368,15 @@ function startHistoryPoll(inst, symbol) {
 }
 
 function render(inst, symbol) {
+  // Guard: external render triggers (state subscribe, quote polling,
+  // fundamentals fetch) are no-ops while a zoom/pan gesture is in flight.
+  // Re-rendering mid-gesture would replace main.innerHTML, destroying the
+  // SVG and wiping the Layer-A transform the gesture engine is managing.
+  // applyZoomCommit's own render() sails through because commitNow()
+  // calls setGestureActive(false) BEFORE invoking onCommit. Quote ticks
+  // that land during a gesture are implicitly recovered on the next 12 s
+  // tick after gesture-end — liveQuote is updated in place regardless.
+  if (_gestureActive) return;
   const main = document.getElementById("main");
   const state = getState();
   const holding = state.holdings[symbol];
@@ -243,15 +394,51 @@ function render(inst, symbol) {
   const tfSpec = TF_MAP[ui.timeframe] || TF_MAP["1M"];
   const historyLoading = inst.kind !== "MF" && !liveHistory;
   const history = liveHistory?.ohlc?.length ? liveHistory.ohlc : getSeries(symbol).slice(-tfSpec.days);
-  const closes = history.map(k => k.c);
+
+  // Merge liveQuote into the last candle so the chart's newest tick matches
+  // the header price. Previously the header updated every 12 s from
+  // subscribeToQuotes while the chart's last candle close only updated
+  // every 30 s when refreshHistory polled — at 11:36 IST the header could
+  // read ₹1365.20 while the 11:30 candle still showed its close of
+  // ₹1362.80 until a new candle landed. Demo-day foot-gun.
+  //
+  // Non-mutating derivation (see Explore agent P2): mutating
+  // liveHistory.ohlc[N-1] would fight the 30 s refreshHistory poll, which
+  // replaces liveHistory with a fresh object from getHistory and would
+  // silently reset any in-place write. Deriving a fresh array inside
+  // render() runs on every quote tick AND every poll landing — both
+  // paths produce a chart that agrees with the header at render time.
+  //
+  // Scoped to 1D intraday: on 1W/1M/1Y the daily candles already carry
+  // today's live close at the upstream level, and mutating them would
+  // re-shuffle the Y axis every 12 s for zero visible benefit.
+  let chartOhlc = history;
+  if (liveQuote?.pricePaise && history.length && ui.timeframe === "1D") {
+    const last = history[history.length - 1];
+    const lp = liveQuote.pricePaise;
+    chartOhlc = history.slice(0, -1).concat([{
+      ...last,
+      c: lp,
+      h: Math.max(last.h, lp),
+      l: Math.min(last.l, lp),
+    }]);
+  }
+  const closes = chartOhlc.map(k => k.c);
 
   // For the 1D timeframe during the trading day (and 30 minutes after
   // close to avoid a jarring axis-reflow at 15:30 sharp), compute the
   // time range 09:15 IST → 15:30 IST so the chart spans the full
   // session and "draws itself" left-to-right as the day progresses.
+  //
+  // When the user has zoomed in (ui.zoom.scale > 1), the visible window
+  // shrinks to totalSpan/scale centered on ui.zoom.centerMs. The window
+  // is clamped so it never slides past 09:15 or 15:30 — dragging the
+  // right edge past 15:30 just pushes the center left until it fits.
+  //
   // Other timeframes / holidays / late post-close fall back to the
-  // chart's default index-based mapping.
+  // chart's default index-based mapping (zoom quietly disables).
   let chartXAxisRange = null;
+  let sessionWindow = null;   // exposed to the zoom engine as full-range bounds
   if (ui.timeframe === "1D" && inst.kind !== "MF") {
     const win = todaysMarketWindowMs();
     if (win) {
@@ -259,7 +446,19 @@ function render(inst, symbol) {
       const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
       const isWeekday = !win.isWeekend;
       if (inWindow && isWeekday) {
-        chartXAxisRange = { fromMs: win.fromMs, toMs: win.toMs };
+        sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
+        if (ui.zoom.scale <= 1) {
+          chartXAxisRange = { fromMs: win.fromMs, toMs: win.toMs };
+        } else {
+          const totalSpan = win.toMs - win.fromMs;
+          const span = totalSpan / ui.zoom.scale;
+          let center = ui.zoom.centerMs ?? (win.fromMs + totalSpan / 2);
+          let vFrom = center - span / 2;
+          let vTo   = center + span / 2;
+          if (vFrom < win.fromMs) { vTo += (win.fromMs - vFrom); vFrom = win.fromMs; }
+          if (vTo > win.toMs)     { vFrom -= (vTo - win.toMs); vTo = win.toMs; }
+          chartXAxisRange = { fromMs: vFrom, toMs: vTo };
+        }
       }
     }
   }
@@ -346,6 +545,9 @@ function render(inst, symbol) {
           <div style="display:flex; gap:4px;">
             ${TF_ORDER.map(tf => `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${tf}</button>`).join("")}
           </div>
+          ${ui.zoom.scale > 1 && ui.timeframe === "1D" ? `
+            <button class="btn btn-ghost btn-sm" id="zoom-reset-btn" title="Reset chart zoom" style="font-size: 11px; padding: 4px 10px;">↻ Reset zoom (${ui.zoom.scale.toFixed(1)}×${ui.interval ? ` · ${ui.interval}` : ""})</button>
+          ` : ""}
           ${inst.kind !== "MF" ? `
             <div class="chart-mode-toggle" style="margin-left:auto; display:flex; gap:2px; background:var(--bg-soft); border:1px solid var(--border); border-radius:var(--r-sm); padding:2px;">
               <button class="chart-mode-btn ${ui.chartMode === "candle" ? "active" : ""}" data-mode="candle" aria-label="Candlestick" title="Candlestick view" style="border:0; background:${ui.chartMode === "candle" ? "var(--surface)" : "transparent"}; color:${ui.chartMode === "candle" ? "var(--text-strong)" : "var(--text-muted)"}; padding:4px 10px; border-radius:calc(var(--r-sm) - 2px); cursor:pointer; font-size:var(--text-xs); display:flex; align-items:center; gap:4px;">
@@ -368,7 +570,7 @@ function render(inst, symbol) {
             </div>
           ` : inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
-            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(history, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800, xAxisRange: chartXAxisRange })}</div>`}
+            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800, xAxisRange: chartXAxisRange })}</div>`}
         </div>
 
         <div class="card stock-why-card" id="stock-why-card" style="margin-top: var(--sp-4);">
@@ -494,7 +696,7 @@ function render(inst, symbol) {
   // never get a click listener and the button appeared dead (user would
   // only see the browser's default :active press animation and nothing
   // else). Reordering makes the core trade action bulletproof.
-  attachListeners(main, inst, symbol, curPrice, holding);
+  attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessionWindow);
 
   // Mount quantity selector (wrapped in try/catch so a crash here can
   // never silently kill the trade buttons).
@@ -582,9 +784,16 @@ async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
   }
 }
 
-function attachListeners(main, inst, symbol, curPrice, holding) {
+function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessionWindow) {
   main.querySelectorAll(".tf-btn").forEach(btn => {
     btn.addEventListener("click", () => {
+      // Zoom is a 1D-only concept — reset it whenever the user leaves 1D
+      // or reselects 1D fresh (the new timeframe load shouldn't inherit
+      // a stale zoom from a previous interval/center combo).
+      if (ui.timeframe !== btn.dataset.tf || btn.dataset.tf !== "1D") {
+        ui.zoom = { scale: 1, centerMs: null, manualPan: false };
+        ui.interval = null;
+      }
       ui.timeframe = btn.dataset.tf;
       reloadHistory(inst, symbol);
       // Restart the 1D poll lifecycle on TF changes — entering 1D
@@ -593,6 +802,11 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
       // re-call to ensure idempotency.
       startHistoryPoll(inst, symbol);
     });
+  });
+
+  // Reset-zoom pill click handler. Only present in DOM when scale > 1.
+  main.querySelector("#zoom-reset-btn")?.addEventListener("click", () => {
+    resetZoom(inst, symbol);
   });
   // Refresh button — forces a fresh upstream fetch (bypasses our cache
   // AND Vercel's edge cache) so the user can pull the absolute latest
@@ -629,10 +843,34 @@ function attachListeners(main, inst, symbol, curPrice, holding) {
   // skip while the chart-host is showing the loading skeleton — there's
   // no SVG inside it to hang hover events off, and we don't want to
   // attach hover to seeded history the user doesn't actually see.
-  if (inst.kind !== "MF" && liveHistory?.ohlc?.length) {
+  if (inst.kind !== "MF" && chartOhlc?.length) {
     const host = main.querySelector("#stock-chart-host");
     if (host && host.querySelector(".chart-svg")) {
-      attachStockChartHover(host, liveHistory.ohlc, { mode: ui.chartMode });
+      // Use the live-merged chartOhlc (not raw liveHistory.ohlc) so the
+      // hover tooltip's close value matches the chart's last-price badge
+      // matches the header price. All three read from the same source.
+      attachStockChartHover(host, chartOhlc, { mode: ui.chartMode });
+
+      // Attach zoom + pan gestures ONLY when xAxisRange is active (1D
+      // intraday window). Other timeframes use the index-axis fallback
+      // which doesn't support zoom semantics — gesture would produce
+      // garbage coordinates. sessionWindow is null unless we're in the
+      // 1D in-window path.
+      if (_zoomDetach) { _zoomDetach(); _zoomDetach = null; }
+      if (sessionWindow) {
+        _zoomDetach = attachChartZoom(host, {
+          getState: () => ({
+            scale: ui.zoom.scale,
+            centerMs: ui.zoom.centerMs,
+            manualPan: ui.zoom.manualPan,
+            fromMs: sessionWindow.fromMs,
+            toMs: sessionWindow.toMs,
+          }),
+          onCommit: (next) => applyZoomCommit(inst, symbol, next),
+          onReset: () => resetZoom(inst, symbol),
+          onGestureActive: (active) => { _gestureActive = active; },
+        });
+      }
     }
   }
 
