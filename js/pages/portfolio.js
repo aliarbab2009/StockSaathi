@@ -57,11 +57,27 @@ export function renderPortfolio(main) {
   // requiring the user to navigate away and back. Symmetric with the
   // quote polling above. Shallow-compare (length + first id) so we
   // skip re-renders when nothing has moved.
+  // Transient-error ride-out: if listPendingOrders returns [] (which
+  // can happen on a single-tick RLS blip, a JWT that just expired
+  // before the client refreshes it, or a PostgREST 5xx), we don't
+  // immediately wipe the visible pendingOrders list. One empty tick
+  // is counted, two empty ticks in a row confirms a real wipe. This
+  // kills the "orders flicker to empty between polls" class of bugs
+  // that used to happen when supabase-js silently collapsed errors
+  // into data=null. Reset the streak as soon as a non-empty result
+  // or a length-match confirms stable state.
+  let emptyStreak = 0;
   const pendingPoll = setInterval(async () => {
     if (cancelled) return;
     try {
       const o = await listPendingOrders();
       if (cancelled) return;
+      if (o.length === 0 && pendingOrders.length > 0) {
+        emptyStreak++;
+        if (emptyStreak < 2) return;   // wait one more tick to confirm
+      } else {
+        emptyStreak = 0;
+      }
       const changed = o.length !== pendingOrders.length
         || (o[0]?.id !== pendingOrders[0]?.id);
       pendingOrders = o;
@@ -322,6 +338,21 @@ export function renderPortfolio(main) {
         }
       });
     });
+
+    // Smooth-scroll anchors marked data-scroll-to="<selector>". Replaces
+    // the previous inline onclick="..." on the AMO banner's "Jump to
+    // orders" link — that inline handler violated the site's CSP
+    // (script-src 'self' https://esm.sh has no 'unsafe-inline'), spamming
+    // the console with one violation per banner render. Delegated JS
+    // listener keeps the smooth-scroll behaviour without tripping CSP.
+    main.querySelectorAll("[data-scroll-to]").forEach(el => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        const target = el.getAttribute("data-scroll-to");
+        if (!target) return;
+        document.querySelector(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   }
 
   function renderDigestCard() {
@@ -490,7 +521,7 @@ function renderAmoBanner(pendingOrders) {
           <div style="font-weight: 600; color: var(--text-strong);">${countLabel} queued${breakdown ? ` · ${escapeHtml(breakdown)}` : ""}</div>
           <div class="muted text-xs" style="margin-top: 2px; line-height: 1.5;">${timingLine} Scroll down to review or cancel.</div>
         </div>
-        <a href="#order-list" class="btn btn-ghost btn-sm" onclick="document.querySelector('#order-list')?.scrollIntoView({behavior:'smooth'});event.preventDefault();">Jump to orders</a>
+        <a href="#order-list" class="btn btn-ghost btn-sm" data-scroll-to="#order-list">Jump to orders</a>
       </div>
     </div>
   `;

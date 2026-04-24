@@ -12,6 +12,7 @@
 
 import { sb } from "../db/supabase.js";
 import { getQuoteBatch } from "../data/marketData.js";
+import { marketStatus } from "../data/prices.js";
 
 let _loopTimer = null;
 let _stopFn = null;
@@ -44,11 +45,22 @@ export async function listPendingOrders() {
     return [];
   }
   if (!u?.user) return [];
-  const { data } = await client.from("limit_orders")
+  // CRITICAL: destructure `error`. Previously only `data` was pulled, so a
+  // PostgREST 401 / 403 / 5xx / RLS block silently collapsed to [] with no
+  // console signal. Portfolio's 15-s poll would then wipe a previously-
+  // populated pendingOrders list despite the user's orders still being in
+  // the DB. Now we log any error and return [] so the caller's UI-level
+  // ride-out logic (emptyStreak in portfolio.js) can distinguish a
+  // transient flap from a genuine empty state.
+  const { data, error } = await client.from("limit_orders")
     .select("*")
     .eq("user_id", u.user.id)
     .eq("status", "pending")
     .order("created_at", { ascending: false });
+  if (error) {
+    console.error("[limit] listPendingOrders select error:", error.message, error.code, error.details);
+    return [];
+  }
   return data || [];
 }
 
@@ -63,11 +75,15 @@ export async function listAllOrders(limit = 50) {
     return [];
   }
   if (!u?.user) return [];
-  const { data } = await client.from("limit_orders")
+  const { data, error } = await client.from("limit_orders")
     .select("*")
     .eq("user_id", u.user.id)
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (error) {
+    console.error("[limit] listAllOrders select error:", error.message, error.code, error.details);
+    return [];
+  }
   return data || [];
 }
 
@@ -200,6 +216,24 @@ async function fillOrderAt(orderId, marketPaise) {
  */
 async function matchOnce() {
   if (_matching) return { checked: 0, filled: 0, skipped: true };
+  // PRIMARY FIX FOR "QUEUED ORDERS VANISH ON /#/portfolio": the matcher
+  // must not fill orders while the market is closed. Before this guard,
+  // `matchOnce` ran every 12 s via the global interval started at
+  // app.js:45 — regardless of page, regardless of market status. After
+  // a user placed an AMO at, say, BUY ₹1327.80 on RELIANCE when the
+  // last cached Yahoo close was ≤ ₹1327.80, the matcher's next tick
+  // trivially matched `cur <= limit` against the STALE after-hours
+  // cached close and called `fill_limit_order` — flipping status from
+  // 'pending' to 'filled'. listPendingOrders filters status='pending',
+  // so the "queued" order vanished from the portfolio within 12 s with
+  // zero feedback. The user saw a ghost.
+  //
+  // Gate: during after-hours, do nothing. AMOs placed after-hours now
+  // correctly wait for the next market-open tick to evaluate against
+  // the actual opening price.
+  if (!marketStatus().open) {
+    return { checked: 0, filled: 0, skipped: "market_closed" };
+  }
   _matching = true;
   try {
     const pending = await listPendingOrders();

@@ -35,6 +35,12 @@ const ROUTES = [
   { name: "reset-password", match: /^\/reset-password\/?$/,                render: renderResetPassword, public: true },
   { name: "onboarding",    match: /^\/onboarding\/?$/,                     render: renderOnboarding, needsAuth: true },
   { name: "portfolio",     match: /^\/portfolio\/?$/,                      render: renderPortfolio, needsAuth: true, needsOnboarded: true },
+  // Alias: #/orders is not a real page, but some users have bookmarks
+  // or PWA shortcuts pointing here (from a mental-model of "orders
+  // should be their own page"). Redirect to the portfolio page's
+  // pending-orders card rather than 404 them. Using location.replace
+  // (not assign) so the bad URL doesn't pollute history.
+  { name: "orders-redirect", match: /^\/orders\/?$/,                        render: () => { location.replace("#/portfolio"); setTimeout(() => { document.querySelector("#order-list")?.scrollIntoView({ behavior: "smooth" }); }, 300); }, public: true },
   { name: "stocks",        match: /^\/stocks\/?$/,                         render: renderStocks, needsAuth: true, needsOnboarded: true },
   { name: "stock-detail",  match: /^\/stocks\/([A-Za-z0-9&\-_.]+)\/?$/,    render: renderStockDetail, param: "symbol", needsAuth: true, needsOnboarded: true },
   { name: "crash-replay",  match: /^\/crash-replay\/?$/,                   render: renderCrashReplay, public: true },
