@@ -435,7 +435,7 @@ export function stockChart(ohlc, {
           <circle class="chart-dot-core breathing" cx="-50" cy="-50" r="4.5" fill="currentColor" stroke="var(--surface, #13161E)" stroke-width="2" />
         </g>
       </svg>
-      <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:nowrap; z-index:2;"></div>
+      <div class="chart-tooltip" style="position:absolute; pointer-events:none; display:none; background:var(--surface-elev, #191C26); border:1px solid var(--border, #262A36); border-radius:8px; padding:8px 10px; font-size:11px; font-family:var(--font-mono, monospace); line-height:1.5; box-shadow:var(--sh-md); white-space:normal; max-width:min(60vw, 240px); z-index:2;"></div>
     </div>
   `;
 }
@@ -535,16 +535,34 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       k = ohlc[idx];
       interpClose = null;
     } else {
-      // Interpolate close along the line at this cursor position.
-      idx = nearestIdxAt(cursorMs);
-      // For area-mode line drag: find adjacent candles that bracket
-      // cursorMs and linear-interpolate.
-      let i0 = idx, i1 = idx;
-      if (idx > 0 && ohlc[idx].t > cursorMs) { i0 = idx - 1; i1 = idx; }
-      else if (idx < N - 1 && ohlc[idx].t < cursorMs) { i0 = idx; i1 = idx + 1; }
-      const span = ohlc[i1].t - ohlc[i0].t;
-      const frac = span > 0 ? (cursorMs - ohlc[i0].t) / span : 0;
-      interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+      // Interpolate close along the RENDERED line at this cursor position.
+      // When !useTimeAxis (non-1D at scale=1), the line is drawn at
+      // evenly-spaced INDEX positions via toXi(i) — weekend/holiday gaps
+      // compress trading time unevenly across candle indices, so
+      // interpolating by TIME at pixel 50% produces a Y that differs from
+      // what the rendered line shows at pixel 50%. The fix: interpolate
+      // by continuous INDEX so the dot's Y tracks the line pixel-for-pixel.
+      // When useTimeAxis (1D always, or any TF zoomed in), the line IS
+      // time-positioned, so time-interpolation remains correct.
+      if (!useTimeAxis) {
+        const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
+        const contIdx = rel * (N - 1);
+        const i0 = Math.max(0, Math.min(N - 2, Math.floor(contIdx)));
+        const i1 = i0 + 1;
+        const frac = contIdx - i0;
+        interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+        idx = Math.round(contIdx);
+      } else {
+        idx = nearestIdxAt(cursorMs);
+        // Find adjacent candles that bracket cursorMs and linear-interpolate
+        // along the time axis.
+        let i0 = idx, i1 = idx;
+        if (idx > 0 && ohlc[idx].t > cursorMs) { i0 = idx - 1; i1 = idx; }
+        else if (idx < N - 1 && ohlc[idx].t < cursorMs) { i0 = idx; i1 = idx + 1; }
+        const span = ohlc[i1].t - ohlc[i0].t;
+        const frac = span > 0 ? (cursorMs - ohlc[i0].t) / span : 0;
+        interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+      }
       k = ohlc[idx];
     }
 
@@ -623,10 +641,16 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       ];
     } else {
       // In candle mode the dot sits on the candle's close, so report that
-      // same number on row 2 to avoid a confusing mismatch. In area mode
-      // the dot tracks the cursor smoothly along the line — report the
-      // interpolated close so the number under the cursor matches the dot.
-      const priceRow = (mode === "area") ? interpClose : k.c;
+      // same number on row 2. In area mode the dot tracks the cursor
+      // smoothly along the line — the interpolated close would be shown
+      // raw, which produces sub-tick values like ₹1365.44 that never
+      // traded on NSE (equity tick size is 5 paise). Quantise to the
+      // nearest 5 paise for display so users only ever see prices that
+      // could have been real market ticks. Dot Y position stays at the
+      // raw interpolated value so the mark continues to slide smoothly
+      // along the rendered line.
+      const quantToTick = (p) => Math.round(p / 5) * 5;
+      const priceRow = (mode === "area") ? quantToTick(interpClose) : k.c;
       tipLines = [
         headerRow,
         `<strong style="font-size:13px;">${fmt(priceRow)}</strong>`,
@@ -651,6 +675,10 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
     let leftPx = cursorPxX + GAP;
     if (leftPx + tipW > containerRect.width - 4) leftPx = cursorPxX - tipW - GAP;
     if (leftPx < 4) leftPx = 4;
+    // Final clamp: on 280-px folded devices, even the flipped tooltip
+    // can exceed half the viewport, leaving it still clipped off the
+    // right edge. Guarantee it sits fully inside containerRect.
+    leftPx = Math.max(4, Math.min(leftPx, containerRect.width - tipW - 4));
     // Vertically center on cursor; clamp inside container.
     let topPx = cursorPxY - tipH / 2;
     if (topPx < 4) topPx = 4;
@@ -667,16 +695,34 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
 
   container.addEventListener("mousemove", onMove);
   container.addEventListener("mouseleave", hide);
-  // Basic touch support (tap to pin)
-  container.addEventListener("touchmove", (e) => {
-    const t = e.touches[0];
-    if (t) onMove({ clientX: t.clientX, clientY: t.clientY });
-  }, { passive: true });
-  container.addEventListener("touchend", hide);
+  // Pointer-event path covers touch uniformly. The legacy `touchmove`
+  // approach (that we used to have here) breaks on Android Chrome
+  // whenever chartZoom.js calls setPointerCapture on a multi-touch
+  // gesture — capture suppresses follow-on touchmove dispatch to the
+  // container, leaving the crosshair frozen mid-pinch. Pointer events
+  // keep firing regardless of capture ownership, so the hover tracks
+  // the user's finger smoothly in both single-touch and during-pinch.
+  //
+  // Guard: skip secondary pointers (the non-primary finger in a pinch)
+  // and skip mouse events (mousemove handles those with higher fidelity).
+  const onPointerMoveHover = (e) => {
+    if (!e.isPrimary || e.pointerType === "mouse") return;
+    onMove({ clientX: e.clientX, clientY: e.clientY });
+  };
+  const onPointerLeaveHover = (e) => {
+    if (e.pointerType === "mouse") return;
+    hide();
+  };
+  container.addEventListener("pointermove", onPointerMoveHover);
+  container.addEventListener("pointerleave", onPointerLeaveHover);
+  container.addEventListener("pointercancel", onPointerLeaveHover);
 
   return () => {
     container.removeEventListener("mousemove", onMove);
     container.removeEventListener("mouseleave", hide);
+    container.removeEventListener("pointermove", onPointerMoveHover);
+    container.removeEventListener("pointerleave", onPointerLeaveHover);
+    container.removeEventListener("pointercancel", onPointerLeaveHover);
   };
 }
 

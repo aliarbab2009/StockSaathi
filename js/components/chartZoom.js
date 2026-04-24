@@ -35,6 +35,26 @@ const COMMIT_DEBOUNCE_MS = 120;       // wait this long after last wheel tick
 const MIN_SCALE = 1;                  // cannot zoom out past full session
 const MAX_SCALE = 8;                  // 8× = ~47 min visible in 6h15m session
 
+// Defense-in-depth: if no gesture activity fires for N ms while state is
+// still "active" (pointerMap has items OR gestureLive is set), force-reset.
+// Protects against mobile pointer-capture-loss (phone call, rubber-band
+// scroll, OS gesture steal) where no pointerup / pointercancel ever arrives.
+// 3 s chosen because no legitimate pinch has a >3 s pause between finger
+// movements, and a zombified page recovers before the user rage-closes.
+const GESTURE_WATCHDOG_MS = 3000;
+
+// Minimum finger-drag distance (sum of |dx|+|dy|) before a pointerdown
+// counts as a PAN (vs. a tap). Without this threshold, a zero-move tap
+// at scale>1 would fire commitNow(true) which flips manualPan=true and
+// kills sticky-right-edge behaviour for a mere finger wobble.
+const PAN_DISTANCE_PX = 4;
+
+// Touch double-tap detector (replaces unreliable native dblclick on touch).
+// Two pointerups within TOUCH_DBLTAP_MS and TOUCH_DBLTAP_DIST_PX of each
+// other count as a double-tap → onReset.
+const TOUCH_DBLTAP_MS = 300;
+const TOUCH_DBLTAP_DIST_PX = 20;
+
 /**
  * Attach zoom + pan + reset handlers to a chart container. Returns a cleanup
  * function that removes all listeners.
@@ -80,6 +100,8 @@ export function attachChartZoom(container, opts) {
   let pointerMap = new Map();        // pointerId → { x, y }
   let pinchStart = null;             // { distance, midpointMs, startState }
   let panStart = null;               // { x, startCenterMs }
+  let gestureWatchdog = null;        // force-reset timer (pointer-capture-loss recovery)
+  let lastTouchUp = null;            // { t, x, y } for single-finger double-tap detection
   let rafPending = false;
 
   // --- coordinate helpers ----------------------------------------------
@@ -149,6 +171,7 @@ export function attachChartZoom(container, opts) {
 
   function applyPreview(targetScale, targetCenterMs) {
     gestureLive = { scale: targetScale, centerMs: targetCenterMs };
+    kickWatchdog();
     if (rafPending) return;
     rafPending = true;
     requestAnimationFrame(() => {
@@ -163,6 +186,36 @@ export function attachChartZoom(container, opts) {
     plotArea.removeAttribute("transform");
   }
 
+  // Unified cleanup — single source of truth for "we are NOT in a gesture".
+  // Called from finally-blocks, pointercancel, watchdog, resize,
+  // orientationchange, and the returned cleanup fn. Idempotent.
+  function resetGestureState() {
+    gestureLive = null;
+    pinchStart = null;
+    panStart = null;
+    pointerMap.clear();
+    clearPreview();
+    if (wheelCommitTimer) { clearTimeout(wheelCommitTimer); wheelCommitTimer = null; }
+    if (gestureWatchdog) { clearTimeout(gestureWatchdog); gestureWatchdog = null; }
+    setGestureActive(false);
+  }
+
+  // Arm a 3-second watchdog. Called whenever the gesture machine enters
+  // an "active" phase (pointerdown fires setGestureActive(true), or
+  // applyPreview sets gestureLive). If the timer fires without the
+  // gesture clearing on its own, something went wrong (pointer capture
+  // was stolen, event was dropped, browser paused JS during a tab
+  // switch) — force-reset so the page isn't permanently zombified.
+  function kickWatchdog() {
+    if (gestureWatchdog) clearTimeout(gestureWatchdog);
+    gestureWatchdog = setTimeout(() => {
+      gestureWatchdog = null;
+      if (!gestureLive && pointerMap.size === 0) return;  // clean state, no-op
+      console.warn("[chartZoom] watchdog fired — forcing gesture reset");
+      resetGestureState();
+    }, GESTURE_WATCHDOG_MS);
+  }
+
   // --- Layer B: commit -------------------------------------------------
 
   function commitNow(manualPan) {
@@ -171,6 +224,7 @@ export function attachChartZoom(container, opts) {
     gestureLive = null;
     clearPreview();
     setGestureActive(false);
+    if (gestureWatchdog) { clearTimeout(gestureWatchdog); gestureWatchdog = null; }
     // Only fire commit if anything actually changed vs current state.
     const cur = getState();
     if (cur.scale === scale && cur.centerMs === centerMs && cur.manualPan === manualPan) return;
@@ -226,6 +280,7 @@ export function attachChartZoom(container, opts) {
       // Pinch begin — only NOW flip gesture-active. (A single tap should
       // not freeze the render pipeline for its ~20 ms duration.)
       setGestureActive(true);
+      kickWatchdog();
       const [a, b] = [...pointerMap.values()];
       const s = getState();
       const midX = clientToVbX(midpoint(a, b).x);
@@ -242,6 +297,7 @@ export function attachChartZoom(container, opts) {
       const s = getState();
       if ((s.scale || 1) > MIN_SCALE) {
         setGestureActive(true);
+        kickWatchdog();
         panStart = {
           x: e.clientX,
           startCenterMs: s.centerMs ?? ((s.fromMs + s.toMs) / 2),
@@ -288,24 +344,49 @@ export function attachChartZoom(container, opts) {
   function onPointerUp(e) {
     container.releasePointerCapture?.(e.pointerId);
     const hadPinch = !!pinchStart && pointerMap.size >= 2;
-    const hadPan = !!panStart && pointerMap.size === 1;
+    const hadPanStart = !!panStart && pointerMap.size === 1;
+    // Pan-distance threshold: a tap with <PAN_DISTANCE_PX total travel
+    // is NOT a pan. Without this, a zero-move single-finger tap at
+    // scale>1 fires commitNow(true) → flips manualPan=true → kills
+    // sticky-right-edge behaviour for a mere finger wobble.
+    const panDistance = hadPanStart
+      ? Math.abs(e.clientX - panStart.x) + Math.abs(e.clientY - panStart.y)
+      : 0;
+    const hadPan = hadPanStart && panDistance > PAN_DISTANCE_PX;
+    const pointerType = e.pointerType;
+    const upX = e.clientX, upY = e.clientY;
     pointerMap.delete(e.pointerId);
+
     if (pointerMap.size === 0) {
       const s = getState();
-      if (hadPinch) {
-        // Pinch-end. manualPan stays as-is (pinch zooms, it doesn't pan).
-        commitNow(s.manualPan);
-      } else if (hadPan) {
-        // Pan-end. Mark manualPan=true so sticky-right-edge stops.
-        commitNow(true);
-      } else {
-        // Stray pointer-up with no tracked gesture — just clear state.
-        setGestureActive(false);
-        clearPreview();
-        gestureLive = null;
+      try {
+        if (hadPinch) commitNow(s.manualPan);
+        else if (hadPan) commitNow(true);
+        // Else: tap-only (no pinch, no pan-distance). commitNow NOT called.
+      } finally {
+        // ALWAYS clear — even if commitNow early-returned on !gestureLive
+        // (zero-movement pinch or sub-threshold tap). Previously the
+        // !gestureLive branch skipped setGestureActive(false) entirely,
+        // leaving _gestureActive stuck true and zombifying the page.
+        resetGestureState();
       }
-      pinchStart = null;
-      panStart = null;
+
+      // Single-finger double-tap reset — touch equivalent of dblclick.
+      // Fires only when neither a pinch nor a pan-above-threshold
+      // happened (so genuine taps only). Two taps within
+      // TOUCH_DBLTAP_MS and TOUCH_DBLTAP_DIST_PX of each other → reset.
+      if (pointerType === "touch" && !hadPinch && !hadPan) {
+        const now = Date.now();
+        if (lastTouchUp
+            && now - lastTouchUp.t < TOUCH_DBLTAP_MS
+            && Math.abs(upX - lastTouchUp.x) < TOUCH_DBLTAP_DIST_PX
+            && Math.abs(upY - lastTouchUp.y) < TOUCH_DBLTAP_DIST_PX) {
+          lastTouchUp = null;
+          onReset();
+        } else {
+          lastTouchUp = { t: now, x: upX, y: upY };
+        }
+      }
     } else if (pointerMap.size === 1 && hadPinch) {
       // One finger lifted during pinch → keep the other as a pan base.
       const [remainingId] = pointerMap.keys();
@@ -319,7 +400,16 @@ export function attachChartZoom(container, opts) {
     }
   }
 
-  function onPointerCancel(e) { onPointerUp(e); }
+  function onPointerCancel(e) {
+    // Pointer capture was yanked (phone-call interrupt, rubber-band
+    // scroll, OS gesture handler took over, tab backgrounded). Do NOT
+    // commit partial state — just flush. Any in-flight zoom/pan is
+    // abandoned; user can redo the gesture. Previously this path
+    // routed to onPointerUp which attempted a commit of half-moved
+    // state, producing a jarring snap.
+    pointerMap.delete(e.pointerId);
+    if (pointerMap.size === 0) resetGestureState();
+  }
 
   // --- Reset (double-click / two-finger-tap) ---------------------------
 
@@ -334,52 +424,47 @@ export function attachChartZoom(container, opts) {
     onReset();
   }
 
-  // Two-finger-tap = simultaneous 2 pointer-down then 2 pointer-up within
-  // 250 ms, with minimal movement. Track via a small state machine.
-  let twoFingerTap = null;
-  function maybeTwoFingerTapStart() {
-    if (pointerMap.size === 2) {
-      const [a, b] = [...pointerMap.values()];
-      twoFingerTap = { at: Date.now(), ax: a.x, ay: a.y, bx: b.x, by: b.y };
-    } else {
-      twoFingerTap = null;
-    }
-  }
-  function maybeTwoFingerTapEnd() {
-    if (!twoFingerTap) return false;
-    if (Date.now() - twoFingerTap.at > 250) return false;
-    if (pointerMap.size > 0) return false;
-    twoFingerTap = null;
-    onReset();
-    return true;
-  }
-
   // Wire up --------------------------------------------------------------
-  // Wrap onPointerDown / onPointerUp with the two-finger-tap detector.
-  // This way each DOM listener has exactly one registration and cleanup
-  // stays symmetric.
-  const pointerDownWithTap = (e) => { onPointerDown(e); maybeTwoFingerTapStart(); };
-  const pointerUpWithTap = (e) => {
-    const wasTwoFinger = (pointerMap.size === 2 && twoFingerTap);
-    onPointerUp(e);
-    if (wasTwoFinger) maybeTwoFingerTapEnd();
+  //
+  // Reset triggers:
+  //   * Mouse desktop: dblclick (fires natively)
+  //   * Touch devices: single-finger double-tap (detected inside onPointerUp
+  //     via lastTouchUp state). Previously we had a fragile two-finger-tap
+  //     detector; single-finger dbltap is what users actually do anyway.
+  //
+  // Rotation/resize safety:
+  //   getBoundingClientRect() dimensions change when the device rotates
+  //   or the window is resized. Captured pinchStart.distance / panStart.x
+  //   become stale and produce a visible snap. Flush in-flight state so
+  //   the user starts fresh.
+  const onResize = () => {
+    if (pointerMap.size > 0 || gestureLive) resetGestureState();
   };
 
   svg.addEventListener("wheel", onWheel, { passive: false });
-  container.addEventListener("pointerdown", pointerDownWithTap);
+  container.addEventListener("pointerdown", onPointerDown);
   container.addEventListener("pointermove", onPointerMove);
-  container.addEventListener("pointerup", pointerUpWithTap);
+  container.addEventListener("pointerup", onPointerUp);
   container.addEventListener("pointercancel", onPointerCancel);
   svg.addEventListener("dblclick", onDoubleClick);
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", onResize);
 
   return () => {
     svg.removeEventListener("wheel", onWheel);
-    container.removeEventListener("pointerdown", pointerDownWithTap);
+    container.removeEventListener("pointerdown", onPointerDown);
     container.removeEventListener("pointermove", onPointerMove);
-    container.removeEventListener("pointerup", pointerUpWithTap);
+    container.removeEventListener("pointerup", onPointerUp);
     container.removeEventListener("pointercancel", onPointerCancel);
     svg.removeEventListener("dblclick", onDoubleClick);
-    if (wheelCommitTimer) clearTimeout(wheelCommitTimer);
+    window.removeEventListener("resize", onResize);
+    window.removeEventListener("orientationchange", onResize);
+    // Flush gesture state so a stranded _gestureActive=true can't
+    // survive a detach. Previously the cleanup only cleared the wheel
+    // timer and left gestureActive/gestureLive/pointerMap intact —
+    // if the next render attached a fresh engine, the old stuck flag
+    // blocked every subsequent render forever.
+    resetGestureState();
   };
 }
 

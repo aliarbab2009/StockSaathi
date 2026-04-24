@@ -1891,7 +1891,56 @@
   .stock-detail-grid { gap: var(--sp-4); }
   .price-block { flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
   .price-block .price { font-size: clamp(1.8rem, 9vw, 2.4rem); }
-  .tf-buttons { width: 100%; overflow-x: auto; justify-content: flex-start; flex-wrap: nowrap; }
+  /* Let the TF strip + reset-zoom pill + chart-mode toggle wrap onto
+     multiple rows instead of forcing a horizontal scroll strip — at
+     280-360 px, margin-left:auto on .chart-mode-toggle collapses in
+     a nowrap context and Candle/Line crashed straight into the reset
+     pill. `flex-wrap: wrap` + explicit flex-basis lets each piece
+     size itself naturally. */
+  .tf-buttons {
+    width: 100%;
+    overflow-x: visible;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 8px;
+  }
+  .tf-buttons > div:first-child { flex: 1 1 auto; }
+  .tf-buttons #zoom-reset-btn { flex: 0 0 auto; }
+  .tf-buttons .chart-mode-toggle {
+    margin-left: 0;
+    flex: 0 0 auto;
+  }
+  /* Touch-target compliance on mobile. Apple's spec is 44 px min;
+     Google's is 48 px. We compromise at 36 px on the inline TF strip
+     to avoid bloating it, and push interactive pills closer to 44 px
+     where they have more room. */
+  .tf-btn {
+    min-height: 36px;
+    padding: 10px 14px;
+  }
+  .chart-mode-btn {
+    padding: 8px 12px !important;
+    min-height: 36px !important;
+  }
+  #price-refresh-btn {
+    min-height: 36px !important;
+    padding: 6px 10px !important;
+  }
+  /* Portfolio pending-orders list — each order row has pill + symbol +
+     metadata on the left and a Cancel button on the right. Without a
+     min-width / flex-basis guard, on 280-360 px the metadata wraps to
+     multiple lines and pushes Cancel under the content or off-screen.
+     flex-wrap + 44 px touch target ensures Cancel is always tappable. */
+  #order-list > div {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  #order-list [data-cancel-order] {
+    flex: 0 0 auto;
+    min-width: 80px;
+    min-height: 44px;
+  }
 }
 
 .price-block {

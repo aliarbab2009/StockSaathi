@@ -36,8 +36,6 @@ export function renderPortfolio(main) {
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
-  const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
-  window.addEventListener("hashchange", onLeave, { once: true });
 
   refreshData();
 
@@ -51,8 +49,35 @@ export function renderPortfolio(main) {
     }, 15_000);
   }
 
-  // Load pending limit orders
+  // Load pending limit orders (initial fetch)
   listPendingOrders().then(o => { if (!cancelled) { pendingOrders = o; render(); } }).catch(() => {});
+
+  // Live-refresh pending orders every 15 s so background-matcher fills
+  // and cross-tab cancels propagate to the visible list without
+  // requiring the user to navigate away and back. Symmetric with the
+  // quote polling above. Shallow-compare (length + first id) so we
+  // skip re-renders when nothing has moved.
+  const pendingPoll = setInterval(async () => {
+    if (cancelled) return;
+    try {
+      const o = await listPendingOrders();
+      if (cancelled) return;
+      const changed = o.length !== pendingOrders.length
+        || (o[0]?.id !== pendingOrders[0]?.id);
+      pendingOrders = o;
+      if (changed) render();
+    } catch (e) {
+      console.warn("[portfolio] pending-orders poll failed:", e?.message || e);
+    }
+  }, 15_000);
+
+  const onLeave = () => {
+    cancelled = true;
+    unsub?.();
+    pollUnsub?.();
+    clearInterval(pendingPoll);
+  };
+  window.addEventListener("hashchange", onLeave, { once: true });
 
   async function refreshData() {
     const state = getState();

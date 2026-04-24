@@ -87,6 +87,20 @@ function todaysMarketWindowMs() {
   return { fromMs, toMs, isWeekend: ms.weekday === "sat" || ms.weekday === "sun" };
 }
 
+// Pick an SVG viewBox width that actually fits the user's viewport.
+// Previously this was a hard `innerWidth < 640 ? 440 : 800` — but on a
+// folded Galaxy Z Flip (~280 px viewport, ~232 px usable after card
+// gutters) 440 overflows and causes horizontal clipping of axis labels
+// on the right. Clamp to viewport-minus-padding with a 280 floor so
+// the chart is always legible.
+function computeChartWidth() {
+  if (typeof window === "undefined") return 800;
+  const iw = window.innerWidth;
+  if (iw >= 640) return 800;
+  // 48 px accounts for card padding + page gutters (≈ 2 × var(--sp-3)).
+  return Math.max(280, Math.min(440, iw - 48));
+}
+
 export function renderStockDetail(main, params) {
   const symbol = params.symbol;
   const inst = getInstrument(symbol);
@@ -601,7 +615,7 @@ function render(inst, symbol) {
             </div>
           ` : inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
-            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: (typeof window !== "undefined" && window.innerWidth < 640) ? 440 : 800, xAxisRange: chartXAxisRange })}</div>`}
+            : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`}
         </div>
 
         <div class="card stock-why-card" id="stock-why-card" style="margin-top: var(--sp-4);">
@@ -1046,11 +1060,34 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
     if (wouldFireNow && !confirm(`Your limit is already ${ui.side === "BUY" ? "above" : "below"} the market (${formatRupees(curPrice)}). The order will fill immediately. Continue?`)) {
       return;
     }
+    // Mirror AMO's 25-s Promise.race timeout pattern. The LIMIT path
+    // previously did a bare `await placeLimitOrder(...)` with no
+    // timeout, and placeLimitOrder calls a Supabase RPC that is KNOWN
+    // to hang indefinitely when the session has silently expired (see
+    // the comment block at features/limitOrders.js:62-64). With no
+    // timeout, the await never resolves, no success toast fires, no
+    // catch runs — button permanently stuck at "Processing…".
+    // The 25-s race guarantees one of three toasts: success, explicit
+    // error, or timeout-error.
+    const btn = document.getElementById("place-trade-btn");
+    const originalLabel = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = "Placing limit…"; }
     try {
-      await placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise });
+      await Promise.race([
+        placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
+        new Promise((_, rej) => setTimeout(
+          () => rej(new Error("Limit order timed out after 25s — Supabase may be unreachable. Check console.")),
+          25000
+        )),
+      ]);
       toast({ kind: "success", message: `${ui.side} limit placed: ${formatQty(qty, inst.kind)} ${symbol} @ ₹${limitRupees.toFixed(2)}. Fills automatically when market crosses.` });
     } catch (e) {
-      toast({ kind: "error", message: e.message || "Could not place limit order." });
+      console.error("[limit] placeLimitOrder failed:", e);
+      toast({ kind: "error", message: e?.message || "Could not place limit order." });
+    } finally {
+      // Always restore the button so the user can retry, regardless of
+      // which branch fired.
+      if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
     }
     return;
   }
