@@ -642,7 +642,7 @@ textarea.input { min-height: 88px; resize: vertical; }
   text-decoration: none;
   padding: 2px 4px;
   border-radius: 4px;
-  /* grievance@stocksaathi.app is long — let it break rather than push the
+  /* grievance@stocksaathi.co.in is long — let it break rather than push the
      nav wider than the viewport on 320px phones. */
   overflow-wrap: anywhere;
   min-width: 0;

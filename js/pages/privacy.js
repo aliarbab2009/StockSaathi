@@ -160,7 +160,7 @@ export function renderPrivacy(main) {
         </p>
         <p class="text-sm" style="line-height: 1.75; margin-top: var(--sp-3); font-family: var(--font-mono, monospace);">
           <strong>Grievance Officer &mdash; StockSaathi</strong><br/>
-          Email: <a href="mailto:grievance@stocksaathi.app">grievance@stocksaathi.app</a><br/>
+          Email: <a href="mailto:grievance@stocksaathi.co.in">grievance@stocksaathi.co.in</a><br/>
           Response SLA: within 7 working days.
         </p>
         <p class="text-sm" style="line-height: 1.75; margin-top: var(--sp-3);">
