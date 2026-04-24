@@ -478,6 +478,16 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
     if (lo > 0 && Math.abs(ohlc[lo - 1].t - tMs) < Math.abs(ohlc[lo].t - tMs)) lo--;
     return lo;
   }
+  // Mirror the X mapping used by stockChart() so the dot can snap to a
+  // candle's actual plotted X position. Must stay in sync with toXk in
+  // stockChart — index-based for non-time-axis, timestamp-based for the
+  // 1D intraday window.
+  function candleXAt(idx) {
+    if (useTimeAxis) {
+      return PL + ((ohlc[idx].t - xFromMs) / (xToMs - xFromMs)) * plotW;
+    }
+    return PL + (N > 1 ? (idx / (N - 1)) * plotW : 0);
+  }
 
   function onMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -524,10 +534,26 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       if (dotHalo) { dotHalo.setAttribute("cx", -100); dotHalo.setAttribute("cy", -100); }
       if (dotCore) { dotCore.setAttribute("cx", -100); dotCore.setAttribute("cy", -100); }
     } else {
-      const by = toY(interpClose);
-      if (dotHalo) { dotHalo.setAttribute("cx", px); dotHalo.setAttribute("cy", by); }
-      if (dotCore) { dotCore.setAttribute("cx", px); dotCore.setAttribute("cy", by); }
-      const dotColor = interpClose >= ohlc[0].c
+      // Candle mode: dot snaps to the NEAREST candle's (x, close) so it
+      //   visually sits on the candle body — matches what the tooltip
+      //   reports as O/H/L/C. Previously the dot used the interpolated
+      //   (px, interpClose) which made it float in the gaps between
+      //   discrete candles, reading as "misaligned with the graph".
+      // Area/line mode: dot stays at (cursor X, interpolated close) so
+      //   it slides smoothly along the continuous price line.
+      let dotX, dotY, dotClose;
+      if (mode === "area") {
+        dotX = px;
+        dotClose = interpClose;
+        dotY = toY(interpClose);
+      } else {
+        dotX = candleXAt(idx);
+        dotClose = k.c;
+        dotY = toY(k.c);
+      }
+      if (dotHalo) { dotHalo.setAttribute("cx", dotX); dotHalo.setAttribute("cy", dotY); }
+      if (dotCore) { dotCore.setAttribute("cx", dotX); dotCore.setAttribute("cy", dotY); }
+      const dotColor = dotClose >= ohlc[0].c
         ? "var(--positive, #00B386)"
         : "var(--negative, #EB5757)";
       if (dotColor !== lastColor) {
@@ -552,12 +578,18 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       : "";
     const fmt = (p) => "₹" + (p / 100).toFixed(2);
 
-    // Tooltip layout:
-    //   Row 1: cursor's exact time (always — even in no-data space)
-    //   Row 2: interpolated close at the cursor (if data exists)
-    //   Row 3 (candle mode only): O/H/L of the nearest candle
-    //   Row 4 (candle, when data): Vol of the nearest candle
-    //   If no data here: row 2 says "(no candle yet)"
+    // Tooltip layout (identical in candle mode and line/area mode — the
+    // underlying OHLC data exists either way, so suppressing it in line
+    // mode was a deliberate-but-unjustified asymmetry that users asked
+    // about):
+    //   Row 1: cursor's exact time
+    //   Row 2: price — interpolated close in line/area mode (smooth
+    //          tracking along the line), nearest-candle close in candle
+    //          mode (matches what the dot snaps to, no off-by-one read)
+    //   Row 3: O/H (green for high)
+    //   Row 4: L (red for low)/C
+    //   Row 5: Volume of the nearest candle
+    //   No-data state: rows 2–5 collapse to "(no candle yet)".
     const headerRow = isIntraday
       ? `<span style="color:var(--text-dim)">${cursorTimeStr} IST · ${cursorDateStr}</span>`
       : `<span style="color:var(--text-dim)">${cursorTimeStr}</span>`;
@@ -567,15 +599,15 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
         headerRow,
         `<span style="color:var(--text-dim); font-style: italic;">(no candle yet)</span>`,
       ];
-    } else if (mode === "area") {
-      tipLines = [
-        headerRow,
-        `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
-      ];
     } else {
+      // In candle mode the dot sits on the candle's close, so report that
+      // same number on row 2 to avoid a confusing mismatch. In area mode
+      // the dot tracks the cursor smoothly along the line — report the
+      // interpolated close so the number under the cursor matches the dot.
+      const priceRow = (mode === "area") ? interpClose : k.c;
       tipLines = [
         headerRow,
-        `<strong style="font-size:13px;">${fmt(interpClose)}</strong>`,
+        `<strong style="font-size:13px;">${fmt(priceRow)}</strong>`,
         `<span>O <strong>${fmt(k.o)}</strong>  H <strong style="color:var(--positive)">${fmt(k.h)}</strong></span>`,
         `<span>L <strong style="color:var(--negative)">${fmt(k.l)}</strong>  C <strong>${fmt(k.c)}</strong></span>`,
         k.v ? `<span style="color:var(--text-dim)">Vol ${k.v.toLocaleString("en-IN")}</span>` : "",

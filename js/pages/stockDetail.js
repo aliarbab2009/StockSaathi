@@ -187,6 +187,14 @@ async function reloadHistory(inst, symbol) {
 // and the next render paints the additional candle. AbortController
 // cancels any previous in-flight refresh so slow responses can't
 // overwrite a fresher one.
+//
+// CRITICAL: noCache:true. getHistory has a 10-minute in-memory cache
+// (HISTORY_TTL_MS) so a naive poll would return the same ohlc array
+// 20 times in a row between 11:00 and 11:10 IST — defeating the entire
+// point of polling. Passing noCache forces the underlying /api/history
+// fetch each tick, picking up newly-closed 5-min candles as they land.
+// The server-side cache (Vercel edge + upstream Yahoo's own caching)
+// still absorbs the load; only OUR in-memory cache is bypassed here.
 async function refreshHistory(inst, symbol) {
   const myToken = _cancelToken;
   if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} }
@@ -194,7 +202,7 @@ async function refreshHistory(inst, symbol) {
   const sig = _historyAbortCtrl.signal;
   try {
     const tf = TF_MAP[ui.timeframe] || TF_MAP["1M"];
-    const h = await getHistory(symbol, tf.range, tf.interval, { signal: sig });
+    const h = await getHistory(symbol, tf.range, tf.interval, { signal: sig, noCache: true });
     if (sig.aborted || myToken.cancelled) return;
     if (h?.ohlc?.length) {
       liveHistory = h;
