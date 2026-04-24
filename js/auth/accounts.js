@@ -388,8 +388,23 @@ export async function refreshCurrentUser() {
       localStorage.removeItem("ss.session.v1");
       localStorage.removeItem("ss.accounts.v1");
     } catch {}
-    const { data: userData } = await client.auth.getUser();
-    const u = userData?.user;
+    // 5-s timeout on getUser — same GoTrue _acquireLock deadlock concern
+    // documented in sync.js. If auth is stuck, return the existing cached
+    // user (if any) so callers that await refreshCurrentUser() can still
+    // proceed with a best-effort cached identity rather than hanging
+    // forever. DO NOT null out _cachedUser on timeout — that would look
+    // like a logout to downstream consumers.
+    let u;
+    try {
+      const getUserP = client.auth.getUser();
+      const timeoutP = new Promise((_, rej) =>
+        setTimeout(() => rej(new Error("refreshCurrentUser_timeout")), 5000));
+      const { data: userData } = await Promise.race([getUserP, timeoutP]);
+      u = userData?.user;
+    } catch (e) {
+      console.warn("[accounts] refreshCurrentUser getUser failed:", e?.message || e);
+      return _cachedUser;   // return cached if any; never null on timeout
+    }
     if (!u) { _cachedUser = null; return null; }
     const { data: profile } = await client.from("profiles").select("*").eq("id", u.id).maybeSingle();
     if (!profile) {

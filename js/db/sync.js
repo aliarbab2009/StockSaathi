@@ -7,10 +7,26 @@
 
 import { sb, isSupabaseEnabled } from "./supabase.js";
 import { getState, setState, subscribe as subscribeState } from "../state.js";
-import { refreshCurrentUser } from "../auth/accounts.js";
+import { refreshCurrentUser, currentUser } from "../auth/accounts.js";
 
 let _booted = false;
 let _syncing = false;
+
+// 5-second race around any supabase-js auth call. The internal GoTrue
+// `_acquireLock` mutex can deadlock in supabase-js 2.45.4 when
+// autoRefreshToken collides with a stale refresh token. Pre-v137, a
+// stuck auth call here would hang `loadAllFromDb` forever — portfolio
+// state never got populated, UI stuck at DEFAULT_STATE (₹1L cash, no
+// coach messages, no holdings) until a hard refresh let supabase-js
+// re-initialize. That manifested as "my data disappeared after a
+// deploy" — it wasn't actually wiped server-side, just the local
+// hydrate was hung. Bounded race lets us fail fast and bail gracefully.
+async function authWithTimeout(fn, name, ms = 5000) {
+  const p = fn();
+  const t = new Promise((_, rej) =>
+    setTimeout(() => rej(new Error(`auth_timeout:${name}`)), ms));
+  return Promise.race([p, t]);
+}
 
 export async function bootSync() {
   if (_booted) return;
@@ -28,11 +44,18 @@ export async function bootSync() {
     }
   });
 
-  // Initial boot — if already logged in, load everything
-  const { data: sessData } = await client.auth.getSession();
-  if (sessData?.session?.user) {
-    await refreshCurrentUser();
-    await loadAllFromDb();
+  // Initial boot — if already logged in, load everything. Bounded
+  // 5-s timeout on getSession so a stuck GoTrue lock doesn't block
+  // the entire app boot. If it times out, the onAuthStateChange
+  // handler above will pick up any real session on the next refresh.
+  try {
+    const { data: sessData } = await authWithTimeout(() => client.auth.getSession(), "boot_getSession");
+    if (sessData?.session?.user) {
+      await refreshCurrentUser();
+      await loadAllFromDb();
+    }
+  } catch (e) {
+    console.warn("[sync] bootSync getSession failed:", e?.message || e);
   }
 }
 
@@ -46,8 +69,31 @@ export async function loadAllFromDb() {
   try {
     const client = await sb();
     if (!client) return;
-    const { data: userData } = await client.auth.getUser();
-    const uid = userData?.user?.id;
+    // Prefer the synchronous currentUser() cache — no auth call, no
+    // lock acquisition. Only fall back to client.auth.getUser() (with
+    // a 5-s timeout) if the cache is genuinely empty. This is the
+    // single biggest source of "my data vanished on deploy" bug: a
+    // stuck getUser call in v135 left loadAllFromDb hung forever,
+    // so setState at line 121 never ran and the UI sat on
+    // DEFAULT_STATE (₹1L cash, no coach messages). The cache is
+    // populated by refreshCurrentUser(), which bootSync + the
+    // onAuthStateChange handler both call.
+    let uid = currentUser()?.id || null;
+    if (!uid) {
+      try {
+        const { data: userData } = await authWithTimeout(
+          () => client.auth.getUser(), "loadAllFromDb_getUser"
+        );
+        uid = userData?.user?.id || null;
+      } catch (e) {
+        console.warn("[sync] loadAllFromDb getUser failed:", e?.message || e);
+        // CRITICAL: return WITHOUT calling setState. Bail gracefully
+        // so the existing populated state (from a previous successful
+        // load, persisted in localStorage) stays intact. Users don't
+        // see ₹1L defaults just because auth is temporarily stuck.
+        return;
+      }
+    }
     if (!uid) return;
 
     // Friends and transfers go through SECURITY DEFINER RPCs so the
