@@ -129,7 +129,7 @@ export function mountNav() {
       ${mobileNavHtml}
       <div class="nav-inner">
         <a href="${state.isAuthed ? "#/portfolio" : "#/"}" class="brand-logo" aria-label="StockSaathi home">
-          <span class="logo-mark">SS</span>
+          <span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 64 64" width="22" height="22" style="display:block;"><path d="M16 40 L26 28 L34 36 L48 20" stroke="white" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="20" r="3.5" fill="white"/></svg></span>
           <span>StockSaathi</span>
         </a>
 
@@ -274,7 +274,7 @@ function renderDrawer(state, allLinks, active, pfValue, ms) {
   panel.innerHTML = `
     <div class="drawer-head">
       <div class="brand-logo">
-        <span class="logo-mark">SS</span>
+        <span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 64 64" width="22" height="22" style="display:block;"><path d="M16 40 L26 28 L34 36 L48 20" stroke="white" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="20" r="3.5" fill="white"/></svg></span>
         <span>StockSaathi</span>
       </div>
       <button class="btn btn-ghost btn-icon" aria-label="Close menu" data-close-drawer>✕</button>
