@@ -158,21 +158,6 @@ export function renderLeaderboard(main) {
         <p class="muted">Ranked by portfolio return since ₹1,00,000 start.</p>
       </div>
 
-      ${usingSeed ? `
-        <div class="card" style="margin-bottom: var(--sp-4); background: var(--warning-soft); border-color: var(--warning);">
-          <div class="flex items-start gap-3">
-            <span aria-hidden="true" style="font-size: 20px;">ℹ️</span>
-            <div>
-              <div style="font-weight: 600; color: var(--text-strong); margin-bottom: 2px;">Showing sample competitors</div>
-              <div class="muted text-sm" style="line-height: 1.55;">
-                Real StockSaathi users will replace these as soon as enough people start trading in your region.
-                Your rank is calculated honestly against whatever's on the board right now — including you.
-              </div>
-            </div>
-          </div>
-        </div>
-      ` : ""}
-
       <div class="flex gap-2 wrap" style="margin-bottom: var(--sp-5);">
         <div class="lb-tabs">
           <button class="lb-tab ${scope === "GLOBAL" ? "active" : ""}" data-scope="GLOBAL">🌏 Global</button>
