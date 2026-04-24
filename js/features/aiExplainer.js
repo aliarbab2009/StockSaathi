@@ -53,15 +53,38 @@ function ensureTooltipEl() {
 // Mirrors the server's gate in api/ai.js opExplain(). If the backend ever
 // regresses or serves a cached short value, the frontend rejects it too
 // so the user sees "No explanation available" instead of garbage like
-// "A 5". Kept in sync with the server definition deliberately — both
-// must agree or one will let bad values through.
+// "A 5" or "Beta measures how much a". Kept in sync with the server
+// definition deliberately — both must agree or one will let bad values
+// through.
+//
+// MUST stay in sync with app/api/ai.js explanationLooksGood + STUB_WORDS.
+// If you change one, change the other.
+const STUB_WORDS = new Set([
+  "a","an","the",
+  "it","this","that","these","those",
+  "is","are","was","were","be","been","being",
+  "have","has","had","having",
+  "do","does","did","doing","done",
+  "will","would","should","could","can","may","might","must","shall",
+  "and","or","but","nor","so","yet",
+]);
+
 function explanationLooksGood(text) {
   if (!text) return false;
   const trimmed = String(text).trim();
   if (trimmed.length < 15) return false;
   const words = trimmed.split(/\s+/).filter(Boolean);
   if (words.length < 3) return false;
-  return /\s/.test(trimmed);
+  if (!/\s/.test(trimmed)) return false;
+  // Mid-sentence-truncation signals:
+  //   (a) raw text ends with ",", "-", ":" (LLM stalled mid-clause)
+  //   (b) raw text ends with "..." or "…" (ellipsis = thinking token out)
+  //   (c) last alpha-run is a stub word (article/pronoun/auxiliary/conj)
+  if (/[,\-:]\s*$/.test(trimmed)) return false;
+  if (/\.{2,}\s*$/.test(trimmed) || /…\s*$/.test(trimmed)) return false;
+  const m = trimmed.toLowerCase().match(/([a-z]+)[^a-z]*$/);
+  if (m && STUB_WORDS.has(m[1])) return false;
+  return true;
 }
 
 function escapeHtml(s) {

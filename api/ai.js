@@ -279,13 +279,42 @@ const SYSTEM_EXPLAIN = `You are Saathi, a finance coach for Indian teens. A user
 // and get cached forever, so the user saw garbage tooltips for life.
 // Real one-sentence definitions are always at least 3 words and 15
 // chars (e.g. "EPS = profit per share" → 21 chars, 5 words).
+//
+// v2 adds mid-sentence-truncation detection — v1 shipped "Beta measures
+// how much a" (5 words, 24 chars, passes word-count gate) because Gemini
+// 2.5 Flash thinking tokens ate the output budget. Now we also reject:
+//   - trailing "…", "...", ",", "-", ":" (classic stall signatures)
+//   - last alphabetic run is a stub word (article/pronoun/auxiliary/
+//     conjunction) — these cannot legitimately end an English sentence
+//
+// MUST stay in sync with app/js/features/aiExplainer.js
+// explanationLooksGood. If you change one, change the other.
+const STUB_WORDS = new Set([
+  "a","an","the",
+  "it","this","that","these","those",
+  "is","are","was","were","be","been","being",
+  "have","has","had","having",
+  "do","does","did","doing","done",
+  "will","would","should","could","can","may","might","must","shall",
+  "and","or","but","nor","so","yet",
+]);
+
 function explanationLooksGood(text) {
   if (!text) return false;
   const trimmed = String(text).trim();
   if (trimmed.length < 15) return false;
   const words = trimmed.split(/\s+/).filter(Boolean);
   if (words.length < 3) return false;
-  return /\s/.test(trimmed);
+  if (!/\s/.test(trimmed)) return false;
+  // Mid-sentence-truncation signals:
+  //   (a) raw text ends with ",", "-", ":" (LLM stalled mid-clause)
+  //   (b) raw text ends with "..." or "…" (ellipsis = thinking token out)
+  //   (c) last alpha-run is a stub word (article/pronoun/auxiliary/conj)
+  if (/[,\-:]\s*$/.test(trimmed)) return false;
+  if (/\.{2,}\s*$/.test(trimmed) || /…\s*$/.test(trimmed)) return false;
+  const m = trimmed.toLowerCase().match(/([a-z]+)[^a-z]*$/);
+  if (m && STUB_WORDS.has(m[1])) return false;
+  return true;
 }
 
 async function opExplain(req, origin, url) {
@@ -303,14 +332,22 @@ async function opExplain(req, origin, url) {
     await cacheDelete("explain", key);
   }
   try {
+    // Route through the "json" profile (→ gemini-2.5-flash-lite, non-thinking)
+    // even though we want plain text. The "fast" profile resolves to
+    // gemini-2.5-flash which is a THINKING model — it spends ~95 of 120
+    // max_tokens on internal reasoning and leaves only ~25 for the actual
+    // explanation text, producing grammatically-truncated strings like
+    // "Beta measures how much a". Flash-lite is genuinely non-thinking so
+    // the whole max_tokens budget reaches the user. max_tokens bumped
+    // 120 → 200 as belt-and-braces against future regressions.
     const text = await callLlm({
       messages: [
         { role: "system", content: SYSTEM_EXPLAIN },
         { role: "user", content: `Explain "${term}" in one sentence.` },
       ],
-      max_tokens: 120,
+      max_tokens: 200,
       temperature: 0.3,
-      profile: "fast",
+      profile: "json",
     });
     const explanation = String(text || "").trim().replace(/^["'""]|["'""]$/g, "").trim();
     if (!explanationLooksGood(explanation)) {
