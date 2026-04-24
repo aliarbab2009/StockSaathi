@@ -2,7 +2,7 @@
 // STOCKS — Browse markets. Real-time prices via Yahoo Finance when possible.
 // =============================================================================
 
-import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS } from "../data/universe.js";
+import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, ensureUniverseLoaded } from "../data/universe.js";
 import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getFreshCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
@@ -17,10 +17,50 @@ let _moodFetched = false;
 let aiSearch = null;          // { matches: ["TCS", ...], rationale: "..." } | null — when present, overrides the normal filter pipeline
 let aiSearchLoading = false;
 let aiSearchQuery = "";
+let aiSearchAbort = null;     // AbortController for the in-flight /api/ai call
+let visibleCount = 100;       // pagination window — grows with "Show more"
+const PAGE_SIZE = 100;
+let _debounceTimer = null;
+
+// Keywords that let the Ask-Saathi prefilter narrow a 2k-candidate pool down
+// to ~150 without sending everything to the LLM. Maps lowercase tokens to
+// filter predicates applied against the full-universe row shape.
+const CAP_KEYWORDS = {
+  largecap: ["mega", "large"], "large cap": ["mega", "large"], "large-cap": ["mega", "large"],
+  midcap: ["mid"], "mid cap": ["mid"], "mid-cap": ["mid"],
+  smallcap: ["small", "micro"], "small cap": ["small", "micro"], "small-cap": ["small", "micro"],
+  bluechip: ["mega"], "blue chip": ["mega"], "blue-chip": ["mega"],
+  nifty50: ["mega"], "nifty 50": ["mega"],
+};
+const RISK_KEYWORDS = {
+  safe: "low", stable: "low", defensive: "low", steady: "low",
+  risky: "high", volatile: "high", speculative: "high", aggressive: "high",
+  moderate: "med",
+};
 
 export function renderStocks(main) {
   let cancelled = false;
   let pollUnsub = null;
+
+  // Reset transient state on every (re-)entry so a stale in-flight AI
+  // fetch or broken loading flag from the previous session doesn't leak
+  // into this one. Filter + quoteCache + marketMood persist across
+  // navigation on purpose — the user gets back exactly where they left off.
+  aiSearchLoading = false;
+  if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} aiSearchAbort = null; }
+  visibleCount = PAGE_SIZE;
+
+  // Nudge the full universe to load if it hasn't already — no-op if cached
+  // or already in flight. Kicks the JSON fetch early so the "All NSE" pill
+  // is click-ready by the time the user scans the toolbar.
+  ensureUniverseLoaded();
+
+  // Source list depends on the kind pill:
+  //   - "ALL_NSE" → full merged universe (~2700 rows, Tier 1 + Tier 2)
+  //   - everything else → curated-only (~127 rows, fast render)
+  function source() {
+    return filter.kind === "ALL_NSE" ? getAllInstruments() : INSTRUMENTS;
+  }
 
   // Prefill from in-memory cache SYNCHRONOUSLY so the very first paint
   // shows last-known REAL-FRESH prices (not universe placeholders, and
@@ -35,7 +75,18 @@ export function renderStocks(main) {
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
-  const onLeave = () => { cancelled = true; unsub?.(); pollUnsub?.(); };
+  // Full universe lands asynchronously — re-render when the loader fires so
+  // the instrument count pill and "All NSE" source both pick up Tier 2.
+  const onUniverseLoaded = () => { if (!cancelled) render(); };
+  window.addEventListener("ss:universe-loaded", onUniverseLoaded);
+  const onLeave = () => {
+    cancelled = true;
+    unsub?.();
+    pollUnsub?.();
+    window.removeEventListener("ss:universe-loaded", onUniverseLoaded);
+    if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} aiSearchAbort = null; }
+    if (_debounceTimer) { clearTimeout(_debounceTimer); _debounceTimer = null; }
+  };
   window.addEventListener("hashchange", onLeave, { once: true });
 
   // Cover EVERY equity in the universe — no more 50-stock cap. getQuoteBatch
@@ -75,8 +126,13 @@ export function renderStocks(main) {
 
   function render() {
     const state = getState();
-    const list = applyFilters(INSTRUMENTS, filter, state, quoteCache);
+    const wlSet = new Set(state.watchlist);
+    const fullList = applyFilters(source(), filter, state, quoteCache);
+    const list = fullList.slice(0, visibleCount);
+    const truncated = fullList.length > list.length;
     const src = getDataSource();
+    const allInst = getAllInstruments();
+    const allSectorsList = getAllSectors();
     // Preserve focus + caret on the search input across the re-render — every
     // keystroke triggers this render and the 10s live-quote poll does too, so
     // without this the user can't type more than one character at a time.
@@ -89,7 +145,7 @@ export function renderStocks(main) {
       <div class="flex items-start justify-between wrap gap-3" style="margin-bottom: var(--sp-4);">
         <div>
           <h1>Markets</h1>
-          <p class="muted">${INSTRUMENTS.length} instruments · ${STOCKS.length} equities · ${MUTUAL_FUNDS.length} mutual funds</p>
+          <p class="muted">${allInst.length} instruments · ${STOCKS.length} featured · ${allInst.length - INSTRUMENTS.length > 0 ? `${allInst.length - INSTRUMENTS.length} more NSE listings` : `${MUTUAL_FUNDS.length} mutual funds`}</p>
         </div>
         <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
       </div>
@@ -125,19 +181,20 @@ export function renderStocks(main) {
       </div>
 
       <div class="filter-pills" style="margin-bottom: var(--sp-3);">
-        <button class="filter-pill ${filter.kind === "all" ? "active" : ""}" data-kind="all">All</button>
+        <button class="filter-pill ${filter.kind === "all" ? "active" : ""}" data-kind="all">Featured</button>
+        <button class="filter-pill ${filter.kind === "ALL_NSE" ? "active" : ""}" data-kind="ALL_NSE">All NSE (${allInst.length})</button>
         <button class="filter-pill ${filter.kind === "EQUITY" ? "active" : ""}" data-kind="EQUITY">Stocks</button>
         <button class="filter-pill ${filter.kind === "MF" ? "active" : ""}" data-kind="MF">Mutual Funds</button>
         <button class="filter-pill ${filter.kind === "watchlist" ? "active" : ""}" data-kind="watchlist">★ Watchlist (${state.watchlist.length})</button>
       </div>
-      <div class="filter-pills" style="margin-bottom: var(--sp-5);">
+      <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: auto;">
         <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors</button>
-        ${SECTORS.map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
+        ${(filter.kind === "ALL_NSE" ? allSectorsList : SECTORS).map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
       </div>
 
       <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-        : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state)).join("")}</div>`}</div>
+        : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state, wlSet)).join("")}</div>${truncated ? `<div class="flex justify-center" style="margin-top: var(--sp-4); gap: 8px;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
     `;
 
     const searchEl = main.querySelector("#stocks-search");
@@ -145,7 +202,14 @@ export function renderStocks(main) {
       searchEl.focus();
       try { searchEl.setSelectionRange(restore.start, restore.end); } catch {}
     }
-    searchEl.addEventListener("input", e => { filter.q = e.target.value; render(); });
+    searchEl.addEventListener("input", e => {
+      filter.q = e.target.value;
+      visibleCount = PAGE_SIZE;   // reset pagination on new query
+      // Debounce: full re-renders every keystroke get expensive at 2700
+      // cards even with virtualization. 120ms feels responsive.
+      if (_debounceTimer) clearTimeout(_debounceTimer);
+      _debounceTimer = setTimeout(() => { if (!cancelled) render(); }, 120);
+    });
     import("../components/themedSelect.js").then(({ mountThemedSelect }) => {
       mountThemedSelect(main.querySelector("#stocks-sort"), {
         value: filter.sort,
@@ -155,11 +219,18 @@ export function renderStocks(main) {
           { value: "losers",    label: "Top losers today" },
           { value: "name",      label: "Name A–Z" },
         ],
-        onChange: v => { filter.sort = v; render(); },
+        onChange: v => { filter.sort = v; visibleCount = PAGE_SIZE; render(); },
       });
     });
-    main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; render(); }));
-    main.querySelectorAll("[data-kind]").forEach(btn => btn.addEventListener("click", () => { filter.kind = btn.dataset.kind; render(); }));
+    main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; visibleCount = PAGE_SIZE; render(); }));
+    main.querySelectorAll("[data-kind]").forEach(btn => btn.addEventListener("click", () => {
+      filter.kind = btn.dataset.kind;
+      filter.sector = "all";      // sector list changes between curated and All-NSE views
+      visibleCount = PAGE_SIZE;
+      render();
+    }));
+    main.querySelector("#stocks-show-more")?.addEventListener("click", () => { visibleCount += PAGE_SIZE; render(); });
+    main.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = 1e9; render(); });
     main.querySelectorAll(".stock-card").forEach(card => {
       card.addEventListener("click", (e) => {
         if (e.target.closest(".watchlist-toggle")) return;
@@ -170,7 +241,7 @@ export function renderStocks(main) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const sym = btn.dataset.sym;
-        if (state.watchlist.includes(sym)) removeFromWatchlist(sym);
+        if (wlSet.has(sym)) removeFromWatchlist(sym);
         else addToWatchlist(sym);
       });
     });
@@ -207,16 +278,19 @@ export function renderStocks(main) {
   // and the dropdown stops blinking.
   function renderList() {
     const state = getState();
+    const wlSet = new Set(state.watchlist);
     const host = main.querySelector("#stocks-grid-host");
     if (!host) {
       // Shell not mounted yet — fall back to full render.
       render();
       return;
     }
-    const list = applyFilters(INSTRUMENTS, filter, state, quoteCache);
+    const fullList = applyFilters(source(), filter, state, quoteCache);
+    const list = fullList.slice(0, visibleCount);
+    const truncated = fullList.length > list.length;
     host.innerHTML = list.length === 0
       ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-      : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state)).join("")}</div>`;
+      : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state, wlSet)).join("")}</div>${truncated ? `<div class="flex justify-center" style="margin-top: var(--sp-4); gap: 8px;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`;
     // Re-wire the per-card listeners since the grid innerHTML was replaced.
     host.querySelectorAll(".stock-card").forEach(card => {
       card.addEventListener("click", (e) => {
@@ -228,49 +302,136 @@ export function renderStocks(main) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const sym = btn.dataset.sym;
-        if (state.watchlist.includes(sym)) removeFromWatchlist(sym);
+        if (wlSet.has(sym)) removeFromWatchlist(sym);
         else addToWatchlist(sym);
       });
     });
+    host.querySelector("#stocks-show-more")?.addEventListener("click", () => { visibleCount += PAGE_SIZE; renderList(); });
+    host.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = 1e9; renderList(); });
   }
 }
 
 async function runAiSearch(query, render) {
   if (aiSearchLoading) return;
+  // Abort any prior in-flight AI call so stale responses can't overwrite the
+  // current one.
+  if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} }
+  aiSearchAbort = new AbortController();
+  const signal = aiSearchAbort.signal;
+
   aiSearchLoading = true;
   aiSearchQuery = query;
   render();
   try {
-    // Build candidate rows from INSTRUMENTS + live quoteCache for dayPct.
-    const candidates = INSTRUMENTS.slice(0, 200).map(i => {
-      const q = quoteCache[i.symbol];
-      return {
-        symbol: i.symbol,
-        name: i.name,
-        sector: i.sector || "",
-        marketCap: i.marketCap || "",
-        pe: i.pe ?? null,
-        pb: i.pb ?? null,
-        divYield: i.divYield ?? null,
-        beta: i.beta ?? null,
-        risk: i.risk || "",
-        dayPct: q?.changePct != null ? q.changePct * 100 : null,
-      };
-    });
+    const candidates = buildAiSearchCandidates(query);
     const res = await fetch("/api/ai?op=market-search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, candidates }),
+      signal,
     });
     if (!res.ok) throw new Error("http_" + res.status);
     const d = await res.json();
+    if (signal.aborted) return;
     aiSearch = d?.matches?.length ? { matches: d.matches, rationale: d.rationale || "" } : { matches: [], rationale: d?.rationale || "No matches in the current universe." };
   } catch (e) {
+    if (signal.aborted || e.name === "AbortError") return;
     aiSearch = { matches: [], rationale: "Saathi couldn't search just now. Try again in a moment." };
   } finally {
+    if (aiSearchAbort && aiSearchAbort.signal === signal) aiSearchAbort = null;
     aiSearchLoading = false;
     render();
   }
+}
+
+// Client-side prefilter: parse the query for sector / cap-bucket / risk /
+// numeric hints, intersect with the full universe, rank by index prominence,
+// truncate to the top 150 before handing to the LLM. At 2700 instruments a
+// naive slice(0, 200) would silently miss 92% of the universe and burn ~62k
+// input tokens per query; this keeps token cost flat vs curated-only while
+// making every NSE symbol reachable.
+function buildAiSearchCandidates(query) {
+  const full = getAllInstruments();
+  const byCap = new Map(full.map(i => [i.symbol, i.capBucket || "unknown"]));
+  const q = query.toLowerCase();
+
+  // 1) Parse hints
+  const capHints = new Set();
+  for (const [kw, buckets] of Object.entries(CAP_KEYWORDS)) {
+    if (q.includes(kw)) buckets.forEach(b => capHints.add(b));
+  }
+  const riskHints = new Set();
+  for (const [kw, r] of Object.entries(RISK_KEYWORDS)) {
+    if (q.includes(kw)) riskHints.add(r);
+  }
+  const sectorHints = new Set();
+  for (const s of getAllSectors()) {
+    const sl = s.toLowerCase();
+    if (sl && sl !== "other" && q.includes(sl)) sectorHints.add(s);
+  }
+  // Broader keyword → sector aliases that NSE doesn't name directly
+  const SECTOR_ALIASES = {
+    bank: "Banking", banks: "Banking", banking: "Banking",
+    pharma: "Pharma", pharmaceutical: "Pharma", drug: "Pharma",
+    it: "IT Services", tech: "IT Services", software: "IT Services",
+    auto: "Auto", car: "Auto", motor: "Auto", vehicle: "Auto",
+    fmcg: "FMCG", consumer: "Consumer",
+    metal: "Metals", steel: "Metals",
+    oil: "Energy", gas: "Energy", energy: "Energy",
+    power: "Power", electric: "Power",
+    realty: "Real Estate", "real estate": "Real Estate", property: "Real Estate",
+    cement: "Cement",
+    telecom: "Telecom", mobile: "Telecom",
+    insurance: "Insurance",
+    finance: "NBFC", nbfc: "NBFC", lending: "NBFC",
+    chemical: "Chemicals",
+    infrastructure: "Infrastructure", infra: "Infrastructure",
+    airline: "Aviation", aviation: "Aviation",
+    retail: "Retail", ecommerce: "Internet", internet: "Internet",
+    healthcare: "Healthcare", hospital: "Healthcare",
+  };
+  for (const [kw, sec] of Object.entries(SECTOR_ALIASES)) {
+    if (q.includes(kw)) sectorHints.add(sec);
+  }
+
+  // 2) Prefilter
+  let pool = full;
+  if (sectorHints.size) pool = pool.filter(i => sectorHints.has(i.sector));
+  if (capHints.size) pool = pool.filter(i => capHints.has(byCap.get(i.symbol)));
+  if (riskHints.size) pool = pool.filter(i => riskHints.has(i.risk || "med"));
+
+  // 3) Rank by index prominence (Nifty50 first, then 100, 500, midcap, smallcap, rest)
+  // Higher idx bits = more prominent; sort desc. Fall back to name-length
+  // as a tie-breaker so stable ordering.
+  pool.sort((a, b) => {
+    const ai = a.idx || 0;
+    const bi = b.idx || 0;
+    if (ai !== bi) return bi - ai;   // reverse of bit-value — higher idx bits = more prominent
+    return (a.symbol || "").localeCompare(b.symbol || "");
+  });
+
+  // 4) Fallback to full if prefilter killed everything (query is purely
+  // qualitative — "defensive dividend payers" with no sector word).
+  if (pool.length < 20) {
+    pool = full.slice().sort((a, b) => (b.idx || 0) - (a.idx || 0));
+  }
+
+  const TOP = 150;
+  return pool.slice(0, TOP).map(i => {
+    const q2 = quoteCache[i.symbol];
+    return {
+      symbol: i.symbol,
+      name: i.name,
+      sector: i.sector || "",
+      marketCap: i.marketCap || "",
+      pe: i.pe ?? null,
+      pb: i.pb ?? null,
+      divYield: i.divYield ?? null,
+      beta: i.beta ?? null,
+      risk: i.risk || "",
+      dayPct: q2?.changePct != null ? q2.changePct * 100 : null,
+    };
+  });
 }
 
 async function fetchMarketMood() {
@@ -365,19 +526,24 @@ function applyFilters(all, f, state, quoteCache) {
   return list;
 }
 
-function renderStockCard(inst, state) {
+function renderStockCard(inst, state, wlSet) {
   // Prefer the rolling intraday buffer built from live polls — falls back
   // to the seeded 40-day walk on cold load before any poll has landed.
-  const closes = getIntradaySparkline(inst.symbol, getCloses(inst.symbol, 40));
+  // For Tier-2 symbols (no curated price), the buffer will be empty and
+  // sparkline() handles that gracefully.
+  const seededCloses = inst.price != null ? getCloses(inst.symbol, 40) : [];
+  const closes = getIntradaySparkline(inst.symbol, seededCloses);
   const quote = quoteCache[inst.symbol];
   // LIVE first, always. inst.price is a seeded reference only — used as an
   // initial skeleton placeholder before live data arrives. When the universe
-  // scales to all ~2000 NSE stocks, hand-maintaining static prices is
+  // scales to all ~2700 NSE stocks, hand-maintaining static prices is
   // impossible, so the UI must tolerate no-static-price gracefully.
   const hasLive = quote?.pricePaise != null;
   const price = hasLive ? quote.pricePaise : (inst.price ?? null);
   const change = quote?.changePct ?? (inst.price != null ? getTodayChange(inst.symbol) : 0);
-  const isWatched = state.watchlist.includes(inst.symbol);
+  // wlSet is hoisted at render time — O(1) membership check; old code used
+  // state.watchlist.includes(sym) which was O(n) per card.
+  const isWatched = wlSet ? wlSet.has(inst.symbol) : state.watchlist.includes(inst.symbol);
   // Badge logic:
   //   market-closed  → CLOSED pill with last-close time (even if we have a quote
   //                    cached from the final trading tick, it's by definition
@@ -463,7 +629,7 @@ function renderStockCard(inst, state) {
         </div>
         <span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "MED").toUpperCase()}</span>
       </div>
-      <div class="stock-sparkline">${(hasLive || inst.kind === "MF") ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
+      <div class="stock-sparkline">${(hasLive || inst.kind === "MF") && closes && closes.length > 1 ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
     </div>
   `;
 }
