@@ -37,15 +37,30 @@ function loadChat() {
   try { const raw = localStorage.getItem(CHAT_LOG_KEY); return raw ? JSON.parse(raw) : []; }
   catch { return []; }
 }
+
+// Same-tab hydrate trigger from Supabase: when sync.js's hydrateCoachChats
+// writes fresh coach_log into localStorage (e.g. first login on incognito
+// / a new device), it dispatches 'ss:coach-sync'. We reload our in-memory
+// chatHistory and re-render the panel so the user sees their history.
+// Skip the reload mid-stream so we don't clobber a token-in-flight bubble.
+window.addEventListener("ss:coach-sync", () => {
+  if (pending) return;
+  try {
+    chatHistory = loadChat();
+    if (root) render();
+  } catch (e) { console.warn("[coach-panel] ss:coach-sync failed:", e); }
+});
 function saveChat() {
   // Cap to the last 80 messages. On QuotaExceededError, progressively halve
   // until the write succeeds — losing old chat history is better than
   // silently failing to persist new messages.
   let keep = 80;
+  let ok = false;
   while (keep >= 10) {
     try {
       localStorage.setItem(CHAT_LOG_KEY, JSON.stringify(chatHistory.slice(-keep)));
-      return;
+      ok = true;
+      break;
     } catch (e) {
       const isQuota = e && (e.name === "QuotaExceededError"
                             || (e.code && (e.code === 22 || e.code === 1014)));
@@ -53,8 +68,15 @@ function saveChat() {
       keep = Math.floor(keep / 2);
     }
   }
-  // Last resort: drop everything
-  try { localStorage.removeItem(CHAT_LOG_KEY); } catch {}
+  if (!ok) {
+    try { localStorage.removeItem(CHAT_LOG_KEY); } catch {}
+    return;
+  }
+  // Push the coach-panel log up to Supabase too so it follows the user's
+  // account across devices. Debounced in sync.js — fire-and-forget here.
+  try {
+    import("../db/sync.js").then(m => m.dbSaveCoachChatsSoon?.()).catch(() => {});
+  } catch {}
 }
 
 function smartTemplateReply(userText, state) {

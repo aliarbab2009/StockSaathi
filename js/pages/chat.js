@@ -44,6 +44,23 @@ window.addEventListener("storage", (e) => {
   } catch {}
 });
 
+// Same-tab sync from Supabase: when loadAllFromDb hydrates coach chats
+// from the DB (e.g. first login on a new device / incognito window), it
+// writes to localStorage in THIS tab — storage events don't fire for
+// same-tab writes, so we listen for the custom 'ss:coach-sync' event
+// that sync.js dispatches. Reload sessions + re-render if mounted.
+window.addEventListener("ss:coach-sync", () => {
+  if (typeof m_pending !== "undefined" && m_pending) return;
+  try {
+    sessionsData = loadSessions();
+    chatLog = getActiveSession(sessionsData).messages;
+    if (document.getElementById("chat-messages")) {
+      const main = document.getElementById("main");
+      if (main) renderChat(main);
+    }
+  } catch (e) { console.warn("[chat] ss:coach-sync failed:", e); }
+});
+
 function saveChat() {
   // Session's messages array is `chatLog` itself (same reference), so any
   // push/pop done by the renderers is already reflected. We just touch the

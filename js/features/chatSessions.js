@@ -87,6 +87,13 @@ export function loadSessions() {
 
 export function saveSessions(data) {
   try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(data)); } catch {}
+  // Push to Supabase too so the user's chats follow them across devices /
+  // browsers / incognito windows. Dynamically imported + debounced in
+  // sync.js so we don't hammer the DB on every keystroke that re-saves.
+  // Fire-and-forget — no-op if the user isn't signed in to Supabase.
+  try {
+    import("../db/sync.js").then(m => m.dbSaveCoachChatsSoon?.()).catch(() => {});
+  } catch {}
 }
 
 export function getActiveSession(data) {

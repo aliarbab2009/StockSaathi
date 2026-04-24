@@ -174,6 +174,12 @@ export async function loadAllFromDb() {
       transfers: nextTransfers,
       coachMessages: nextCoachMessages,
     }));
+
+    // Best-effort coach-chat sync — won't block this function if it hangs
+    // or the coach_chats table doesn't exist yet on this Supabase project.
+    // Fire-and-forget; hydrateCoachChatsFromDb dispatches 'ss:coach-sync'
+    // when it actually touched localStorage so live chat views reload.
+    hydrateCoachChatsFromDb().catch(e => console.warn("[sync] coach hydrate:", e?.message || e));
   } finally {
     _syncing = false;
   }
@@ -291,6 +297,109 @@ export async function dbApplyTrade({ symbol, side, qty, pricePaise, idempotencyK
     throw new Error(prettifyErr(error.message));
   }
   return data;
+}
+
+// ---------------------------------------------------------------------------
+// COACH CHATS — cross-device sync for the /chat page's multi-session history
+// AND the coach panel's running log. Stored as one row per user in the
+// coach_chats table (sessions_json + coach_log JSONB). Previously both lived
+// only in localStorage; logging in on a new device / incognito window showed
+// an empty coach. Migration: supabase/migrations/2026-04-24g_coach_chats_sync.sql
+// ---------------------------------------------------------------------------
+const SESSIONS_LS_KEY = "ss.chat.sessions.v1";
+const COACHLOG_LS_KEY = "ss.coachchat.v1";
+
+function safeParse(raw, fallback) {
+  try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+}
+
+/** Fetch the current user's coach-chat row. Returns null on error / missing. */
+export async function dbLoadCoachChats() {
+  const client = await sb();
+  if (!client) return null;
+  try {
+    const uid = currentUser()?.id;
+    if (!uid) return null;
+    const { data, error } = await client
+      .from("coach_chats")
+      .select("sessions_json, coach_log, updated_at")
+      .eq("user_id", uid)
+      .maybeSingle();
+    if (error) {
+      // Table-missing errors (42P01) are expected on pre-migration Supabase
+      // projects; swallow them silently so the client keeps working from
+      // localStorage alone. Other errors get a console breadcrumb.
+      if (!/42P01|does not exist/i.test(String(error.message || ""))) {
+        console.warn("[coach-sync] load:", error.message);
+      }
+      return null;
+    }
+    return data || null;
+  } catch (e) {
+    console.warn("[coach-sync] load threw:", e?.message || e);
+    return null;
+  }
+}
+
+// Debounced push of the current localStorage coach state up to Supabase.
+// Snapshots from localStorage at FLUSH time so callers don't need to pass
+// either blob and so we always upsert the most-recent content, not a
+// stale snapshot from when debouncing started.
+let _coachSyncTimer = null;
+export function dbSaveCoachChatsSoon() {
+  if (_coachSyncTimer) clearTimeout(_coachSyncTimer);
+  _coachSyncTimer = setTimeout(_flushCoachSync, 1500);
+}
+
+async function _flushCoachSync() {
+  _coachSyncTimer = null;
+  const client = await sb();
+  if (!client) return;
+  try {
+    const uid = currentUser()?.id;
+    if (!uid) return;
+    const sessions_json = safeParse(localStorage.getItem(SESSIONS_LS_KEY), {});
+    const coach_log = safeParse(localStorage.getItem(COACHLOG_LS_KEY), []);
+    const { error } = await client.from("coach_chats").upsert({
+      user_id: uid,
+      sessions_json,
+      coach_log,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
+    if (error && !/42P01|does not exist/i.test(String(error.message || ""))) {
+      console.warn("[coach-sync] save:", error.message);
+    }
+  } catch (e) {
+    console.warn("[coach-sync] save threw:", e?.message || e);
+  }
+}
+
+/**
+ * Hydrate localStorage from the DB row. Called from loadAllFromDb on login
+ * so a brand-new device / incognito window picks up the user's chat history
+ * instead of showing an empty coach. Dispatches ss:coach-sync custom events
+ * afterwards so any live-mounted chat/panel view reloads from fresh disk.
+ */
+export async function hydrateCoachChatsFromDb() {
+  const row = await dbLoadCoachChats();
+  if (!row) return;
+  let touched = false;
+  try {
+    if (row.sessions_json && typeof row.sessions_json === "object" &&
+        Array.isArray(row.sessions_json.sessions) && row.sessions_json.sessions.length) {
+      localStorage.setItem(SESSIONS_LS_KEY, JSON.stringify(row.sessions_json));
+      touched = true;
+    }
+  } catch (e) { console.warn("[coach-sync] hydrate sessions failed:", e); }
+  try {
+    if (Array.isArray(row.coach_log) && row.coach_log.length) {
+      localStorage.setItem(COACHLOG_LS_KEY, JSON.stringify(row.coach_log));
+      touched = true;
+    }
+  } catch (e) { console.warn("[coach-sync] hydrate coach_log failed:", e); }
+  if (touched) {
+    try { window.dispatchEvent(new CustomEvent("ss:coach-sync")); } catch {}
+  }
 }
 
 function prettifyErr(msg) {
