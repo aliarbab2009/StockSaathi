@@ -345,14 +345,18 @@ export function attachChartZoom(container, opts) {
     container.releasePointerCapture?.(e.pointerId);
     const hadPinch = !!pinchStart && pointerMap.size >= 2;
     const hadPanStart = !!panStart && pointerMap.size === 1;
-    // Pan-distance threshold: a tap with <PAN_DISTANCE_PX total travel
-    // is NOT a pan. Without this, a zero-move single-finger tap at
-    // scale>1 fires commitNow(true) → flips manualPan=true → kills
-    // sticky-right-edge behaviour for a mere finger wobble.
     const panDistance = hadPanStart
       ? Math.abs(e.clientX - panStart.x) + Math.abs(e.clientY - panStart.y)
       : 0;
-    const hadPan = hadPanStart && panDistance > PAN_DISTANCE_PX;
+    // Any drag that applied a preview (gestureLive is set) needs to be
+    // committed on release — otherwise the finally block clears the
+    // preview transform and the chart visibly snaps back to its start
+    // position, reading as a "spring" to the user. The PAN_DISTANCE_PX
+    // threshold STILL matters, but only for deciding whether to flip
+    // manualPan=true (which would kill sticky-right-edge for a stray
+    // 1-px finger wobble). Commits with wasExplicitDrag=false inherit
+    // the current manualPan flag so sticky-right-edge stays alive.
+    const wasExplicitDrag = hadPanStart && panDistance > PAN_DISTANCE_PX;
     const pointerType = e.pointerType;
     const upX = e.clientX, upY = e.clientY;
     pointerMap.delete(e.pointerId);
@@ -360,22 +364,31 @@ export function attachChartZoom(container, opts) {
     if (pointerMap.size === 0) {
       const s = getState();
       try {
-        if (hadPinch) commitNow(s.manualPan);
-        else if (hadPan) commitNow(true);
-        // Else: tap-only (no pinch, no pan-distance). commitNow NOT called.
+        if (hadPinch && gestureLive) {
+          commitNow(s.manualPan);
+        } else if (hadPanStart && gestureLive) {
+          // Preview was applied at some point during this drag. We MUST
+          // commit so the transform's visual position becomes the new
+          // data-layer state — otherwise resetGestureState below clears
+          // the preview and the chart springs back. manualPan flag
+          // flips only on explicit drags (> threshold); sub-threshold
+          // drags commit with the existing manualPan so a finger
+          // wobble doesn't accidentally disable sticky-right-edge.
+          commitNow(wasExplicitDrag ? true : s.manualPan);
+        }
+        // Else (no gestureLive): tap-only, nothing to commit.
       } finally {
         // ALWAYS clear — even if commitNow early-returned on !gestureLive
-        // (zero-movement pinch or sub-threshold tap). Previously the
-        // !gestureLive branch skipped setGestureActive(false) entirely,
-        // leaving _gestureActive stuck true and zombifying the page.
+        // (zero-movement tap). Previously this branch left
+        // _gestureActive=true forever and zombified the page.
         resetGestureState();
       }
 
       // Single-finger double-tap reset — touch equivalent of dblclick.
-      // Fires only when neither a pinch nor a pan-above-threshold
-      // happened (so genuine taps only). Two taps within
-      // TOUCH_DBLTAP_MS and TOUCH_DBLTAP_DIST_PX of each other → reset.
-      if (pointerType === "touch" && !hadPinch && !hadPan) {
+      // Fires only when neither a pinch nor an explicit drag happened
+      // (so genuine taps only). Two taps within TOUCH_DBLTAP_MS and
+      // TOUCH_DBLTAP_DIST_PX of each other → reset.
+      if (pointerType === "touch" && !hadPinch && !wasExplicitDrag) {
         const now = Date.now();
         if (lastTouchUp
             && now - lastTouchUp.t < TOUCH_DBLTAP_MS
