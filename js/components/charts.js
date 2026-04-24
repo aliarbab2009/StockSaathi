@@ -222,8 +222,24 @@ export function stockChart(ohlc, {
   xAxisRange = null,
 } = {}) {
   if (!ohlc.length) return "";
-  const allHighs = ohlc.map(k => k.h ?? k.c);
-  const allLows  = ohlc.map(k => k.l ?? k.c);
+  const useTimeAxis = xAxisRange && Number.isFinite(xAxisRange.fromMs) && Number.isFinite(xAxisRange.toMs) && xAxisRange.toMs > xAxisRange.fromMs;
+  // Y-AXIS AUTO-FIT: when xAxisRange narrows the visible time window (user
+  // has zoomed in), compute dataMin/dataMax from ONLY the candles in that
+  // window — not the whole day. Without this, zooming into a 30-minute
+  // slice where prices ranged ₹1340–₹1350 leaves the Y axis stretched to
+  // cover the whole day's ₹1300–₹1400 range and the zoomed candles
+  // collapse into 10% of the plot height. Every mainstream chart
+  // (TradingView, Yahoo Finance, Groww, Zerodha Kite) auto-fits Y this
+  // way. Fallback: if the visible window has fewer than 2 candles (e.g.
+  // pre-market dead space, or the user panned into a data-less region),
+  // use the full array so the axis is still sensible.
+  let visibleOhlc = ohlc;
+  if (useTimeAxis) {
+    const filtered = ohlc.filter(k => k.t >= xAxisRange.fromMs && k.t <= xAxisRange.toMs);
+    if (filtered.length >= 2) visibleOhlc = filtered;
+  }
+  const allHighs = visibleOhlc.map(k => k.h ?? k.c);
+  const allLows  = visibleOhlc.map(k => k.l ?? k.c);
   const dataMax = Math.max(...allHighs);
   const dataMin = Math.min(...allLows);
   const pad = (dataMax - dataMin) * 0.08 || dataMax * 0.01;
@@ -233,7 +249,6 @@ export function stockChart(ohlc, {
   const paddingLeft = 60, paddingRight = 56, paddingTop = 16, paddingBottom = 30;
   const plotW = width - paddingLeft - paddingRight;
   const plotH = height - paddingTop - paddingBottom;
-  const useTimeAxis = xAxisRange && Number.isFinite(xAxisRange.fromMs) && Number.isFinite(xAxisRange.toMs) && xAxisRange.toMs > xAxisRange.fromMs;
   // Two coordinate-mapping functions:
   //   toXi(i) — index-based (original behaviour, used for non-time-axis).
   //   toXt(t) — time-based (used when xAxisRange is set).

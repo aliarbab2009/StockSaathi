@@ -300,45 +300,49 @@ async function refreshHistory(inst, symbol) {
 }
 
 // Apply a zoom commit from chartZoom.js. Called on wheel-stop / pinch-end
-// / pan-end. Updates ui.zoom, swaps ui.interval if the granularity ladder
-// crosses a threshold (5m → 2m → 1m), triggers a fresh getHistory if
-// the interval changed, and re-renders. Scoped to 1D.
+// / pan-end. Updates ui.zoom state (which the next render uses to narrow
+// xAxisRange), and on 1D ALSO swaps ui.interval if the zoom level crosses
+// a granularity threshold (5m → 2m → 1m) and re-fetches. Works on every
+// timeframe now — non-1D TFs just narrow the visible window without
+// changing interval (Yahoo's constraints make per-TF interval ladders
+// fiddly; users still get meaningful zoom behaviour).
 async function applyZoomCommit(inst, symbol, next) {
-  if (ui.timeframe !== "1D") return;
   const newScale = next.scale;
   const newCenter = next.centerMs;
   const newManualPan = next.manualPan;
 
-  // Granularity ladder: 5m default → 2m at mid-zoom → 1m at max zoom.
-  // Defined in chartZoom.intervalForScale so the UI label in the reset
-  // pill can reuse the same mapping.
-  const newInterval = intervalForScale(newScale);
-  const curInterval = ui.interval ?? (TF_MAP["1D"]?.interval ?? "5m");
-  const intervalChanged = newInterval !== curInterval;
-
   // Persist state first so render() sees the new zoom.
   ui.zoom = { scale: newScale, centerMs: newCenter, manualPan: newManualPan };
-  // At scale 1 we fall back to the timeframe's default interval.
-  ui.interval = (newScale <= 1) ? null : newInterval;
 
-  if (intervalChanged) {
-    // Fire a fresh fetch for the new granularity. No skeleton flash —
-    // we reuse refreshHistory's "update in place" semantics. If the
-    // fetch is slow the old candles stay visible until it lands.
-    const myToken = _cancelToken;
-    if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} }
-    _historyAbortCtrl = new AbortController();
-    const sig = _historyAbortCtrl.signal;
-    try {
-      const tf = TF_MAP["1D"];
-      const h = await getHistory(symbol, tf.range, newInterval, { signal: sig });
-      if (sig.aborted || myToken.cancelled) return;
-      if (h?.ohlc?.length) {
-        liveHistory = h;
-        _prevLastDataMs = h.ohlc[h.ohlc.length - 1].t;
+  // Granularity ladder is 1D-only. On other timeframes the interval
+  // stays at TF_MAP[timeframe].interval; zoom just narrows the visible
+  // window over the existing candles, with Y-axis auto-fit doing the
+  // heavy lifting for visible-price-range refinement.
+  if (ui.timeframe === "1D") {
+    const newInterval = intervalForScale(newScale);
+    const curInterval = ui.interval ?? (TF_MAP["1D"]?.interval ?? "5m");
+    const intervalChanged = newInterval !== curInterval;
+    ui.interval = (newScale <= 1) ? null : newInterval;
+
+    if (intervalChanged) {
+      // Fire a fresh fetch for the new granularity. No skeleton flash —
+      // reuse refreshHistory's "update in place" semantics. If the
+      // fetch is slow the old candles stay visible until it lands.
+      const myToken = _cancelToken;
+      if (_historyAbortCtrl) { try { _historyAbortCtrl.abort(); } catch {} }
+      _historyAbortCtrl = new AbortController();
+      const sig = _historyAbortCtrl.signal;
+      try {
+        const tf = TF_MAP["1D"];
+        const h = await getHistory(symbol, tf.range, newInterval, { signal: sig });
+        if (sig.aborted || myToken.cancelled) return;
+        if (h?.ohlc?.length) {
+          liveHistory = h;
+          _prevLastDataMs = h.ohlc[h.ohlc.length - 1].t;
+        }
+      } catch (e) {
+        if (e?.name !== "AbortError") console.warn("[applyZoomCommit]", e?.message || e);
       }
-    } catch (e) {
-      if (e?.name !== "AbortError") console.warn("[applyZoomCommit]", e?.message || e);
     }
   }
   render(inst, symbol);
@@ -402,18 +406,22 @@ function render(inst, symbol) {
   // read ₹1365.20 while the 11:30 candle still showed its close of
   // ₹1362.80 until a new candle landed. Demo-day foot-gun.
   //
-  // Non-mutating derivation (see Explore agent P2): mutating
-  // liveHistory.ohlc[N-1] would fight the 30 s refreshHistory poll, which
-  // replaces liveHistory with a fresh object from getHistory and would
-  // silently reset any in-place write. Deriving a fresh array inside
-  // render() runs on every quote tick AND every poll landing — both
-  // paths produce a chart that agrees with the header at render time.
+  // Non-mutating derivation: mutating liveHistory.ohlc[N-1] would fight
+  // the 30 s refreshHistory poll, which replaces liveHistory with a
+  // fresh object from getHistory and would silently reset any in-place
+  // write. Deriving a fresh array inside render() runs on every quote
+  // tick AND every poll landing — both paths produce a chart that
+  // agrees with the header at render time.
   //
-  // Scoped to 1D intraday: on 1W/1M/1Y the daily candles already carry
-  // today's live close at the upstream level, and mutating them would
-  // re-shuffle the Y axis every 12 s for zero visible benefit.
+  // Applied on EVERY non-MF timeframe now (was 1D-only): on 1W/1M/etc.
+  // the last 30m / daily candle also becomes live-ticking, so the
+  // "header vs chart" invariant holds regardless of the selected TF.
+  // The earlier concern about Y-axis reflow on daily candles is now
+  // moot — Y-auto-fit operates on the visible window only, so a 0.1%
+  // tick on a month-scale view is invisible, and on a heavy zoom the
+  // same tick would show on 1D too (fundamental zoom behaviour).
   let chartOhlc = history;
-  if (liveQuote?.pricePaise && history.length && ui.timeframe === "1D") {
+  if (liveQuote?.pricePaise && history.length && inst.kind !== "MF") {
     const last = history[history.length - 1];
     const lp = liveQuote.pricePaise;
     chartOhlc = history.slice(0, -1).concat([{
@@ -425,40 +433,63 @@ function render(inst, symbol) {
   }
   const closes = chartOhlc.map(k => k.c);
 
-  // For the 1D timeframe during the trading day (and 30 minutes after
-  // close to avoid a jarring axis-reflow at 15:30 sharp), compute the
-  // time range 09:15 IST → 15:30 IST so the chart spans the full
-  // session and "draws itself" left-to-right as the day progresses.
+  // sessionWindow — the "full bounds" the zoom gesture engine operates on.
+  // Computed for every timeframe so zoom works everywhere, not just 1D:
   //
-  // When the user has zoomed in (ui.zoom.scale > 1), the visible window
-  // shrinks to totalSpan/scale centered on ui.zoom.centerMs. The window
-  // is clamped so it never slides past 09:15 or 15:30 — dragging the
-  // right edge past 15:30 just pushes the center left until it fits.
-  //
-  // Other timeframes / holidays / late post-close fall back to the
-  // chart's default index-based mapping (zoom quietly disables).
+  //   1D in-window: 09:15 → 15:30 IST today (intraday market hours).
+  //                 Chart ALWAYS uses time-axis here so the chart draws
+  //                 left→right as the day progresses.
+  //   1D out-of-window / weekend / holiday: null — no zoom.
+  //   Non-1D (1W/1M/3M/6M/1Y): data-bounded. Covers the first-to-last
+  //                 candle's timestamps. Chart uses its original
+  //                 index-based mapping at scale=1 (cleaner — no
+  //                 overnight / weekend gaps to confuse the user), and
+  //                 switches to time-axis only when the user actually
+  //                 zooms in.
   let chartXAxisRange = null;
-  let sessionWindow = null;   // exposed to the zoom engine as full-range bounds
-  if (ui.timeframe === "1D" && inst.kind !== "MF") {
-    const win = todaysMarketWindowMs();
-    if (win) {
-      const POST_CLOSE_GRACE_MS = 30 * 60 * 1000;
-      const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
-      const isWeekday = !win.isWeekend;
-      if (inWindow && isWeekday) {
-        sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
-        if (ui.zoom.scale <= 1) {
-          chartXAxisRange = { fromMs: win.fromMs, toMs: win.toMs };
-        } else {
-          const totalSpan = win.toMs - win.fromMs;
-          const span = totalSpan / ui.zoom.scale;
-          let center = ui.zoom.centerMs ?? (win.fromMs + totalSpan / 2);
-          let vFrom = center - span / 2;
-          let vTo   = center + span / 2;
-          if (vFrom < win.fromMs) { vTo += (win.fromMs - vFrom); vFrom = win.fromMs; }
-          if (vTo > win.toMs)     { vFrom -= (vTo - win.toMs); vTo = win.toMs; }
-          chartXAxisRange = { fromMs: vFrom, toMs: vTo };
+  let sessionWindow = null;
+  if (inst.kind !== "MF") {
+    if (ui.timeframe === "1D") {
+      const win = todaysMarketWindowMs();
+      if (win) {
+        const POST_CLOSE_GRACE_MS = 30 * 60 * 1000;
+        const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
+        const isWeekday = !win.isWeekend;
+        if (inWindow && isWeekday) {
+          sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
         }
+      }
+    } else if (chartOhlc.length >= 2) {
+      // Data-bounded window for non-1D timeframes. Uses chartOhlc (the
+      // live-injected array) so the window right-edge tracks the live
+      // tip on 1W just like it does on 1D.
+      sessionWindow = {
+        fromMs: chartOhlc[0].t,
+        toMs: chartOhlc[chartOhlc.length - 1].t,
+      };
+    }
+  }
+
+  // chartXAxisRange — what gets passed to stockChart, controlling the
+  // visible time window. Decides between time-axis and index-axis rendering:
+  //   1D in-window: ALWAYS time-axis (even at scale=1, so the session
+  //                 frame shows 09:15→15:30 regardless of elapsed time).
+  //   Non-1D scale=1: null → index-axis (cleaner multi-day view).
+  //   Any scale > 1: time-axis shrunk to the zoom window.
+  if (sessionWindow) {
+    const mustUseTimeAxis = (ui.timeframe === "1D") || (ui.zoom.scale > 1);
+    if (mustUseTimeAxis) {
+      if (ui.zoom.scale <= 1) {
+        chartXAxisRange = { fromMs: sessionWindow.fromMs, toMs: sessionWindow.toMs };
+      } else {
+        const totalSpan = sessionWindow.toMs - sessionWindow.fromMs;
+        const span = totalSpan / ui.zoom.scale;
+        let center = ui.zoom.centerMs ?? (sessionWindow.fromMs + totalSpan / 2);
+        let vFrom = center - span / 2;
+        let vTo   = center + span / 2;
+        if (vFrom < sessionWindow.fromMs) { vTo += (sessionWindow.fromMs - vFrom); vFrom = sessionWindow.fromMs; }
+        if (vTo > sessionWindow.toMs)     { vFrom -= (vTo - sessionWindow.toMs); vTo = sessionWindow.toMs; }
+        chartXAxisRange = { fromMs: vFrom, toMs: vTo };
       }
     }
   }
@@ -545,7 +576,7 @@ function render(inst, symbol) {
           <div style="display:flex; gap:4px;">
             ${TF_ORDER.map(tf => `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${tf}</button>`).join("")}
           </div>
-          ${ui.zoom.scale > 1 && ui.timeframe === "1D" ? `
+          ${ui.zoom.scale > 1 ? `
             <button class="btn btn-ghost btn-sm" id="zoom-reset-btn" title="Reset chart zoom" style="font-size: 11px; padding: 4px 10px;">↻ Reset zoom (${ui.zoom.scale.toFixed(1)}×${ui.interval ? ` · ${ui.interval}` : ""})</button>
           ` : ""}
           ${inst.kind !== "MF" ? `
@@ -787,10 +818,11 @@ async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
 function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessionWindow) {
   main.querySelectorAll(".tf-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      // Zoom is a 1D-only concept — reset it whenever the user leaves 1D
-      // or reselects 1D fresh (the new timeframe load shouldn't inherit
-      // a stale zoom from a previous interval/center combo).
-      if (ui.timeframe !== btn.dataset.tf || btn.dataset.tf !== "1D") {
+      // Every TF switch resets zoom: each timeframe has its own data
+      // range and centerMs from the previous TF would land off-range
+      // or outside the new sessionWindow. Starting fresh at scale=1
+      // always keeps the post-switch view sensible.
+      if (ui.timeframe !== btn.dataset.tf) {
         ui.zoom = { scale: 1, centerMs: null, manualPan: false };
         ui.interval = null;
       }
