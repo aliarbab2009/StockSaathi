@@ -13,6 +13,7 @@ import { mountAiExplainer } from "./features/aiExplainer.js";
 import { mountCommandPalette, openCommandPalette } from "./components/commandPalette.js";
 import { startServerTimeSync } from "./data/serverTime.js";
 import { mountMarketStatusPopover } from "./features/marketStatusPopover.js";
+import { ensureUniverseLoaded } from "./data/universe.js";
 
 // Theme ASAP to avoid flash
 (function applyTheme() {
@@ -26,6 +27,12 @@ switchUser();
 // Kick off the server-time sync early so the market-status badge has a
 // trusted clock within a second of first paint. Non-blocking.
 startServerTimeSync();
+
+// Kick the Tier-2 universe fetch (universeFull.json, ~2700 rows / ~90 KB
+// brotli'd). Non-blocking — pages can render curated-only immediately and
+// listen for the ss:universe-loaded event to re-render when Tier-2 lands.
+// SW-cached, so subsequent loads are free.
+ensureUniverseLoaded();
 
 // Mount components
 mountNav();
