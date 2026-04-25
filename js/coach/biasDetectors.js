@@ -119,6 +119,10 @@ export function detectSectorBias({ holdingsAfter, portfolioValue }) {
   for (const [sym, h] of Object.entries(holdingsAfter)) {
     const inst = getInstrument(sym);
     if (!inst) continue;
+    // Skip Tier-2 stub holdings — they all carry sector="Unknown" by
+    // default, which would otherwise merge unrelated stocks into one
+    // pseudo-sector and trigger a false sector_concentration signal.
+    if (inst._stub) continue;
     const px = getPriceAt(sym, 0);
     const v = Math.round(h.qty * px);
     const key = inst.sector || "Unknown";

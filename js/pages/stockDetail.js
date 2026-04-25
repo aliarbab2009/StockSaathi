@@ -212,7 +212,11 @@ export function renderStockDetail(main, params) {
 
   // Stock intro coach (non-blocking, first view only)
   const existing = getState().coachMessages.some(m => m.eventType === "STOCK_INTRO" && m.triggerSymbol === symbol);
-  if (!existing) {
+  // Suppress STOCK_INTRO for Tier-2 stub instruments — the template reads
+  // inst.name / inst.sector / inst.pe and would otherwise persist
+  // "{SYMBOL} is a Unknown company. P/E is —, ..." permanently into
+  // state.coachMessages, polluting the coach feed with gibberish.
+  if (!existing && !inst._stub) {
     coach({ type: "STOCK_INTRO", symbol, instrument: inst }).then(msg => {
       if (myToken.cancelled) return;
       msg.triggerSymbol = symbol;

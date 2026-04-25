@@ -18,11 +18,20 @@ import { getState } from "../state.js";
 
 const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;
-const FETCH_TIMEOUT_MS = 10_000;
+// 7s, not 10s: the live-quote poll fires every 10s, so a 10s timeout would
+// allow a stuck request to still be in flight when its successor launches —
+// they pile up and share connections. 7s leaves a 3s gap so each tick is
+// firmly resolved or aborted before the next one fires.
+const FETCH_TIMEOUT_MS = 7_000;
 // Keep each upstream batch safely under /api/live-quote's MAX_SYMBOLS=80 and
 // /api/quotes's matching 60 cap. Callers can pass the entire universe and
 // getQuoteBatch auto-chunks so no page needs its own waving logic.
 const MAX_BATCH_SIZE = 60;
+// Cap concurrent in-flight chunks. With 2700 symbols and 60-per-chunk that
+// would otherwise fan out to 45 simultaneous fetches via Promise.all,
+// saturating Chrome's 6-per-host limit and creating head-of-line blocking.
+// 4 keeps the pipeline saturated without thrashing.
+const MAX_CONCURRENT_CHUNKS = 4;
 // Bumped v2 → v3: v2 had pre-split Reliance etc cached for up to 14 days; we
 // evict the lot so nobody paints with 2024-era numbers after the SW refresh.
 const QUOTE_PERSIST_KEY = "ss.quotes.v3";
@@ -34,12 +43,23 @@ const PERSIST_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const _quoteCache = new Map();
 const _historyCache = new Map();
 const _fundamentalsCache = new Map();
+// Sidecar tracking last-access timestamp for every symbol in _quoteCache.
+// persistSoon truncates localStorage to the hottest 200 symbols so the
+// 800ms-debounced JSON.stringify doesn't choke at 2700 symbols (~600 KB
+// per write blocking the main thread). _touchQuote bumps the timestamp on
+// every cache write OR read of a symbol's quote.
+const _quoteAccessTs = new Map();
+const PERSIST_MAX_SYMBOLS = 200;
+function _touchQuote(sym) { _quoteAccessTs.set(sym, Date.now()); }
+
 // Per-symbol rolling buffer of {t, price} points built from live quotes as
 // they arrive. Lets Markets-grid sparklines show the actual intraday move
 // instead of a seeded year-long walk. Capped so memory stays bounded during
-// long-lived sessions.
+// long-lived sessions. INTRADAY_SYMBOLS_MAX caps distinct symbol keys (LRU
+// eviction in _appendIntraday); INTRADAY_BUFFER_MAX caps points per symbol.
 const _intradayBuffer = new Map();
-const INTRADAY_BUFFER_MAX = 200;
+const INTRADAY_SYMBOLS_MAX = 200;        // distinct symbols held — LRU evicts beyond
+const INTRADAY_BUFFER_MAX = 200;         // points per symbol
 const INTRADAY_MIN_POINTS = 6;
 
 // ---------- localStorage cache so the page paints with REAL prices instantly
@@ -71,10 +91,21 @@ function persistSoon() {
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
     try {
+      // Truncate to the hottest PERSIST_MAX_SYMBOLS by last-access ts.
+      // Symbols never touched fall back to ts=0 and sort to the bottom, so
+      // they're naturally evicted when the universe is wide. This keeps
+      // localStorage writes under ~50 KB regardless of universe size.
+      const ranked = [];
+      for (const sym of _quoteCache.keys()) {
+        ranked.push([sym, _quoteAccessTs.get(sym) || 0]);
+      }
+      ranked.sort((a, b) => b[1] - a[1]);
+      const keep = ranked.slice(0, PERSIST_MAX_SYMBOLS);
       const obj = {};
       const now = Date.now();
-      for (const [sym, entry] of _quoteCache.entries()) {
-        if (entry.data) obj[sym] = { data: entry.data, savedAt: now };
+      for (const [sym] of keep) {
+        const entry = _quoteCache.get(sym);
+        if (entry?.data) obj[sym] = { data: entry.data, savedAt: now };
       }
       localStorage.setItem(QUOTE_PERSIST_KEY, JSON.stringify(obj));
     } catch {}
@@ -158,9 +189,21 @@ function normalizeFromApi(payload, symbol) {
 function _appendIntraday(symbol, ts, pricePaise) {
   if (!Number.isFinite(pricePaise)) return;
   let buf = _intradayBuffer.get(symbol);
-  if (!buf) {
+  if (buf) {
+    // Touch: re-insert moves the symbol to the tail of insertion order so
+    // the head is always the least-recently-touched (LRU eviction target).
+    _intradayBuffer.delete(symbol);
+    _intradayBuffer.set(symbol, buf);
+  } else {
     buf = [];
     _intradayBuffer.set(symbol, buf);
+    // Evict the least-recently-touched buffer once we exceed the symbol cap.
+    // At ~50 KB per filled buffer × 200 cap = ~10 MB resident, vs ~135 MB if
+    // 2700 symbols all populated. Caps memory across long-lived sessions.
+    if (_intradayBuffer.size > INTRADAY_SYMBOLS_MAX) {
+      const oldest = _intradayBuffer.keys().next().value;
+      if (oldest !== undefined) _intradayBuffer.delete(oldest);
+    }
   }
   // De-dupe consecutive identical prices — no visual value in recording the
   // same close twice, and Yahoo sometimes repeats between ticks.
@@ -223,6 +266,7 @@ export async function getQuote(symbol, opts = {}) {
   const apiQuote = normalizeFromApi(apiRes, symbol);
   if (apiQuote) {
     _quoteCache.set(symbol, { data: apiQuote, ts: Date.now() });
+    _touchQuote(symbol);
     persistSoon();
     return apiQuote;
   }
@@ -231,6 +275,7 @@ export async function getQuote(symbol, opts = {}) {
   const fallback = await fetchYahooQuote(symbol).catch(() => null);
   if (fallback) {
     _quoteCache.set(symbol, { data: fallback, ts: Date.now() });
+    _touchQuote(symbol);
     persistSoon();
     return fallback;
   }
@@ -238,6 +283,7 @@ export async function getQuote(symbol, opts = {}) {
   // 3. Synthetic last resort — marked stale so UI can flag it
   const synth = synthQuote(symbol);
   _quoteCache.set(symbol, { data: synth, ts: Date.now() });
+  _touchQuote(symbol);
   return synth;
 }
 
@@ -246,16 +292,37 @@ export async function getQuoteBatch(symbols) {
   const uniq = [...new Set(symbols)];
 
   // Auto-chunk when callers pass more than one upstream's worth of symbols.
-  // Chunks fire in parallel — whichever lands first paints its cards first.
+  // Cap concurrency so a 2700-symbol fan-out doesn't burst 45 simultaneous
+  // fetch() calls and starve the browser's per-host connection pool. 4 in
+  // flight keeps the pipeline saturated without head-of-line blocking.
   if (uniq.length > MAX_BATCH_SIZE) {
     const chunks = [];
     for (let i = 0; i < uniq.length; i += MAX_BATCH_SIZE) {
       chunks.push(uniq.slice(i, i + MAX_BATCH_SIZE));
     }
-    const results = await Promise.all(chunks.map(c => _getQuoteBatchInner(c)));
+    const results = await _runWithLimit(chunks, MAX_CONCURRENT_CHUNKS, c => _getQuoteBatchInner(c));
     return Object.assign({}, ...results);
   }
   return _getQuoteBatchInner(uniq);
+}
+
+// Tiny p-limit-style runner: starts up to `limit` workers, each pulls the
+// next item until exhausted. Preserves input order in the result array.
+async function _runWithLimit(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function pump() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      try { results[i] = await worker(items[i], i); }
+      catch (e) { results[i] = {}; }   // swallow chunk failure, neighbours survive
+    }
+  }
+  const workers = [];
+  for (let k = 0; k < Math.min(limit, items.length); k++) workers.push(pump());
+  await Promise.all(workers);
+  return results;
 }
 
 async function _getQuoteBatchInner(uniq) {
@@ -281,6 +348,7 @@ async function _getQuoteBatchInner(uniq) {
           if (norm) {
             out[s] = norm;
             _quoteCache.set(s, { data: norm, ts: Date.now() });
+            _touchQuote(s);
             any = true;
           }
         }
@@ -294,7 +362,7 @@ async function _getQuoteBatchInner(uniq) {
   // Serve from cache first
   for (const s of uniq) {
     const c = _quoteCache.get(s);
-    if (c && Date.now() - c.ts < QUOTE_TTL_MS) out[s] = c.data;
+    if (c && Date.now() - c.ts < QUOTE_TTL_MS) { out[s] = c.data; _touchQuote(s); }
     else need.push(s);
   }
   if (!need.length) return out;
@@ -311,6 +379,7 @@ async function _getQuoteBatchInner(uniq) {
         if (norm) {
           out[s] = norm;
           _quoteCache.set(s, { data: norm, ts: Date.now() });
+          _touchQuote(s);
           any = true;
         }
       }
@@ -382,18 +451,74 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
 
 // ---------- Live polling ---------------------------------------------------
 
+// Accepts EITHER a fixed symbols array (legacy callers like portfolio.js and
+// stockDetail.js) OR a () => string[] callback (Markets grid: viewport-only
+// set). The callback is invoked at the start of every tick so the polled
+// set tracks scroll/filter changes without re-subscribing. Returning an
+// empty list is fine — it just skips the tick.
+//
+// Behaviours layered on top:
+//   * document.hidden gate — ticks skipped while tab is in background; one
+//     tick fires immediately on visibilitychange so users coming back don't
+//     stare at stale numbers.
+//   * Inflight guard — if a previous getQuoteBatch is still pending when
+//     interval fires, skip rather than stack (compounds under slow networks).
+//   * AbortError-aware — never crashes the polling loop on a network blip.
 export function subscribeToQuotes(symbols, onUpdate, intervalMs = 10_000) {
-  if (!symbols?.length) return () => {};
+  const isCallback = typeof symbols === "function";
+  if (!isCallback && !symbols?.length) return () => {};
+
   let cancelled = false;
+  let inflight = null;
+  let timer = null;
+
+  function currentSymbols() {
+    if (isCallback) {
+      try {
+        const out = symbols() || [];
+        return Array.isArray(out) ? out : [];
+      } catch { return []; }
+    }
+    return symbols;
+  }
+
   async function tick() {
     if (cancelled) return;
-    const quotes = await getQuoteBatch(symbols);
-    if (cancelled) return;
-    onUpdate(quotes);
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (inflight) return;
+    const syms = currentSymbols();
+    if (!syms.length) return;
+    const p = (async () => {
+      try {
+        const quotes = await getQuoteBatch(syms);
+        if (!cancelled) onUpdate(quotes);
+      } catch (e) {
+        if (e?.name !== "AbortError") console.warn("[poll]", e?.message || e);
+      }
+    })();
+    inflight = p;
+    try { await p; } finally {
+      if (inflight === p) inflight = null;
+    }
   }
+
+  function onVisibility() {
+    if (cancelled) return;
+    if (!document.hidden) tick();
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisibility);
+  }
+
   tick();
-  const h = setInterval(tick, intervalMs);
-  return () => { cancelled = true; clearInterval(h); };
+  timer = setInterval(tick, intervalMs);
+  return () => {
+    cancelled = true;
+    if (timer) clearInterval(timer);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibility);
+    }
+  };
 }
 
 export function quoteAge(quote) {

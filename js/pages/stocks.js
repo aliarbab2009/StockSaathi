@@ -27,15 +27,22 @@ let _debounceTimer = null;
 // filter predicates applied against the full-universe row shape.
 const CAP_KEYWORDS = {
   largecap: ["mega", "large"], "large cap": ["mega", "large"], "large-cap": ["mega", "large"],
+  "tier 1": ["mega", "large"], "tier1": ["mega", "large"], "top tier": ["mega", "large"],
   midcap: ["mid"], "mid cap": ["mid"], "mid-cap": ["mid"],
+  "tier 2": ["mid"], "tier2": ["mid"], "second tier": ["mid"],
   smallcap: ["small", "micro"], "small cap": ["small", "micro"], "small-cap": ["small", "micro"],
+  "low cap": ["small", "micro"], "low-cap": ["small", "micro"],
+  microcap: ["micro"], "micro cap": ["micro"], "micro-cap": ["micro"],
+  penny: ["micro"], "penny stock": ["micro"],
   bluechip: ["mega"], "blue chip": ["mega"], "blue-chip": ["mega"],
-  nifty50: ["mega"], "nifty 50": ["mega"],
+  nifty50: ["mega"], "nifty 50": ["mega"], "top 50": ["mega"], "top 100": ["mega", "large"],
 };
 const RISK_KEYWORDS = {
   safe: "low", stable: "low", defensive: "low", steady: "low",
+  conservative: "low", boring: "low", "low risk": "low", "low-risk": "low",
   risky: "high", volatile: "high", speculative: "high", aggressive: "high",
-  moderate: "med",
+  punt: "high", "high risk": "high", "high-risk": "high", momentum: "high",
+  moderate: "med", balanced: "med", "medium risk": "med",
 };
 
 export function renderStocks(main) {
@@ -57,9 +64,14 @@ export function renderStocks(main) {
 
   // Source list depends on the kind pill:
   //   - "ALL_NSE" → full merged universe (~2700 rows, Tier 1 + Tier 2)
+  //   - "ETF" → full universe (ETFs only live in Tier 2)
+  //   - "watchlist" → full universe (otherwise watchlisted Tier-2 symbols
+  //     vanish from the grid even though they're persisted to Supabase)
   //   - everything else → curated-only (~127 rows, fast render)
   function source() {
-    return filter.kind === "ALL_NSE" ? getAllInstruments() : INSTRUMENTS;
+    return (filter.kind === "ALL_NSE" || filter.kind === "ETF" || filter.kind === "watchlist")
+      ? getAllInstruments()
+      : INSTRUMENTS;
   }
 
   // Prefill from in-memory cache SYNCHRONOUSLY so the very first paint
@@ -182,8 +194,9 @@ export function renderStocks(main) {
 
       <div class="filter-pills" style="margin-bottom: var(--sp-3);">
         <button class="filter-pill ${filter.kind === "all" ? "active" : ""}" data-kind="all">Featured</button>
-        <button class="filter-pill ${filter.kind === "ALL_NSE" ? "active" : ""}" data-kind="ALL_NSE">All NSE (${allInst.length})</button>
+        <button class="filter-pill ${filter.kind === "ALL_NSE" ? "active" : ""}" data-kind="ALL_NSE">All NSE (${allInst.length > INSTRUMENTS.length ? allInst.length : "…"})</button>
         <button class="filter-pill ${filter.kind === "EQUITY" ? "active" : ""}" data-kind="EQUITY">Stocks</button>
+        <button class="filter-pill ${filter.kind === "ETF" ? "active" : ""}" data-kind="ETF">ETFs (${allInst.filter(i => i.kind === "ETF").length || "…"})</button>
         <button class="filter-pill ${filter.kind === "MF" ? "active" : ""}" data-kind="MF">Mutual Funds</button>
         <button class="filter-pill ${filter.kind === "watchlist" ? "active" : ""}" data-kind="watchlist">★ Watchlist (${state.watchlist.length})</button>
       </div>
@@ -194,7 +207,7 @@ export function renderStocks(main) {
 
       <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-        : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state, wlSet)).join("")}</div>${truncated ? `<div class="flex justify-center" style="margin-top: var(--sp-4); gap: 8px;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
+        : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state, wlSet)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
     `;
 
     const searchEl = main.querySelector("#stocks-search");
@@ -229,8 +242,10 @@ export function renderStocks(main) {
       visibleCount = PAGE_SIZE;
       render();
     }));
-    main.querySelector("#stocks-show-more")?.addEventListener("click", () => { visibleCount += PAGE_SIZE; render(); });
-    main.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = 1e9; render(); });
+    // Show more / Show all rebuild only the grid (renderList) — no need to
+    // tear down the toolbar + themed-select on every pagination click.
+    main.querySelector("#stocks-show-more")?.addEventListener("click", () => { visibleCount += PAGE_SIZE; renderList(); });
+    main.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = 1e9; renderList(); });
     main.querySelectorAll(".stock-card").forEach(card => {
       card.addEventListener("click", (e) => {
         if (e.target.closest(".watchlist-toggle")) return;
@@ -290,7 +305,7 @@ export function renderStocks(main) {
     const truncated = fullList.length > list.length;
     host.innerHTML = list.length === 0
       ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-      : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state, wlSet)).join("")}</div>${truncated ? `<div class="flex justify-center" style="margin-top: var(--sp-4); gap: 8px;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`;
+      : `<div class="stocks-grid">${list.map(inst => renderStockCard(inst, state, wlSet)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`;
     // Re-wire the per-card listeners since the grid innerHTML was replaced.
     host.querySelectorAll(".stock-card").forEach(card => {
       card.addEventListener("click", (e) => {
@@ -369,29 +384,63 @@ function buildAiSearchCandidates(query) {
     const sl = s.toLowerCase();
     if (sl && sl !== "other" && q.includes(sl)) sectorHints.add(s);
   }
-  // Broader keyword → sector aliases that NSE doesn't name directly
+  // Broader keyword → sector aliases that NSE doesn't name directly.
+  // NOTE: each value MUST be a sector string that actually exists in the
+  // universe (curated.js + universeFull.json). Banking/Pharma/Insurance are
+  // curated-only — Tier-2 banks fall back to "Other" so the keyword still
+  // helps narrow the curated subset.
   const SECTOR_ALIASES = {
-    bank: "Banking", banks: "Banking", banking: "Banking",
-    pharma: "Pharma", pharmaceutical: "Pharma", drug: "Pharma",
-    it: "IT Services", tech: "IT Services", software: "IT Services",
-    auto: "Auto", car: "Auto", motor: "Auto", vehicle: "Auto",
-    fmcg: "FMCG", consumer: "Consumer",
-    metal: "Metals", steel: "Metals",
-    oil: "Energy", gas: "Energy", energy: "Energy",
-    power: "Power", electric: "Power",
-    realty: "Real Estate", "real estate": "Real Estate", property: "Real Estate",
+    bank: "Banking", banks: "Banking", banking: "Banking", psu: "Banking",
+    pharma: "Pharma", pharmaceutical: "Pharma", drug: "Pharma", medicine: "Pharma",
+    it: "IT Services", tech: "IT Services", software: "IT Services", saas: "IT Services",
+    auto: "Auto", car: "Auto", motor: "Auto", vehicle: "Auto", "ev": "Auto", "electric vehicle": "Auto",
+    fmcg: "FMCG", consumer: "Consumer", "consumer goods": "FMCG",
+    "consumer electronics": "Consumer Elec", appliance: "Consumer Elec", electronic: "Consumer Elec",
+    metal: "Metals", steel: "Metals", aluminium: "Metals", copper: "Metals", mining: "Metals",
+    oil: "Energy", gas: "Energy", energy: "Energy", petroleum: "Energy", refinery: "Energy",
+    power: "Power", electric: "Power", utility: "Power", utilities: "Power", renewable: "Power", solar: "Power",
+    realty: "Real Estate", "real estate": "Real Estate", property: "Real Estate", housing: "Real Estate",
     cement: "Cement",
-    telecom: "Telecom", mobile: "Telecom",
+    telecom: "Telecom", mobile: "Telecom", "5g": "Telecom",
     insurance: "Insurance",
-    finance: "NBFC", nbfc: "NBFC", lending: "NBFC",
-    chemical: "Chemicals",
-    infrastructure: "Infrastructure", infra: "Infrastructure",
-    airline: "Aviation", aviation: "Aviation",
-    retail: "Retail", ecommerce: "Internet", internet: "Internet",
-    healthcare: "Healthcare", hospital: "Healthcare",
+    finance: "NBFC", nbfc: "NBFC", lending: "NBFC", financial: "NBFC", financier: "NBFC",
+    chemical: "Chemicals", specialty: "Chemicals",
+    fertilizer: "Chemicals", fertiliser: "Chemicals", agro: "Chemicals", agri: "Chemicals",
+    paint: "Chemicals", agrochemical: "Chemicals",
+    infrastructure: "Construction", infra: "Construction",
+    construction: "Construction", builder: "Construction", "epc": "Construction",
+    shipping: "Services", shipyard: "Services", port: "Services", logistics: "Services",
+    courier: "Services", warehouse: "Services", transport: "Services", "supply chain": "Services",
+    media: "Services", broadcaster: "Services", entertainment: "Services",
+    travel: "Services", hotel: "Services", hospitality: "Services", tourism: "Services",
+    airline: "Services", aviation: "Services",
+    retail: "Services", ecommerce: "Services", internet: "Services",
+    healthcare: "Healthcare", hospital: "Healthcare", diagnostic: "Healthcare", clinic: "Healthcare",
+    diversified: "Conglomerate", conglomerate: "Conglomerate",
+    etf: "ETF", "exchange traded": "ETF", "index fund": "ETF",
   };
   for (const [kw, sec] of Object.entries(SECTOR_ALIASES)) {
     if (q.includes(kw)) sectorHints.add(sec);
+  }
+
+  // 1b) Parse numeric hints — "PE < 30", "P/E under 20", "yield > 2%", "yield over 3",
+  //     "beta below 1". These are precise signals the LLM has to otherwise
+  //     infer from the table — turning them into hard filters cuts the
+  //     candidate pool, lifts result quality, and stops wasting the model's
+  //     reasoning budget on arithmetic.
+  const numHints = parseNumericHints(q);
+  // "cheap" / "expensive" qualitative cues map to PE/PB ranges so a query
+  // like "cheap pharma" filters with PE<=18 instead of relying on the LLM.
+  if (numHints.peMax == null && /\b(cheap|undervalued|low pe|low p\/e|value)\b/.test(q)) {
+    numHints.peMax = 18;
+  }
+  if (numHints.peMin == null && /\b(expensive|overvalued|premium|growth|growth stock)\b/.test(q)) {
+    numHints.peMin = 35;
+  }
+  // "dividend payers" / "high dividend" / "income" — the LLM is bad at
+  // numeric comparisons across 150 rows; pin it.
+  if (numHints.divMin == null && /\b(dividend payer|dividend payers|high dividend|high yield|income stock|income stocks|payer)\b/.test(q)) {
+    numHints.divMin = 1.5;
   }
 
   // 2) Prefilter
@@ -399,6 +448,12 @@ function buildAiSearchCandidates(query) {
   if (sectorHints.size) pool = pool.filter(i => sectorHints.has(i.sector));
   if (capHints.size) pool = pool.filter(i => capHints.has(byCap.get(i.symbol)));
   if (riskHints.size) pool = pool.filter(i => riskHints.has(i.risk || "med"));
+  // Numeric filters are tolerant: rows missing the field pass through (Tier-2
+  // typically has null pe/pb/divYield) so we don't over-prune the universe.
+  if (numHints.peMax != null)  pool = pool.filter(i => i.pe == null || i.pe <= numHints.peMax);
+  if (numHints.peMin != null)  pool = pool.filter(i => i.pe == null || i.pe >= numHints.peMin);
+  if (numHints.divMin != null) pool = pool.filter(i => i.divYield == null || i.divYield >= numHints.divMin);
+  if (numHints.betaMax != null) pool = pool.filter(i => i.beta == null || i.beta <= numHints.betaMax);
 
   // 3) Rank by index prominence (Nifty50 first, then 100, 500, midcap, smallcap, rest)
   // Higher idx bits = more prominent; sort desc. Fall back to name-length
@@ -419,11 +474,10 @@ function buildAiSearchCandidates(query) {
   const TOP = 150;
   return pool.slice(0, TOP).map(i => {
     const q2 = quoteCache[i.symbol];
-    return {
+    const row = {
       symbol: i.symbol,
       name: i.name,
       sector: i.sector || "",
-      marketCap: i.marketCap || "",
       pe: i.pe ?? null,
       pb: i.pb ?? null,
       divYield: i.divYield ?? null,
@@ -431,7 +485,33 @@ function buildAiSearchCandidates(query) {
       risk: i.risk || "",
       dayPct: q2?.changePct != null ? q2.changePct * 100 : null,
     };
+    // Only include marketCap when populated (curated rows). Tier-2 rows ship
+    // it as "" — sending an empty field for ~140 rows wastes ~280 tokens
+    // for nothing.
+    if (i.marketCap) row.marketCap = i.marketCap;
+    return row;
   });
+}
+
+// Pulls "PE < 30", "P/E under 20", "yield > 2%", "beta below 1.2" etc. out
+// of a free-text query. Returns an object with {peMin, peMax, divMin,
+// betaMax} where each is a number or undefined. Bounds are clamped to
+// sensible ranges so a typo can't silently kill the candidate pool.
+function parseNumericHints(q) {
+  const out = {};
+  const num = (s) => { const n = Number(s); return isFinite(n) ? n : null; };
+  // PE: "pe < 30", "p/e under 20", "pe below 25", "pe over 40"
+  const peLt = q.match(/p\/?e\s*(?:<|under|below|less than|max|<=)\s*(\d+(?:\.\d+)?)/);
+  if (peLt) { const n = num(peLt[1]); if (n != null && n > 0 && n < 500) out.peMax = n; }
+  const peGt = q.match(/p\/?e\s*(?:>|over|above|greater than|more than|min|>=)\s*(\d+(?:\.\d+)?)/);
+  if (peGt) { const n = num(peGt[1]); if (n != null && n >= 0 && n < 500) out.peMin = n; }
+  // Yield: "yield > 2", "yield over 3%", "dividend > 2"
+  const dyGt = q.match(/(?:yield|dividend)\s*(?:>|over|above|min|greater than|more than|>=)\s*(\d+(?:\.\d+)?)/);
+  if (dyGt) { const n = num(dyGt[1]); if (n != null && n >= 0 && n < 50) out.divMin = n; }
+  // Beta: "beta < 1", "beta below 1.2"
+  const beLt = q.match(/beta\s*(?:<|under|below|less than|max|<=)\s*(\d+(?:\.\d+)?)/);
+  if (beLt) { const n = num(beLt[1]); if (n != null && n > 0 && n < 5) out.betaMax = n; }
+  return out;
 }
 
 async function fetchMarketMood() {
@@ -494,6 +574,7 @@ function applyFilters(all, f, state, quoteCache) {
     const orderMap = new Map(aiSearch.matches.map((s, i) => [s, i]));
     let list = all.filter(i => orderMap.has(i.symbol));
     if (f.kind === "EQUITY") list = list.filter(i => i.kind === "EQUITY");
+    else if (f.kind === "ETF") list = list.filter(i => i.kind === "ETF");
     else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
     else if (f.kind === "watchlist") {
       const wl = new Set(state.watchlist);

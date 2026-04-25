@@ -124,12 +124,15 @@ export function getAllInstruments() {
 }
 
 // Full sector list — union of curated + Tier-2 sectors. Sorted, deduped.
+// Skips ETF kind because every ETF row carries sector="ETF" (a literal kind,
+// not a sector). Otherwise the sector-pill row would render an "ETF" button
+// alongside Banking/Pharma/etc. — confusing. ETFs get their own kind pill.
 export function getAllSectors() {
   if (!_fullBySymbol) return SECTORS;
   if (_sectorsCache) return _sectorsCache;
   const set = new Set(SECTORS);
   for (const r of Object.values(_fullBySymbol)) {
-    if (r.sector) set.add(r.sector);
+    if (r.sector && r.kind !== "ETF") set.add(r.sector);
   }
   _sectorsCache = [...set].sort();
   return _sectorsCache;

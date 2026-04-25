@@ -1258,15 +1258,34 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  /* Virtualization: tells Chromium to skip paint + style + layout for
-     cards outside the viewport. At ~2700 cards on /stocks All NSE this
-     is the difference between 40-60ms per scroll frame and 8-12ms on a
-     mid-range Android. contain-intrinsic-size gives the browser a
-     layout hint so off-screen cards still reserve the right scroll
-     height — 180px matches the real rendered height. Safari/Firefox
-     ignore both properties gracefully. */
-  content-visibility: auto;
-  contain-intrinsic-size: 0 180px;
+}
+/* Virtualization: tells Chromium to skip paint + style + layout for cards
+   outside the viewport. At ~2700 cards on /stocks All NSE this is the
+   difference between 40-60ms per scroll frame and 8-12ms on a mid-range
+   Android. contain-intrinsic-size reserves the right scroll height
+   (180px matches the real rendered card). iOS Safari shipped support in
+   18.0 (Sept 2024); older Safari falls into the @supports-not branch
+   below for a partial improvement (paint/layout containment without the
+   skip-when-offscreen behaviour). */
+@supports (content-visibility: auto) {
+  .stock-card {
+    content-visibility: auto;
+    contain-intrinsic-size: 0 180px;
+  }
+}
+@supports not (content-visibility: auto) {
+  .stock-card { contain: layout paint; }
+}
+/* Sector pill row + pagination row mobile compaction. */
+@media (max-width: 600px) {
+  .filter-pills { gap: 6px; }
+  .filter-pill { padding: 6px 10px; font-size: 12px; }
+}
+@media (max-width: 480px) {
+  /* Stack the "Show 100 more" + "Show all 2686" buttons full-width on
+     small screens so both labels are readable. */
+  .stocks-pager { flex-direction: column; align-items: stretch !important; }
+  .stocks-pager > .btn { width: 100%; }
 }
 .stock-card:hover {
   transform: translateY(-2px);

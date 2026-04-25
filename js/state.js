@@ -384,7 +384,10 @@ export function getHoldingsValue(state = getState()) {
   let total = 0;
   for (const [sym, h] of Object.entries(state.holdings)) {
     const px = getPriceAt(sym, 0);
-    if (px != null) total += Math.round(h.qty * px);
+    // Number.isFinite catches NaN (which `!= null` does not). A Tier-2
+    // holding with no price source must contribute 0, not NaN-poison the
+    // entire portfolio total — that would break the hero card with "₹NaN".
+    if (Number.isFinite(px)) total += Math.round(h.qty * px);
   }
   return total;
 }
@@ -400,6 +403,9 @@ export function getHoldingPLPaise(symbol, state = getState()) {
   const h = state.holdings[symbol];
   if (!h) return 0;
   const curPx = getPriceAt(symbol, 0);
+  // Guard against NaN/undefined from Tier-2 stubs with no price source —
+  // otherwise this would propagate NaN into portfolio totals via callers.
+  if (!Number.isFinite(curPx)) return 0;
   return Math.round((curPx - h.avgCostPaise) * h.qty);
 }
 export function getHoldingPLPct(symbol, state = getState()) {

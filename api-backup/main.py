@@ -139,9 +139,11 @@ _ROUTES = {
     "/api/quote": "quote",
     "/api/quotes": "quotes",
     "/api/live-quote": "live-quote",
+    "/api/universe-quotes": "universe-quotes",
     "/api/history": "history",
     "/api/fundamentals": "fundamentals",
     "/api/send-consent": "send-consent",
+    "/api/admin-sync-instruments": "admin-sync-instruments",
 }
 
 _METHODS = ["GET", "POST", "OPTIONS"]

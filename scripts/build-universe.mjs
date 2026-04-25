@@ -145,12 +145,24 @@ function splitCsvLine(line) {
 }
 
 // ─── Sector taxonomy mapping ─────────────────────────────────────────────────
-// NSE industry strings → StockSaathi's compact SECTORS vocab used by curated.js
-// and the UI filter pills. Anything unmapped lands in "Other".
+// NSE Indices uses a 4-tier classification: 12 Macro / 22 Sector / 59 Industry
+// / 197 Basic Industry. The Nifty Total Market CSV's "Industry" column is
+// actually the SECTOR tier (22 values) — every bank, NBFC, AMC, insurer,
+// exchange, and fintech ships as "Financial Services". We disambiguate via
+// symbol/name pattern below.
+//
+// See: https://www.niftyindices.com/docs/default-source/default-document-library/nse-indices_industry-classification-guideline-2023-07.pdf
+//
+// Output sectors must stay in the 27-value SECTORS vocab consumed by curated.js
+// and the UI filter pills (Auto, Aviation, Banking, Cement, Chemicals,
+// Conglomerate, Construction, Consumer, Consumer Elec, Energy, Exchange,
+// Fintech, FMCG, Food, Healthcare, Infrastructure, Insurance, Internet,
+// IT Services, Metals, NBFC, Pharma, Power, Real Estate, Retail, Services,
+// Telecom). Anything unresolved lands in "Other".
 const NSE_TO_SS_SECTOR = {
-  // Financials
-  "Banks": "Banking",
+  // Financials — coarse default; refineFinancialServices() splits by name.
   "Financial Services": "NBFC",
+  "Banks": "Banking",
   "Insurance": "Insurance",
   "Financial Institutions": "NBFC",
   "Capital Markets": "NBFC",
@@ -158,48 +170,201 @@ const NSE_TO_SS_SECTOR = {
   "Oil Gas & Consumable Fuels": "Energy",
   "Oil & Gas": "Energy",
   "Power": "Power",
+  "Utilities": "Power",
   // IT / Telecom
   "Information Technology": "IT Services",
   "IT - Software": "IT Services",
   "Telecom - Services": "Telecom",
   "Telecommunication": "Telecom",
-  // FMCG / Consumer
+  // FMCG / Consumer — Consumer Durables defaults to Consumer Elec (most
+  // appliances/electronics/lighting); jewellers/paints/furniture rerouted by
+  // name pattern in refineConsumerDurables().
   "Fast Moving Consumer Goods": "FMCG",
+  "Food Beverages & Tobacco": "FMCG",
   "Consumer Durables": "Consumer Elec",
-  "Consumer Services": "Consumer",
+  "Consumer Services": "Consumer",       // refineConsumerServices() splits.
   "Retailing": "Retail",
   "Realty": "Real Estate",
   // Materials
   "Metals & Mining": "Metals",
   "Cement & Cement Products": "Cement",
-  "Chemicals": "Chemicals",
   "Construction Materials": "Cement",
+  "Chemicals": "Chemicals",
   "Construction": "Construction",
+  "Capital Goods": "Infrastructure",     // turbines, machinery, defence kit.
   // Auto / Industrial
   "Automobile and Auto Components": "Auto",
   "Automobiles & Auto Components": "Auto",
-  "Capital Goods": "Construction",
-  // Healthcare
+  // Healthcare — Healthcare (sector) covers hospitals + pharma at this tier;
+  // refineHealthcare() routes drug-makers to Pharma by name pattern.
   "Healthcare": "Healthcare",
   "Pharmaceuticals": "Pharma",
-  // Services / transport
+  // Services / transport / media — Services bucket holds aviation, ports,
+  // logistics; refineServices() pulls airlines into Aviation, ports into
+  // Infrastructure.
   "Services": "Services",
   "Transport Services": "Services",
   "Transport Infrastructure": "Infrastructure",
   "Media Entertainment & Publication": "Services",
-  // Food
-  "Food Beverages & Tobacco": "FMCG",
-  // Forest / paper
+  // Misc
   "Forest Materials": "Other",
   "Paper Forest & Jute Products": "Other",
   "Textiles": "Other",
   "Diversified": "Conglomerate",
 };
 
-function mapSector(nseIndustry) {
-  if (!nseIndustry) return "Other";
-  const clean = nseIndustry.replace(/^"|"$/g, "").trim();
-  return NSE_TO_SS_SECTOR[clean] || "Other";
+// Symbol-level overrides — for the handful of names whose NSE sector clearly
+// misrepresents how curated.js / users think of them. Keep this list short.
+const SYMBOL_OVERRIDES = {
+  ADANIENT:  "Conglomerate",  // NSE: Metals & Mining (because of Adani Coal).
+  GRASIM:    "Conglomerate",  // NSE: Cement.
+  RELIANCE:  "Energy",        // Already Energy from Oil&Gas, but pin it.
+  IRCTC:     "Services",      // NSE: Consumer Services — but it's railway/travel.
+  ADANIPORTS:"Infrastructure",// NSE: Services.
+  GMRAIRPORT:"Infrastructure",
+  INDIGO:    "Aviation",
+  SPICEJET:  "Aviation",
+};
+
+// ─── Refinement helpers — disambiguate macro buckets by name pattern. ────────
+// These run AFTER the table lookup. Order matters: more-specific routes win.
+
+function refineFinancialServices(symbol, name) {
+  const n = (name || "").toLowerCase();
+  const s = (symbol || "").toUpperCase();
+  // Banks: explicit in name OR symbol ends in BK / BANK / B (PNB, SBIN, etc.)
+  if (/\bbank\b|\bbanking\b/.test(n)) return "Banking";
+  if (/(BANK|BK)$/.test(s) || s === "SBIN" || s === "PNB") return "Banking";
+  // Life / general insurance
+  if (/\binsurance\b|life ins|gic\b|general insurance|reinsurance/.test(n)) return "Insurance";
+  // Stock / commodity exchanges + depositories
+  if (/exchange|depositor|bourse|cdsl|nsdl|mcx|bse\b/.test(n)) return "Exchange";
+  // Fintech: payments / digital lending / online financial-marketplaces.
+  if (/paytm|fintech|payment|policybazaar|pb fintech|one ?97|nykaa|paisabazaar|mobikwik|bharatpe/.test(n)) return "Fintech";
+  // Default: NBFC bucket (asset managers, housing finance, brokers, holding cos).
+  return "NBFC";
+}
+
+function refineConsumerServices(symbol, name) {
+  const n = (name || "").toLowerCase();
+  // E-commerce / internet platforms.
+  if (/zomato|eternal|swiggy|nykaa|fsn e-?commerce|info ?edge|naukri|policybazaar|pb fintech|justdial|matrimon|cartrade|easemytrip|paytm/.test(n)) return "Internet";
+  // Quick-service restaurants / food delivery operators.
+  if (/jubilant ?food|domino|westlife|devyani|sapphire|barbeque|speciality restaurant|coffee day/.test(n)) return "Food";
+  // Brick-and-mortar / multi-brand retail.
+  if (/avenue ?supermart|dmart|trent|aditya birla fashion|shoppers stop|v2 retail|spencer|future retail|vishal mega/.test(n)) return "Retail";
+  // Travel / hospitality / leisure.
+  if (/aviation|airline|airways|indigo|spicejet/.test(n)) return "Aviation";
+  if (/hotel|leisure|resort|indian hotels|lemon tree|chalet|eih\b/.test(n)) return "Services";
+  return "Consumer";
+}
+
+function refineConsumerDurables(symbol, name) {
+  const n = (name || "").toLowerCase();
+  // Jewellery, paints, furniture, ceramics — feel like "Consumer" to teens,
+  // not "Consumer Elec".
+  if (/titan|kalyan|senco|tribhovandas|jewell|gold/.test(n)) return "Consumer";
+  if (/paint|asian paints|berger|akzo|kansai|nerolac|indigo paint/.test(n)) return "Consumer";
+  if (/furniture|ceramic|kajaria|cera\b|somany|hindware/.test(n)) return "Consumer";
+  return "Consumer Elec";
+}
+
+function refineHealthcare(symbol, name) {
+  const n = (name || "").toLowerCase();
+  // Hospitals + diagnostics stay as Healthcare.
+  if (/hospital|healthcare|medic|clinic|diagnost|metropolis|dr ?lal|fortis|apollo|max health|narayana|aster|krishna institute/.test(n)) return "Healthcare";
+  // Everything else under the NSE "Healthcare" sector is a drug-maker.
+  return "Pharma";
+}
+
+function refineServices(symbol, name) {
+  const n = (name || "").toLowerCase();
+  if (/airline|aviation|airways|indigo|spicejet/.test(n)) return "Aviation";
+  if (/port\b|ports\b|airport|logistic|shipping|container|allcargo|gateway distri/.test(n)) return "Infrastructure";
+  return "Services";
+}
+
+// ─── Name-pattern fallback — runs when the symbol isn't in the Total Market
+// CSV (Nifty Total Market only covers ~750 of the 2,364 main-board equities,
+// so without this everything else lands in "Other"). Keyword-driven; broad
+// nets first, narrow refinements last.
+function inferFromName(symbol, name) {
+  const n = (name || "").toLowerCase();
+  const s = (symbol || "").toUpperCase();
+  if (!n) return "Other";
+
+  // Banks / NBFCs / financials.
+  if (/\bbank\b|\bbanking\b/.test(n) || /(BANK|BK)$/.test(s)) return "Banking";
+  if (/\binsurance\b|life ins|reinsurance/.test(n)) return "Insurance";
+  if (/exchange|depositor|cdsl|nsdl/.test(n)) return "Exchange";
+  if (/fintech|payment|paytm|policybazaar|one ?97/.test(n)) return "Fintech";
+  if (/finance|financ|capital|investment|securities|broking|asset manag|housing finance|microfin|nbfc|holding/.test(n)) return "NBFC";
+
+  // Tech / telecom / internet.
+  if (/software|technolog|infotech|systems|infosys|tcs|wipro|consultanc|digital|cyber|cloud|datamatic|persistent|coforge|mphasis|kpit|tata elxsi|happiest mind|zensar|hexaware|birlasoft|cyient|sonata|sasken|nazara/.test(n)) return "IT Services";
+  if (/telecom|airtel|vodafone|tata communic|tejas net|gtl/.test(n)) return "Telecom";
+  if (/internet|e-?commerce|ecommerce|online|nykaa|zomato|eternal|info ?edge|naukri|justdial/.test(n)) return "Internet";
+
+  // Pharma / healthcare.
+  if (/hospital|healthcare|medical|clinic|diagnost|metropolis|dr ?lal/.test(n)) return "Healthcare";
+  if (/pharma|drugs|labor|laborator|biotech|biocon|cipla|sun pharm|aurobindo|lupin|alkem|torrent pharm|glenmark|natco|divis|ipca|abbott|sanofi|pfizer|gland|zydus|granul|jb chem|ajanta pharma|caplin|hester|wockhardt|fdc|emcure/.test(n)) return "Pharma";
+
+  // Energy / power / oil.
+  if (/oil|gas|petrol|petroleum|refiner|natural gas|hpcl|bpcl|iocl|ongc|gail|reliance industri/.test(n)) return "Energy";
+  if (/power|electric|energy|hydro|thermal|solar|wind|renewable|ntpc|tata power|adani green|adani power|jsw energy|nhpc|sjvn|torrent power/.test(n)) return "Power";
+
+  // Auto / cement / metals / chem.
+  if (/motor|auto|tyre|tyres|automobile|automotive|ashok leyland|tata moto|maruti|m&m|mahindra|hero moto|bajaj auto|tvs|escorts|exide|amara raja|bharat forge|motherson|sundaram|wabco|endurance|sona blw|bosch|minda|jbm/.test(n)) return "Auto";
+  if (/cement|ultratech|ambuja|acc\b|shree cement|dalmia|jk cement|ramco|birla corp|heidelberg|sagar cement|orient cement|prism|nuvoco/.test(n)) return "Cement";
+  if (/steel|metal|mining|iron|aluminium|aluminum|copper|zinc|lead|coal|hindalco|jindal|sail|nmdc|moil|vedanta|tata steel|jsw steel|jspl|ratnamani|welspun|maharashtra seamless/.test(n)) return "Metals";
+  if (/chemic|paints|fertilis|fertiliz|pesticid|agrochem|specialty chem|pidilite|deepak|aarti|navin fluorine|gujarat fluorochem|atul|alkyl|laxmi organic|tata chem|coromandel|rallis|upl\b|sumitomo chemic|bayer crop|insecticides/.test(n)) return "Chemicals";
+
+  // Real estate / construction / infra.
+  if (/realty|propert|develop|estate|infrastructur|builder|construction|housing|dlf|godrej propert|prestige|brigade|sobha|oberoi realty|lodha|macrotech|sunteck|kolte ?patil/.test(n)) {
+    if (/realty|properties|estate|developer|housing|sobha|prestige|brigade|oberoi realty|lodha|macrotech|kolte/.test(n)) return "Real Estate";
+    if (/infrastructur|gmr|adani port|irb|ircon|rites|hg infra|ashoka build|dilip buildcon|kec international|kalpataru/.test(n)) return "Infrastructure";
+    return "Construction";
+  }
+
+  // FMCG / consumer / retail / food.
+  if (/fmcg|hindustan unilever|nestl|britannia|marico|dabur|godrej consum|colgate|tata consum|emami|jyothy|gillette|p&g|procter|patanjali|bikaji|gopal snack/.test(n)) return "FMCG";
+  if (/restaurant|food ?work|jubilant food|domino|westlife|devyani|sapphire|barbeque|kfc|pizza/.test(n)) return "Food";
+  if (/retail|supermart|dmart|trent|shoppers stop|aditya birla fashion|v2 retail|vmart/.test(n)) return "Retail";
+
+  // Aviation / hotels / media.
+  if (/airline|aviation|airways|indigo|spicejet/.test(n)) return "Aviation";
+  if (/hotel|resort|leisure|indian hotels|lemon tree|chalet|eih\b/.test(n)) return "Services";
+  if (/media|broadcast|entertainment|television|news|publication|saregama|zee\b|sun tv|pvr|inox/.test(n)) return "Services";
+
+  // Diversified holding companies.
+  if (/diversified|enterprises|holdings|conglomerate/.test(n)) return "Conglomerate";
+
+  return "Other";
+}
+
+function mapSector(nseIndustry, symbol = "", name = "") {
+  // 1. Symbol override wins — for hand-curated misclassifications.
+  if (symbol && SYMBOL_OVERRIDES[symbol]) return SYMBOL_OVERRIDES[symbol];
+
+  // 2. Table lookup on the NSE sector value.
+  const clean = (nseIndustry || "").replace(/^"|"$/g, "").trim();
+
+  if (clean) {
+    const base = NSE_TO_SS_SECTOR[clean];
+    if (!base) return "Other";
+    // 3. Refine ambiguous macro buckets via name pattern.
+    if (clean === "Financial Services") return refineFinancialServices(symbol, name);
+    if (clean === "Consumer Services")  return refineConsumerServices(symbol, name);
+    if (clean === "Consumer Durables")  return refineConsumerDurables(symbol, name);
+    if (clean === "Healthcare")          return refineHealthcare(symbol, name);
+    if (clean === "Services")            return refineServices(symbol, name);
+    return base;
+  }
+
+  // 4. Symbol not in Nifty Total Market (covers only ~750/2364 equities) —
+  //    fall back to name-keyword inference so the long tail doesn't all
+  //    land in "Other".
+  return inferFromName(symbol, name);
 }
 
 // ─── Index bitmask ───────────────────────────────────────────────────────────
@@ -346,7 +511,7 @@ async function main() {
     if (niftySmall250.syms.has(symbol)) idx |= IDX_NIFTYSMALL250;
 
     const nseIndustry = industryBySym[symbol] || "";
-    const sector = mapSector(nseIndustry);
+    const sector = mapSector(nseIndustry, symbol, name);
     const capBucket = classifyCapBucket(idx);
     const risk = classifyRisk({ idx, series });
 

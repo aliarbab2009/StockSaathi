@@ -146,7 +146,15 @@ export const STOCKS = [
 
   { symbol: "JINDALSTEL", name: "Jindal Steel & Power",      sector: "Metals",        marketCap: "0.9L Cr",  price:  128770, pe: 20.2, pb: 1.9, divYield: 0.25, beta: 1.45, risk: "high", logo: "JSP" },
   { symbol: "SAIL",       name: "Steel Authority of India",  sector: "Metals",        marketCap: "0.5L Cr",  price:  17271, pe: 18.5, pb: 0.9, divYield: 1.80, beta: 1.40, risk: "high", logo: "SAL" },
-  { symbol: "VEDL",       name: "Vedanta",                   sector: "Metals",        marketCap: "1.8L Cr",  price:  77100, pe: 28.2, pb: 3.2, divYield: 9.50, beta: 1.52, risk: "high", logo: "VED" },
+  { symbol: "VEDL",       name: "Vedanta",                   sector: "Metals",        marketCap: "1.8L Cr",  price:  77100, pe: 28.2, pb: 3.2, divYield: 9.50, beta: 1.52, risk: "high", logo: "VED",
+    // 5-way demerger record date 2026-05-01. Post-record VEDL is base-metals-
+    // only (zinc/silver/copper) and will trade at a fraction of the pre-
+    // demerger price. Holders receive 1:1 shares of VAML (Aluminium),
+    // Vedanta Power, Vedanta Oil & Gas, and Vedanta Iron & Steel — listing
+    // within 4-8 weeks of the record date. After 2026-05-01 the next
+    // build-universe run will pick up the new symbols automatically.
+    warning: "corp-action",
+    warningText: "Vedanta is splitting into 5 listed companies on 1 May 2026. If you hold VEDL through that date, you will receive shares of 4 new entities at a 1:1 ratio. The remaining VEDL will trade at a much smaller price reflecting only the base-metals business. Heads up — the chart will show a price discontinuity around the record date." },
   { symbol: "NMDC",       name: "NMDC",                      sector: "Metals",        marketCap: "0.7L Cr",  price:  8890, pe: 10.2, pb: 2.5, divYield: 3.20, beta: 1.22, risk: "med",  logo: "NMD" },
 
   { symbol: "HAVELLS",    name: "Havells India",             sector: "Consumer Elec", marketCap: "1.1L Cr",  price: 130210, pe: 75.2, pb: 13.5, divYield: 0.55, beta: 0.88, risk: "med",  logo: "HVL" },

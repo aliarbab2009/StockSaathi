@@ -7,8 +7,29 @@
 // Prices are PAISE (integer). Trading days only (no weekends).
 // =============================================================================
 
-import { INSTRUMENTS, INSTRUMENT_BY_SYMBOL } from "./universe.js";
+import { INSTRUMENTS, getInstrument } from "./universe.js";
 import { serverNow, isServerTimeSynced } from "./serverTime.js";
+
+// Module-scoped instrument resolver. Defaults to the loader's getInstrument
+// (which returns curated → Tier-2 → stub), so this file Just Works for any
+// symbol without needing a setUniverse hook. Kept as a function so the loader
+// can override it at boot if a richer resolver is wired in.
+let _resolveInstrument = getInstrument;
+export function setUniverse(map) {
+  // Backward-compat shim: accept an array, an object map, or null. Any caller
+  // can swap the resolver — but the default getInstrument() path already
+  // covers Tier-2 once universeFull.json lands, so most callers don't need
+  // this. Provided for symmetry with the original Phase-3 design.
+  if (!map) { _resolveInstrument = getInstrument; return; }
+  if (Array.isArray(map)) {
+    const byS = {};
+    for (const i of map) if (i && i.symbol) byS[i.symbol] = i;
+    _resolveInstrument = sym => byS[sym] || getInstrument(sym);
+  } else if (typeof map === "object") {
+    _resolveInstrument = sym => map[sym] || getInstrument(sym);
+  }
+  _cache.clear();
+}
 
 const TRADING_DAYS = 365;   // ~18 months calendar = ~365 trading days
 const SECONDS_PER_DAY = 86400000;
@@ -59,15 +80,34 @@ const MACRO_EVENTS = [
  * Returns: array[TRADING_DAYS] of objects { t, o, h, l, c, v }. Index 0 is oldest.
  */
 export function generateSeries(symbol) {
-  const inst = INSTRUMENT_BY_SYMBOL[symbol];
+  const inst = _resolveInstrument(symbol);
   if (!inst) return [];
 
-  const basePrice = inst.price;      // current (final) price in paise
   const beta = inst.beta || 1;
   const risk = inst.risk || "med";
+  const rand = prng(seedFromString(symbol));
+
+  // Tier-2 fallback: imported NSE rows have no curated price. Synthesize a
+  // believable but visually muted walk anchored to a deterministic per-symbol
+  // value so the sparkline isn't blank. Smaller sigma, no macro events, no
+  // drift — clearly distinguishable from real history.
+  const hasRealPrice = typeof inst.price === "number" && inst.price > 0;
+  if (!hasRealPrice) {
+    const anchor = 5000 + (seedFromString(symbol) % 500000);   // ~₹50–₹5000
+    const sigmaStub = 0.006;
+    const closesStub = new Array(TRADING_DAYS);
+    closesStub[TRADING_DAYS - 1] = anchor;
+    for (let i = TRADING_DAYS - 2; i >= 0; i--) {
+      const z = normal(rand);
+      const ret = sigmaStub * z;
+      closesStub[i] = Math.round(closesStub[i + 1] / (1 + ret));
+    }
+    return _buildOhlc(closesStub, rand);
+  }
+
+  const basePrice = inst.price;      // current (final) price in paise
   const sigma = risk === "high" ? 0.025 : risk === "low" ? 0.012 : 0.017;
   const drift = 0.0003;  // mild upward bias
-  const rand = prng(seedFromString(symbol));
 
   // Walk backwards. Start from current price, apply reverse returns.
   const closes = new Array(TRADING_DAYS);
@@ -86,8 +126,12 @@ export function generateSeries(symbol) {
     // p[i] = p[i+1] / (1+ret) — going backwards
     closes[i] = Math.round(closes[i + 1] / (1 + ret));
   }
+  return _buildOhlc(closes, rand);
+}
 
-  // Build OHLC from closes with tight intraday spread
+// Extracted from generateSeries so the Tier-2 stub-fallback path can reuse
+// it without duplicating the intraday-spread + timestamp logic.
+function _buildOhlc(closes, rand) {
   const series = new Array(TRADING_DAYS);
   const now = startOfDayIST(Date.now());
   for (let i = 0; i < TRADING_DAYS; i++) {
@@ -98,7 +142,6 @@ export function generateSeries(symbol) {
     const h = Math.max(c, o) + Math.round(intradayVar * (0.4 + rand() * 0.5));
     const l = Math.min(c, o) - Math.round(intradayVar * (0.4 + rand() * 0.5));
     const v = Math.round(100000 + rand() * 900000);
-    // Skip weekends — subtract only trading-day offsets
     const daysBack = TRADING_DAYS - 1 - i;
     const calBack = tradingToCalendar(daysBack);
     series[i] = {
