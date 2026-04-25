@@ -580,7 +580,13 @@ export function renderStocks(main) {
               const closes = getIntradaySparkline(sym, seededCloses);
               const quote = quoteCache[sym];
               const hasLive = quote?.pricePaise != null;
-              const price = hasLive ? quote.pricePaise : null;
+              // MF NAV fallback (see same logic in renderStockCardBody) —
+              // MFs never poll a live quote so the card body must read
+              // inst.nav directly to show a real price.
+              const navFallbackPaise = (inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0)
+                ? Math.round(inst.nav * 100)
+                : null;
+              const price = hasLive ? quote.pricePaise : navFallbackPaise;
               const change = quote?.changePct ?? getTodayChange(sym);
               const isWatched = wlSet.has(sym);
               const ms = marketStatus();
@@ -1098,7 +1104,14 @@ function renderStockCard(inst, state, wlSet) {
   const closes = getIntradaySparkline(inst.symbol, seededCloses);
   const quote = quoteCache[inst.symbol];
   const hasLive = quote?.pricePaise != null;
-  const price = hasLive ? quote.pricePaise : null;
+  // MF NAV fallback: MFs never get a live quote (they're filtered out of
+  // symbolsToPoll() because Yahoo has no MF intraday data). Without this
+  // fallback the card showed "—" + "NAV NAV" — visible nonsense.
+  // inst.nav is rupees from AMFI; convert to paise so formatRupees works.
+  const navFallbackPaise = (inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0)
+    ? Math.round(inst.nav * 100)
+    : null;
+  const price = hasLive ? quote.pricePaise : navFallbackPaise;
   const change = quote?.changePct ?? getTodayChange(inst.symbol);
   // wlSet is hoisted at render time — O(1) membership check; old code used
   // state.watchlist.includes(sym) which was O(n) per card.
