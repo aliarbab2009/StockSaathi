@@ -146,6 +146,7 @@ _ROUTES = {
     "/api/admin-sync-instruments": "admin-sync-instruments",
     "/api/admin-sync-fundamentals": "admin-sync-fundamentals",
     "/api/admin-sync-mf": "admin-sync-mf",
+    "/api/mf-history": "mf-history",
 }
 
 _METHODS = ["GET", "POST", "OPTIONS"]
