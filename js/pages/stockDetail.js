@@ -869,12 +869,25 @@ function render(inst, symbol) {
       whyBody.classList.remove("muted");
       whyBody.textContent = _stockWhyLast;
     } else {
-      // Fire once per (symbol, day) at module scope
-      const dk = nowIstDayKey();
-      const key = `${symbol}_${dk}`;
-      if (_stockWhyKey !== key) {
-        _stockWhyKey = key;
-        fetchStockWhy(main, symbol, inst, curPrice, liveQuote?.changePct ?? 0);
+      // Fire once per (symbol, day) at module scope. Gate on liveQuote
+      // (or MF — they use stable inst.nav) so we never feed the LLM a
+      // synthetic getPriceAt() price or a null changePct. Pre-fix when
+      // liveQuote was null at first render the explainer fired with
+      // curPrice = 162910 paise (₹1629.10 from prices.js synthetic walk
+      // for MTNL) and changePct = 0, producing the LLM output "MTNL at
+      // ₹1629.10 is flat today (+0.00%)" while the actual values were
+      // ₹30.61 / -3.65%. Worse, the bogus answer got persisted to the
+      // ai_response_cache table keyed on (sym, dir, day). Gating
+      // prevents the bad answer from being generated in the first
+      // place.
+      const haveRealPrice = inst.kind === "MF" || liveQuote != null;
+      if (haveRealPrice) {
+        const dk = nowIstDayKey();
+        const key = `${symbol}_${dk}`;
+        if (_stockWhyKey !== key) {
+          _stockWhyKey = key;
+          fetchStockWhy(main, symbol, inst, curPrice, liveQuote?.changePct ?? 0);
+        }
       }
     }
   }
