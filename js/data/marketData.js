@@ -416,6 +416,18 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
   const inst = getInstrument(symbol);
   if (!inst) return { ohlc: [], source: "none" };
 
+  // MFs have no Yahoo coverage (MF_<amfi_code>.NS isn't a valid ticker).
+  // The synthHistory fallback would silently use the seeded stub walk and
+  // serve up garbage as "history". Caller (stockDetail.js MF branch) is
+  // expected to use getMfHistory() directly. Returning empty here makes
+  // any accidental cross-call fail-fast with a visible empty chart instead
+  // of a misleading random walk.
+  if (inst.kind === "MF") {
+    const empty = { ohlc: [], source: "mf-no-yahoo" };
+    _historyCache.set(key, { data: empty, ts: Date.now() });
+    return empty;
+  }
+
   let h = null;
   if (inst.kind === "EQUITY" || inst.kind === "ETF") {
     // Preferred: dedicated /api/history endpoint (reliable, returns paise).

@@ -115,6 +115,14 @@ class handler(BaseHTTPRequestHandler):
         if not symbol or not _SYMBOL_RE.match(symbol):
             self._json(400, {"ok": False, "error": "bad_symbol"})
             return
+        # Mutual funds have no Yahoo coverage — MF_<amfi_code>.NS isn't a
+        # valid ticker. Reject early instead of letting the request burn
+        # 5 seconds hitting query1.finance.yahoo.com only to 404. Front-end
+        # should call /api/mf-history for MFs (mfapi.in proxy).
+        if symbol.startswith("MF_"):
+            self._json(400, {"ok": False, "error": "mf_use_mf_history",
+                             "detail": "Use /api/mf-history?code=<amfi_code>"})
+            return
         if not _RANGE_RE.match(range_):
             self._json(400, {"ok": False, "error": "bad_range"})
             return

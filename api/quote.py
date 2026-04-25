@@ -99,6 +99,15 @@ class handler(BaseHTTPRequestHandler):
         if not symbol or not _SYMBOL_RE.match(symbol):
             self._json(400, {"ok": False, "error": "bad_symbol"}, nocache=nocache)
             return
+        # MFs have no Yahoo coverage. Reject early so we don't burn 5-7 sec
+        # hitting query1.finance.yahoo.com only to 404. Front-end uses
+        # synthMFQuote() (NAV-based) for MF symbols and never sends them
+        # here in practice — this guard catches accidental cross-calls.
+        if symbol.startswith("MF_"):
+            self._json(400, {"ok": False, "error": "mf_no_yahoo_quote",
+                             "detail": "MF NAV is in inst.nav (AMFI catalog), not /api/quote"},
+                       nocache=nocache)
+            return
         data = fetch_one(symbol)
         if data.get("error"):
             self._json(502, {"ok": False, **data}, nocache=nocache)

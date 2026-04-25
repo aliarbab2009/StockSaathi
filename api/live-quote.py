@@ -367,7 +367,12 @@ class handler(BaseHTTPRequestHandler):
         if not raw:
             raw = (q.get("symbol") or [""])[0]
         raw_syms = [s.strip().upper() for s in raw.split(",") if s.strip()][:MAX_SYMBOLS]
-        syms = [s for s in raw_syms if _SYMBOL_RE.match(s)]
+        # Filter regex AND drop MF symbols — they have no Yahoo coverage.
+        # Front-end's symbolsToPoll() in stocks.js already excludes kind="MF",
+        # but defence-in-depth: if a stale cache or tab-switch race lands an
+        # MF symbol here, drop it silently rather than burning a 5s Yahoo
+        # round-trip per MF only to 404.
+        syms = [s for s in raw_syms if _SYMBOL_RE.match(s) and not s.startswith("MF_")]
         # nocache=1 skips the Supabase cache read entirely and forces an
         # upstream fetch. Response gets a no-store Cache-Control so the
         # Vercel edge + browser can't serve their own cached copy.
