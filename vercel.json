@@ -1,5 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "echo 'no build step — static site + per-handler @vercel/python functions'",
+  "installCommand": "echo 'no install step — api/*.py handlers use stdlib only'",
+  "framework": null,
+  "outputDirectory": ".",
   "functions": {
     "api/*.py": { "runtime": "@vercel/python@6.36.0", "maxDuration": 60 }
   },
