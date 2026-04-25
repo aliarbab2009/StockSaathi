@@ -13,3 +13,17 @@ dependencies = []
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+# Vercel's framework=python build path runs `uv sync --frozen` which tries to
+# install our repo root as a Python package. Without this block setuptools'
+# auto-discovery sees js/, api/, css/, edge/, supabase/ as candidate packages
+# and refuses to build (multi-top-level layout). We have NO actual Python
+# package to ship — the api/*.py handlers are bundled by @vercel/python's
+# per-function builder, not packaged. Tell setuptools that explicitly:
+[tool.setuptools]
+# Empty package list — `uv sync` builds an empty wheel and moves on instead
+# of trying to import our front-end JS as Python modules.
+packages = []
+# py_modules likewise empty so setuptools doesn't pick up loose .py files
+# at the repo root (none exist today, but defensive against future drift).
+py-modules = []
