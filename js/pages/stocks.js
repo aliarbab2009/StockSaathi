@@ -105,6 +105,18 @@ export function renderStocks(main) {
   // when the real grid renders it does so WITH the mood banner already
   // in place — no shift, no flash.
   let _moodReady = false;
+  // Viewport preheat readiness — flipped true once a getQuoteBatch covering
+  // the post-universeFull-loaded "top 60 by sort order" symbols has returned.
+  // Pre-fix the page rendered the moment universe + cold-start-batch were
+  // ready (Hotfix19c) but the cold-start seed was computed against curated
+  // (≤126 symbols) BEFORE universeFull loaded. Once the full universe
+  // landed, the visible top of the sort changed — cards entering the
+  // viewport that weren't in the curated cold-start hydrated as skeleton
+  // and only filled in when the warm-up-from-observer batch resolved
+  // 1–3 s later. User-reported staircase: skeleton → cards-with-no-prices
+  // → cards-with-prices. This flag (wired into the gate by 21b.3) holds
+  // the skeleton until quotes for the actual visible viewport are loaded.
+  let _viewportPreheatDone = false;
   setTimeout(() => {
     if (!cancelled && !_moodReady) {
       _moodReady = true;
