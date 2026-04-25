@@ -144,6 +144,7 @@ _ROUTES = {
     "/api/fundamentals": "fundamentals",
     "/api/send-consent": "send-consent",
     "/api/admin-sync-instruments": "admin-sync-instruments",
+    "/api/admin-sync-fundamentals": "admin-sync-fundamentals",
 }
 
 _METHODS = ["GET", "POST", "OPTIONS"]
