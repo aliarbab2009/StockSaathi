@@ -1028,7 +1028,7 @@ export function renderStocks(main) {
         // covers the viewport (typical case post-21b).
         const seed = Array.from(_visibleSymbols).filter(s => {
           const inst = getInstrument(s);
-          if (inst?.kind === "MF") return false;
+          if (inst?.kind === KIND_MF) return false;
           return !quoteCache[s]?.pricePaise;
         }).slice(0, VIEWPORT_PREHEAT_SIZE);
         if (seed.length) {
