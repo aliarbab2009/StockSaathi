@@ -1,0 +1,5 @@
+# Vercel expects a top-level requirements.txt for projects auto-detected as
+# Python framework. Our api/*.py handlers (BaseHTTPRequestHandler-based)
+# use only the Python stdlib — urllib, json, http.server, time, os, re —
+# so this file is intentionally empty. The api-backup/ Fly.io shim has its
+# own requirements.txt (fastapi, uvicorn) since that's a separate runtime.
