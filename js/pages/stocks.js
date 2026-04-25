@@ -618,38 +618,45 @@ export function renderStocks(main) {
     });
 
     // Dehydrate observer — restores hydrated cards back to stubs when
-    // they're at least 3 viewport heights past the visible region.
+    // they're at least 6 viewport heights past the visible region.
     //
-    // The negative rootMargin trick: rootMargin "-300% 0px -300% 0px"
-    // shrinks the IO's effective root box to 700% smaller than the
-    // viewport. Cards that fall outside this contracted box (i.e.,
-    // >300% above or below the viewport) report isIntersecting:false.
-    // We use that signal as "card is far enough away that DOM memory
-    // is wasted on its hydrated body — restore the stub".
+    // Pre-Hotfix7 used `rootMargin: "-300% 0px -300% 0px"` thinking it
+    // would shrink the root and use isIntersecting=false as the
+    // "far away" signal. That math is broken: a viewport (height H)
+    // shrunk by 300% top + 300% bottom = -5H = a NEGATIVE-sized
+    // rectangle. Per the IO spec, every observed element reports
+    // isIntersecting:false against a zero-or-negative-sized root.
+    // Result: every card gets dehydrated immediately after hydration.
     //
-    // Why two observers instead of one with multiple thresholds?
-    // IntersectionObserver doesn't support multiple rootMargins per
-    // instance. Two cheap IOs is cleaner than tracking ratio-band logic
-    // in a single callback. Both observe the same elements; their
-    // callbacks run independently when the relevant boundary crosses.
+    //   Stocks tab → top cards "kept flashing" (hydrate→dehydrate→
+    //                hydrate cycle on every IO callback).
+    //   ETFs / MFs → cards never escape the skeleton state because the
+    //                buggy IO instant-dehydrates anything just hydrated.
     //
-    // Memory math: 13,969 fully hydrated MF cards = ~30 KB DOM each =
-    // ~420 MB DOM. After dehydration, only ~30 cards near the viewport
-    // stay hydrated = ~900 KB. Long sessions stop OOMing on mid-Android.
+    // Correct semantics: use a LARGE POSITIVE rootMargin (600% on top
+    // and bottom = 6 viewports of grace zone above + below) and the
+    // SAME `!entry.isIntersecting` trigger. Now the root is HUGE — only
+    // cards that fall OUTSIDE the wide zone (i.e., 6+ viewports past
+    // the visible viewport) report isIntersecting=false. The grace
+    // zone of 4 viewports between hydrate-margin (200%) and dehydrate-
+    // margin (600%) means cards stay hydrated even after scrolling
+    // a few viewports past the hydrate trigger.
+    //
+    // Memory math unchanged: 13,969 cards × 30 KB = 420 MB if all
+    // hydrated; after dehydration kicks in for far cards, we hold
+    // ~25-50 hydrated × 30 KB = ~1.5 MB. Long sessions stay bounded.
     if (typeof IntersectionObserver === "function") {
       _dehydrateObserver = new IntersectionObserver((entries) => {
         for (const entry of entries) {
           const card = entry.target;
-          // isIntersecting:false here means the card is OUTSIDE the
-          // -300% rootMargin — i.e., at least 3 viewport heights away
-          // from visible. Safe to dehydrate.
+          // With rootMargin "600% 0px", isIntersecting:false means the
+          // card is OUTSIDE the 13-viewport-tall expanded root box —
+          // i.e., 6+ viewport heights above or below visible. Safe to
+          // dehydrate without disrupting anything the user can see.
           if (!entry.isIntersecting && card.dataset.rendered === "1") {
             const sym = card.dataset.sym;
             const inst = sym ? getInstrument(sym) : null;
             if (!inst) continue;
-            // Re-emit the stub innerHTML — a small skeleton that takes
-            // ~200 chars / ~80 bytes of DOM memory vs ~30 KB for the
-            // hydrated body. The IO will rehydrate it on next intersect.
             card.innerHTML = `
               <div class="stock-head">
                 <div class="stock-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
@@ -669,7 +676,7 @@ export function renderStocks(main) {
         }
       }, {
         root: null,
-        rootMargin: "-300% 0px -300% 0px",
+        rootMargin: "600% 0px 600% 0px",
         threshold: 0,
       });
     }
