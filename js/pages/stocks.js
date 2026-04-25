@@ -298,8 +298,14 @@ export function renderStocks(main) {
   if (_universeLoaded) kickViewportPreheat();
   const onUniverseLoaded = () => {
     if (cancelled) return;
+    // Same wasReady guard as the cold-start + preheat callbacks. If
+    // _universeLoaded was already true (pre-flagged at mount because
+    // INSTRUMENTS already had the full universe from a prior page),
+    // the page may already be showing hydrated cards — a render()
+    // here would wipe them. Skip the render in that case.
+    const wasReady = pageReady();
     _universeLoaded = true;
-    render();
+    if (!wasReady) render();
     kickViewportPreheat();
   };
   window.addEventListener("ss:universe-loaded", onUniverseLoaded);
