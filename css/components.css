@@ -1258,6 +1258,14 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
+  /* Match the stub's inline min-height so hydrated cards reserve the same
+     layout space. Without this, hydrating a stub triggers a height delta
+     (typically -12px to +18px depending on content), all cards below
+     reflow, and cards near the IO 200% boundary can re-cross the threshold
+     and re-trigger hydrate/dehydrate cycles. The cumulative layout shift
+     also adds visible jank on every chunked render batch. Matching the
+     stub keeps the grid pixel-stable through the hydrate transition. */
+  min-height: 172px;
 }
 /* Virtualization: tells Chromium to skip paint + style + layout for cards
    outside the viewport. At ~2700 cards on /stocks All NSE this is the
