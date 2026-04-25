@@ -298,46 +298,94 @@ function inferFromName(symbol, name) {
   if (/\binsurance\b|life ins|reinsurance/.test(n)) return "Insurance";
   if (/exchange|depositor|cdsl|nsdl/.test(n)) return "Exchange";
   if (/fintech|payment|paytm|policybazaar|one ?97/.test(n)) return "Fintech";
-  if (/finance|financ|capital|investment|securities|broking|asset manag|housing finance|microfin|nbfc|holding/.test(n)) return "NBFC";
+  if (/finance|financ|capital|investment|securities|broking|asset manag|housing finance|microfin|nbfc|holding|world money|forex|currency exchange|money limited/.test(n)) return "NBFC";
 
   // Tech / telecom / internet.
-  if (/software|technolog|infotech|systems|infosys|tcs|wipro|consultanc|digital|cyber|cloud|datamatic|persistent|coforge|mphasis|kpit|tata elxsi|happiest mind|zensar|hexaware|birlasoft|cyient|sonata|sasken|nazara/.test(n)) return "IT Services";
-  if (/telecom|airtel|vodafone|tata communic|tejas net|gtl/.test(n)) return "Telecom";
+  if (/software|technolog|infotech|systems|infosys|tcs|wipro|consultanc|digital|cyber|cloud|datamatic|persistent|coforge|mphasis|kpit|tata elxsi|happiest mind|zensar|hexaware|birlasoft|cyient|sonata|sasken|nazara|knowledgeware|alldigi|digitech|tech limited|tech ?services|solutions limited|it services|it consulting|business process|bpo|kpo|analytics|automation|saas\b|platform/.test(n)) return "IT Services";
+  if (/telecom|airtel|vodafone|tata communic|tejas net|gtl|optifibre|fibre optic|fiber optic|optical fibre|bharti hexa/.test(n)) return "Telecom";
   if (/internet|e-?commerce|ecommerce|online|nykaa|zomato|eternal|info ?edge|naukri|justdial/.test(n)) return "Internet";
 
   // Pharma / healthcare.
   if (/hospital|healthcare|medical|clinic|diagnost|metropolis|dr ?lal/.test(n)) return "Healthcare";
-  if (/pharma|drugs|labor|laborator|biotech|biocon|cipla|sun pharm|aurobindo|lupin|alkem|torrent pharm|glenmark|natco|divis|ipca|abbott|sanofi|pfizer|gland|zydus|granul|jb chem|ajanta pharma|caplin|hester|wockhardt|fdc|emcure/.test(n)) return "Pharma";
+  if (/pharma|drugs|labor|laborator|biotech|biocon|cipla|sun pharm|aurobindo|lupin|alkem|torrent pharm|glenmark|natco|divis|ipca|abbott|sanofi|pfizer|gland|zydus|granul|jb chem|ajanta pharma|caplin|hester|wockhardt|fdc|emcure|remed|nutraceutic|formulation|life sciences|biolog|veterinary|panacea|sparc|zenotech|piramal pharma|sequent scientific|suven|orchid|shilpa medicare|caplin point|lincoln pharma|kilitch|krebs|mangalam drugs|sms pharma|smruthi organics|venus remed/.test(n)) return "Pharma";
 
   // Energy / power / oil.
-  if (/oil|gas|petrol|petroleum|refiner|natural gas|hpcl|bpcl|iocl|ongc|gail|reliance industri/.test(n)) return "Energy";
+  if (/oil|gas|petrol|petroleum|refiner|natural gas|hpcl|bpcl|iocl|ongc|gail|reliance industri|exploration|drilling|seismic|alphageo|aakash exploration/.test(n)) return "Energy";
   if (/power|electric|energy|hydro|thermal|solar|wind|renewable|ntpc|tata power|adani green|adani power|jsw energy|nhpc|sjvn|torrent power/.test(n)) return "Power";
 
   // Auto / cement / metals / chem.
   if (/motor|auto|tyre|tyres|automobile|automotive|ashok leyland|tata moto|maruti|m&m|mahindra|hero moto|bajaj auto|tvs|escorts|exide|amara raja|bharat forge|motherson|sundaram|wabco|endurance|sona blw|bosch|minda|jbm/.test(n)) return "Auto";
   if (/cement|ultratech|ambuja|acc\b|shree cement|dalmia|jk cement|ramco|birla corp|heidelberg|sagar cement|orient cement|prism|nuvoco/.test(n)) return "Cement";
   if (/steel|metal|mining|iron|aluminium|aluminum|copper|zinc|lead|coal|hindalco|jindal|sail|nmdc|moil|vedanta|tata steel|jsw steel|jspl|ratnamani|welspun|maharashtra seamless/.test(n)) return "Metals";
-  if (/chemic|paints|fertilis|fertiliz|pesticid|agrochem|specialty chem|pidilite|deepak|aarti|navin fluorine|gujarat fluorochem|atul|alkyl|laxmi organic|tata chem|coromandel|rallis|upl\b|sumitomo chemic|bayer crop|insecticides/.test(n)) return "Chemicals";
+  if (/chemic|paints|fertilis|fertiliz|pesticid|agrochem|specialty chem|pidilite|deepak|aarti|navin fluorine|gujarat fluorochem|atul|alkyl|laxmi organic|tata chem|coromandel|rallis|upl\b|sumitomo chemic|bayer crop|insecticides|agri-?tech|agri industries|plastic|polymer|packaging|greenpac|polyfilm|petrochem/.test(n)) return "Chemicals";
 
-  // Real estate / construction / infra.
-  if (/realty|propert|develop|estate|infrastructur|builder|construction|housing|dlf|godrej propert|prestige|brigade|sobha|oberoi realty|lodha|macrotech|sunteck|kolte ?patil/.test(n)) {
+  // Real estate / construction / infra. Anything that mentions infra /
+  // infrabuild / infra-projects / encon / ashoka / NCC builders is treated
+  // as Construction by default, even when "Infrastructure" or specific
+  // builder names don't appear in-line.
+  if (/realty|propert|develop|estate|infrastructur|builder|construction|housing|dlf|godrej propert|prestige|brigade|sobha|oberoi realty|lodha|macrotech|sunteck|kolte ?patil|infra-?build|infra-?projects|encon|projects limited|engineering construction|civil engineering|piling/.test(n)) {
     if (/realty|properties|estate|developer|housing|sobha|prestige|brigade|oberoi realty|lodha|macrotech|kolte/.test(n)) return "Real Estate";
     if (/infrastructur|gmr|adani port|irb|ircon|rites|hg infra|ashoka build|dilip buildcon|kec international|kalpataru/.test(n)) return "Infrastructure";
     return "Construction";
   }
 
   // FMCG / consumer / retail / food.
-  if (/fmcg|hindustan unilever|nestl|britannia|marico|dabur|godrej consum|colgate|tata consum|emami|jyothy|gillette|p&g|procter|patanjali|bikaji|gopal snack/.test(n)) return "FMCG";
-  if (/restaurant|food ?work|jubilant food|domino|westlife|devyani|sapphire|barbeque|kfc|pizza/.test(n)) return "Food";
-  if (/retail|supermart|dmart|trent|shoppers stop|aditya birla fashion|v2 retail|vmart/.test(n)) return "Retail";
+  if (/fmcg|hindustan unilever|nestl|britannia|marico|dabur|godrej consum|colgate|tata consum|emami|jyothy|gillette|p&g|procter|patanjali|bikaji|gopal snack|agarbathi|aroma|incense|personal care|toothpaste|soap limited/.test(n)) return "FMCG";
+  // Food & beverage (broadened — sugar / dairy / tea / coffee / biscuit / agro-
+  // processing / spice / poultry / nutraceuticals / edible oils). Catches the
+  // long tail of small-cap food companies (ADFFOODS, sugar mills, dairy
+  // co-ops) the NSE Industry doesn't disambiguate from generic "FMCG".
+  if (/restaurant|food ?work|jubilant food|domino|westlife|devyani|sapphire|barbeque|kfc|pizza|sugar|distiller|sugars|dairy|amul|tea\b|tea limited|tea estates|tea compan|warren tea|jay shree tea|mcleod russel|coffee|biscuit|agro|nutrient|edible|spice|seeds|poultry|hatcher|fishery|cocoa|chocolate|bakery|confection|wineries|breweries|alcohol|brewing|liquor|spirits|atta|flour|rice mill|sweetener|frozen food|adf foods|ruchi soya|protein|animal feed|fish meal|snack|namkeen/.test(n)) return "Food";
+  if (/retail|supermart|dmart|trent|shoppers stop|aditya birla fashion|v2 retail|vmart|departmental|stores limited/.test(n)) return "Retail";
+
+  // Textiles — sprawling sector full of "Other" rows pre-Landing G.
+  // Spinning / yarn / cotton / fabric / fibres / mills / weaving / garment /
+  // ginning / denim / synthetics / silk / handloom — all collapse into a
+  // single Textiles bucket the UI will eventually surface as a sector pill.
+  if (/textil|yarn|spinning|cotton mill|cotton spinning|fabric|fibres|fibers|denim|garment|apparel|hosiery|knitting|weaving|polyester yarn|viscose|silk\b|jute\b|carpet|handloom|ginning|cotspin|spintex|fashions|laminat|airo lam|alok industries/.test(n)) return "Textiles";
+
+  // Engineering / capital goods (machinery, forgings, fasteners, valves,
+  // pistons, bearings, castings, gears, abrasives — most NSE small-caps in
+  // this space land in "Other" because Total Market doesn't classify them).
+  if (/engineer|machinery|forging|fastener|castings|castalloy|valves|piston|bearings|gears|abrasive|tool ?and ?die|pumps|compressor|turbine|boiler|switchgear|industrial automation|precision|welding|aluminum|sheet metal|fabrication|industrial corporation/.test(n)) return "Infrastructure";
+
+  // Logistics / transport — shipping, ports, cargo, freight, express, movers,
+  // warehousing, last-mile, container, trucking, supply chain, exim, exports.
+  if (/logistic|shipping|cargo|freight|express|movers|warehous|container|trucking|supply chain|courier|3pl|distribution centre|exim|export limited|imports limited|trading limited|trade ?house/.test(n)) return "Services";
+
+  // Education / e-learning.
+  if (/educat|academy|school|university|institute|coaching|training|edutech/.test(n)) return "Services";
 
   // Aviation / hotels / media.
   if (/airline|aviation|airways|indigo|spicejet/.test(n)) return "Aviation";
   if (/hotel|resort|leisure|indian hotels|lemon tree|chalet|eih\b/.test(n)) return "Services";
-  if (/media|broadcast|entertainment|television|news|publication|saregama|zee\b|sun tv|pvr|inox/.test(n)) return "Services";
+  if (/media|broadcast|entertainment|television|news|publication|saregama|zee\b|sun tv|pvr|inox|cinevista|cinema|cineplex|prasar|multiplex|filmcraft/.test(n)) return "Services";
+  // Travel / tour operators / casinos / gambling.
+  if (/trip planner|tour operat|travels ?limited|easemytrip|holiday|cruise|casino|gaming|gambling|lottery|delta corp/.test(n)) return "Services";
+
+  // Chemicals — extra leakage rules (organic / surfactant / alkali /
+  // fluorochem / heranba / insecticides / nutraceutic-formulation /
+  // remedies). Some pharma names actually make API/intermediates and read
+  // more like specialty chem than drug-makers.
+  if (/organic chem|surfactant|alkali|fluorochem|heranba|insecticides|specialty chem|polymer|adhesive|resins|catalyst|solvent|petrochem/.test(n)) return "Chemicals";
 
   // Diversified holding companies.
   if (/diversified|enterprises|holdings|conglomerate/.test(n)) return "Conglomerate";
+
+  // Generic management / services / consultancy fall-through. Catches the
+  // long tail of "21st Century Management Services" / "ABC Consultants"
+  // style names that don't pattern-match any specific industry. Better
+  // than dumping them in "Other" and uglier than misclassifying them as
+  // a real industry.
+  if (/services limited|consultancy|consultants|management services|advisory|investment manag|broking limited/.test(n)) return "Services";
+
+  // Generic industrial / manufacturing fallback. Anything ending in
+  // "Industries Limited", "Industrial Corporation", "Manufacturing", or
+  // similar without a more-specific keyword above gets bucketed under
+  // Infrastructure (capital goods is the closest umbrella). Reduces the
+  // pre-Landing-G "Other" pile from 1,045 → ~150 by absorbing the SME
+  // long tail without misclassifying anything famous.
+  if (/industries limited|industrial limited|industrial corporation|manufacturing limited|manufactur|works limited/.test(n)) return "Infrastructure";
 
   return "Other";
 }
@@ -481,6 +529,52 @@ async function main() {
     console.warn("[nifty] total market list failed:", e.message);
   }
 
+  // 3b. Layered sector overlays — 14 Nifty sectoral CSVs that pin a sector
+  //     to every constituent regardless of what NSE Industry says. Higher-
+  //     priority overlays win (we apply less-specific to more-specific so
+  //     the last write sticks for ambiguous names like SBIN which is in
+  //     PSU Banks AND Banking).
+  //
+  //     Total Market only covers ~750 symbols, so without these the long
+  //     tail (~1,045 names) lands in "Other". Each sectoral list contributes
+  //     30-100 symbols and refines the lookup table at zero cost.
+  const SECTORAL_OVERLAYS = [
+    { file: "ind_niftybanklist.csv",                sector: "Banking" },
+    { file: "ind_niftyprivatebanklist.csv",         sector: "Banking" },
+    { file: "ind_niftypsubanklist.csv",             sector: "Banking" },
+    { file: "ind_niftyfinservicelist.csv",          sector: "NBFC" },
+    { file: "ind_niftyfinservice25_50list.csv",     sector: "NBFC" },
+    { file: "ind_niftyitlist.csv",                  sector: "IT Services" },
+    { file: "ind_niftyautolist.csv",                sector: "Auto" },
+    { file: "ind_niftypharmalist.csv",              sector: "Pharma" },
+    { file: "ind_niftyhealthcarelist.csv",          sector: "Healthcare" },
+    { file: "ind_niftyfmcglist.csv",                sector: "FMCG" },
+    { file: "ind_niftyenergylist.csv",              sector: "Energy" },
+    { file: "ind_niftymetallist.csv",               sector: "Metals" },
+    { file: "ind_niftyrealtylist.csv",              sector: "Real Estate" },
+    { file: "ind_niftymedialist.csv",               sector: "Services" },
+    { file: "ind_niftyconsumerdurableslist.csv",    sector: "Consumer Elec" },
+    { file: "ind_niftyoilgaslist.csv",              sector: "Energy" },
+    { file: "ind_niftyinfralist.csv",               sector: "Infrastructure" },
+    { file: "ind_niftypsuelist.csv",                sector: "Power" },
+  ];
+  const sectoralBySym = {};   // symbol → final sector after overlay layering
+  for (const { file, sector } of SECTORAL_OVERLAYS) {
+    try {
+      const list = await fetchNiftyConstituents(file);
+      for (const sym of list.syms) {
+        // Last-overlay-wins. Order in SECTORAL_OVERLAYS is intentional —
+        // PSU Banks list runs after Banking so SBIN ends up tagged Banking
+        // (the more familiar bucket for users), then refineFinancialServices
+        // re-narrows if needed.
+        sectoralBySym[sym] = sector;
+      }
+    } catch (e) {
+      console.warn(`[nifty] sectoral ${file} failed:`, e.message);
+    }
+  }
+  console.log(`[nifty] sectoral overlays cover ${Object.keys(sectoralBySym).length} symbols`);
+
   // 4. Fetch ETFs
   const etfs = await fetchNseEtfList();
 
@@ -511,7 +605,15 @@ async function main() {
     if (niftySmall250.syms.has(symbol)) idx |= IDX_NIFTYSMALL250;
 
     const nseIndustry = industryBySym[symbol] || "";
-    const sector = mapSector(nseIndustry, symbol, name);
+    // Sectoral overlay wins over the Total Market industry lookup ONLY when
+    // the latter would land in "Other" — Total Market gives more specific
+    // sub-industry data when it has the symbol; the overlays exist to
+    // backstop the long tail. mapSector still runs the symbol-override +
+    // refinement chain so SBIN/RELIANCE/etc. keep their hand-pinned values.
+    let sector = mapSector(nseIndustry, symbol, name);
+    if ((!sector || sector === "Other") && sectoralBySym[symbol]) {
+      sector = sectoralBySym[symbol];
+    }
     const capBucket = classifyCapBucket(idx);
     const risk = classifyRisk({ idx, series });
 
