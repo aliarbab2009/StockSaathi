@@ -258,7 +258,7 @@ export function renderStocks(main) {
     if (_viewportPreheatDone || cancelled) return;
     const state = getState();
     const top = applyFilters(source(), filter, state, quoteCache).slice(0, VIEWPORT_PREHEAT_SIZE);
-    const seed = top.filter(i => i.kind !== "MF").map(i => i.symbol);
+    const seed = top.filter(i => i.kind !== KIND_MF).map(i => i.symbol);
     if (seed.length === 0) {
       _viewportPreheatDone = true;
       render();
@@ -326,7 +326,7 @@ export function renderStocks(main) {
     // Cold-start seed: top-30 by index prominence in the current source view.
     const state = getState();
     const list = applyFilters(source(), filter, state, quoteCache).slice(0, 30);
-    return list.filter(i => i.kind !== "MF").map(i => i.symbol);
+    return list.filter(i => i.kind !== KIND_MF).map(i => i.symbol);
   }
 
   (async () => {
