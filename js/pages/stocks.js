@@ -583,7 +583,7 @@ export function renderStocks(main) {
     // a single skeleton state — the page either shows skeleton (waiting)
     // or shows fully-priced cards (ready). No more "alphabetical 2,364
     // cards with empty price slots for 2 seconds" intermediate state.
-    const pageReady = universeReady && _initialQuotesLoaded && _moodReady;
+    const pageReady = universeReady && _initialQuotesLoaded && _viewportPreheatDone && _moodReady;
 
     // Pre-universe-loaded: emit a full-page skeleton instead of the
     // 116-featured "real" view that briefly flashed in pre-Hotfix12. The
