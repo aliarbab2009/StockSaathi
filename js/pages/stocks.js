@@ -320,7 +320,7 @@ export function renderStocks(main) {
       // Only poll EQUITY/ETF symbols — MFs have no real-time feed.
       return Array.from(_visibleSymbols).filter(s => {
         const inst = getInstrument(s);
-        return !inst || inst.kind !== "MF";
+        return !inst || inst.kind !== KIND_MF;
       });
     }
     // Cold-start seed: top-30 by index prominence in the current source view.
@@ -966,7 +966,7 @@ export function renderStocks(main) {
               // state. MFs short-circuit through this guard via
               // inst.nav fallback so they always hydrate immediately.
               const _q = quoteCache[sym];
-              if (inst.kind !== "MF" && _q?.pricePaise == null) {
+              if (inst.kind !== KIND_MF && _q?.pricePaise == null) {
                 continue;
               }
               const seededCloses = getCloses(sym, 40);
