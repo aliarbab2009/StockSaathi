@@ -617,8 +617,15 @@ function render(inst, symbol) {
   // price so the user can one-tap queue an order that fills at the
   // next market open. This also bypasses the apply_trade RPC hang that
   // happens out-of-hours by routing through placeLimitOrder() instead.
+  //
+  // SKIP for MFs — they don't trade on NSE, AMO is meaningless. MFs
+  // execute at end-of-day NAV regardless of when the order is placed
+  // (with cutoff-based same-day vs next-day NAV allocation handled in
+  // the MF-specific Invest UX, not the equity AMO flow). Pre-fix the
+  // MF detail page showed a misleading "NSE Closed — AMO mode" banner
+  // 21 hours of every day, with NaN limit price.
   // ===================================================================
-  if (!ms.open) {
+  if (!ms.open && inst.kind !== "MF") {
     if (ui.orderType !== "LIMIT") ui.orderType = "LIMIT";
     if (!ui.limitPrice || +ui.limitPrice <= 0) {
       ui.limitPrice = (curPrice / 100).toFixed(2);
@@ -1517,6 +1524,52 @@ function renderFundamentals(inst, live, hi52, lo52) {
   const fma = _num(live?.fifty_day_average) ? `₹${live.fifty_day_average.toFixed(2)}` : null;
   const tma = _num(live?.two_hundred_day_average) ? `₹${live.two_hundred_day_average.toFixed(2)}` : null;
 
+  // ── MF branch: a totally different shape than equity fundamentals ──
+  // MFs don't have PE/PB/Beta/Dividend Yield in the equity sense — they
+  // have NAV, AUM, expense ratio, fund manager, benchmark, plan/option,
+  // risk-o-meter level. Build script ships category_bucket, nav,
+  // nav_date, plan_type, scheme_kind, amfi_code, amc, bench, isin_growth.
+  // We'll show those today; a follow-up PR can add AUM + expense ratio
+  // once mfdata.in is wired up.
+  if (inst.kind === "MF") {
+    const navStr  = _num(inst.nav) ? `₹${inst.nav.toLocaleString("en-IN", { maximumFractionDigits: 4 })}` : "—";
+    const navDate = inst.nav_date || "—";
+    return [
+      fundRow(termHtml("Current NAV"), navStr),
+      fundRow(termHtml("NAV date"), navDate),
+      fundRow(termHtml("Category"), escapeHtml(inst.category || inst.category_bucket || "—")),
+      fundRow(termHtml("Plan type"), escapeHtml(inst.plan_type || "—")),
+      fundRow(termHtml("Option"), escapeHtml(inst.option_type || "—")),
+      fundRow(termHtml("AMC"), escapeHtml(inst.amc || "—")),
+      fundRow(termHtml("Benchmark"), escapeHtml(inst.bench || "—")),
+      fundRow(termHtml("AMFI code"), escapeHtml(inst.amfi_code || symbol.replace(/^MF_/, ""))),
+      inst.isin_growth ? fundRow(termHtml("ISIN (Growth)"), escapeHtml(inst.isin_growth)) : "",
+      fundRow(termHtml("Scheme type"), escapeHtml(inst.scheme_kind ? inst.scheme_kind + " Ended" : "—")),
+      fundRow(termHtml("Risk-O-Meter"), `<span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "med").toUpperCase()}</span>`, true),
+    ].filter(Boolean).join("");
+  }
+
+  // ── ETF branch: NAV + AUM + expense ratio matter more than PE/PB.
+  // ETFs trade on NSE intraday so we still show day-range / 52W / market
+  // status — but PE/PB/Beta are weighted-avg of underlying constituents
+  // and labeled appropriately. EPS is meaningless for an ETF basket.
+  if (inst.kind === "ETF") {
+    return [
+      fundRow(termHtml("Type"), "Exchange Traded Fund"),
+      fundRow(termHtml("Market Cap"), mcap),
+      fundRow(termHtml("P/E Ratio"), pe),    // weighted-avg of underlying basket
+      fundRow(termHtml("P/B Ratio"), pb),
+      fundRow(termHtml("Dividend Yield", "Div Yield"), dy),
+      fundRow(termHtml("Beta"), beta),
+      fundRow(termHtml("52-week high", "52W High"), hi),
+      fundRow(termHtml("52-week low", "52W Low"), lo),
+      fma ? fundRow(termHtml("50-day moving average", "50-day avg"), fma) : "",
+      tma ? fundRow(termHtml("200-day moving average", "200-day avg"), tma) : "",
+      fundRow(termHtml("Risk tier"), `<span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "med").toUpperCase()}</span>`, true),
+    ].filter(Boolean).join("");
+  }
+
+  // Equity branch — original layout.
   return [
     fundRow(termHtml("Market Cap"), mcap),
     fundRow(termHtml("P/E Ratio"), pe),
@@ -1529,8 +1582,6 @@ function renderFundamentals(inst, live, hi52, lo52) {
     fma ? fundRow(termHtml("50-day moving average", "50-day avg"), fma) : "",
     tma ? fundRow(termHtml("200-day moving average", "200-day avg"), tma) : "",
     fundRow(termHtml("Risk tier"), `<span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "med").toUpperCase()}</span>`, true),
-    inst.kind === "MF" ? fundRow(termHtml("Expense Ratio"), inst.expenseRatio != null ? `${inst.expenseRatio}%` : "—") : "",
-    inst.kind === "MF" ? fundRow(termHtml("AUM"), inst.aum || "—") : "",
   ].filter(Boolean).join("");
 }
 
