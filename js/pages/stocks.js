@@ -117,7 +117,46 @@ export function renderStocks(main) {
   quoteCache = { ...quoteCache, ...getFreshCachedQuotes(allSyms) };
 
   render();
-  const unsub = subscribe(() => { if (!cancelled) render(); });
+  // Subscribe with a state-slice diff so we only re-render when something
+  // RELEVANT to the stocks page changes — watchlist membership, signed-in
+  // user, or holdings (for watchlist stars + portfolio P&L tooltips).
+  //
+  // Pre-fix this listener fired render() on EVERY state emit, including:
+  //   - setSetting("coachPanelOpen", true)  — opening the coach FAB
+  //   - setSetting("theme", "dark")          — flipping the dark-mode toggle
+  //   - recordCoachMessage(msg)              — every coach intro / bias alert
+  //   - applyTrade(...)                      — trades placed on detail page
+  //   - cross-tab `storage` events           — any tab writing user state
+  //
+  // Each render() did `main.innerHTML = ...` which wiped every hydrated
+  // card back to a skeleton stub, then the IntersectionObserver had to
+  // re-fire and re-hydrate everything. That's the user-reported
+  // "everything flashing like mad except the name" — the name is in
+  // the stub HTML so it survives the wipe; everything else (price,
+  // change, sparkline, star, MED pill, CLOSED badge) lives only in
+  // the hydrated body and gets re-rendered.
+  //
+  // The diff captures the small slices of state that actually change
+  // grid output. Anything else (settings, coach state, holdings on a
+  // different page) is ignored — render() doesn't fire.
+  let _lastWlSig = getState().watchlist.join(",");
+  let _lastUserSig = getState().user?.id || "";
+  let _lastHoldingsSig = JSON.stringify(getState().holdings || {});
+  const unsub = subscribe((state) => {
+    if (cancelled) return;
+    const wlSig = state.watchlist.join(",");
+    const userSig = state.user?.id || "";
+    // Only stringify holdings keys (symbol list) — full holdings JSON would
+    // re-render on every avg-cost recompute. Watchlist needs symbol-set
+    // diffing; holdings only matters for "you hold" badges on the cards.
+    const holdingsSig = Object.keys(state.holdings || {}).sort().join(",");
+    if (wlSig !== _lastWlSig || userSig !== _lastUserSig || holdingsSig !== _lastHoldingsSig) {
+      _lastWlSig = wlSig;
+      _lastUserSig = userSig;
+      _lastHoldingsSig = holdingsSig;
+      render();
+    }
+  });
   // Full universe lands asynchronously — re-render when the loader fires so
   // the instrument count pill and "All NSE" source both pick up Tier 2.
   const onUniverseLoaded = () => { if (!cancelled) render(); };
@@ -741,7 +780,16 @@ export function renderStocks(main) {
         const sym = wlBtn.dataset.sym;
         if (!sym) return;
         const wl = new Set(getState().watchlist);
-        if (wl.has(sym)) removeFromWatchlist(sym);
+        const wasWatched = wl.has(sym);
+        // In-place DOM patch BEFORE the state mutation — fast visual feedback
+        // and avoids relying on the subscribe re-render path. The subscribe
+        // diff in renderStocks() will detect the watchlist change and call
+        // render() but the user already sees the star flip immediately
+        // here, so no perceived lag.
+        wlBtn.textContent = wasWatched ? "☆" : "★";
+        wlBtn.title = wasWatched ? "Add to watchlist" : "Remove from watchlist";
+        wlBtn.setAttribute("aria-label", wasWatched ? "Add" : "Remove");
+        if (wasWatched) removeFromWatchlist(sym);
         else addToWatchlist(sym);
         return;
       }
