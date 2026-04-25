@@ -1007,7 +1007,7 @@ export function renderStocks(main) {
           const inst = getInstrument(s);
           if (inst?.kind === "MF") return false;
           return !quoteCache[s]?.pricePaise;
-        }).slice(0, 60);
+        }).slice(0, VIEWPORT_PREHEAT_SIZE);
         if (seed.length) {
           getQuoteBatch(seed).then(q => {
             if (cancelled) return;
