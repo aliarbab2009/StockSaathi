@@ -24,6 +24,11 @@ let aiSearchQuery = "";
 let aiSearchAbort = null;     // AbortController for the in-flight /api/ai call
 let visibleCount = 100;       // pagination window — grows with "Show more"
 const PAGE_SIZE = 100;
+// Magic-number extraction: how many visible cards the viewport-preheat
+// (Hotfix21b) and warm-up-from-observer (Hotfix22a) both fetch up front.
+// Set to 60 = ~24 visible cards × 2.5 scroll buffer. Lifted to a named
+// const so future changes don't have to hunt for both call sites.
+const VIEWPORT_PREHEAT_SIZE = 60;
 let _debounceTimer = null;
 
 // Visible-symbols set + observer for viewport-only polling. Populated as
