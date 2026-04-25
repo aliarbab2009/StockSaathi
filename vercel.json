@@ -13,6 +13,13 @@
     { "path": "/api/admin-sync-fundamentals?offset=2000&limit=500",  "schedule": "40 13 * * *" },
     { "path": "/api/admin-sync-mf",                                  "schedule": "0 17 * * *" }
   ],
+  "rewrites": [
+    {
+      "source": "/js/data/:name(universeFull|mfFull)\\.:hash([a-f0-9]{8})\\.json",
+      "has": [{ "type": "header", "key": "accept-encoding", "value": ".*br.*" }],
+      "destination": "/js/data/:name.:hash.json.br"
+    }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
@@ -22,6 +29,28 @@
         { "key": "Access-Control-Allow-Methods", "value": "GET,POST,OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type,X-StockSaathi-Relay" },
         { "key": "Access-Control-Max-Age", "value": "600" }
+      ]
+    },
+    {
+      "source": "/js/data/:name(universeFull|mfFull)\\.[a-f0-9]{8}\\.json\\.br",
+      "headers": [
+        { "key": "Content-Encoding", "value": "br" },
+        { "key": "Content-Type", "value": "application/json; charset=utf-8" },
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" },
+        { "key": "Vary", "value": "Accept-Encoding" }
+      ]
+    },
+    {
+      "source": "/js/data/:name(universeFull|mfFull)\\.[a-f0-9]{8}\\.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" },
+        { "key": "Vary", "value": "Accept-Encoding" }
+      ]
+    },
+    {
+      "source": "/js/data/:name(universeFull|mfFull)\\.meta\\.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }
       ]
     },
     {

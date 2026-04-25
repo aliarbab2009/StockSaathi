@@ -17,13 +17,19 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
+import zlib from "node:zlib";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+
+const brotli = promisify(zlib.brotliCompress);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, "..");
-const OUT_JSON = path.join(APP_ROOT, "js", "data", "universeFull.json");
-const OUT_META = path.join(APP_ROOT, "js", "data", "universeFull.meta.json");
+const OUT_DIR  = path.join(APP_ROOT, "js", "data");
+const OUT_JSON = path.join(OUT_DIR, "universeFull.json");
+const OUT_META = path.join(OUT_DIR, "universeFull.meta.json");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const BROWSER_HEADERS = {
@@ -686,7 +692,42 @@ async function main() {
     // No existing artifact yet — fine, first build.
   }
 
-  // 7. Write
+  // 7. Write — produces FOUR artifacts so the front-end can opt into the
+  //   immutable cache + brotli-q11 fast path:
+  //     universeFull.json              — legacy path (still served)
+  //     universeFull.<sha8>.json       — content-addressed copy, immutable cache
+  //     universeFull.<sha8>.json.br    — brotli q11 (~5-15% smaller than q4-5)
+  //     universeFull.meta.json         — small index (max-age 300) listing the
+  //                                       current sha8 so universeLoader.js can
+  //                                       resolve the immutable URL.
+  // Vercel's edge auto-serves .br alongside the un-compressed file when the
+  // request has Accept-Encoding: br, with Content-Encoding: br set.
+  const json = JSON.stringify(out);
+  const sha8 = crypto.createHash("sha256").update(json).digest("hex").slice(0, 8);
+  const hashedJson = path.join(OUT_DIR, `universeFull.${sha8}.json`);
+  const hashedBr   = path.join(OUT_DIR, `universeFull.${sha8}.json.br`);
+
+  // Brotli q11 is the maximum quality (slow to compress but free at runtime).
+  // For the ~470 KB universeFull.json this saves ~30 KB vs Vercel edge q4-5.
+  const brBuf = await brotli(Buffer.from(json, "utf-8"), {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: json.length,
+    },
+  });
+
+  // Clean up older hashed copies so the deployed bundle stays slim. Keep
+  // ONLY files matching the current sha8.
+  try {
+    const existing = await fs.readdir(OUT_DIR);
+    for (const f of existing) {
+      const m = f.match(/^universeFull\.([0-9a-f]{8})\.json(\.br)?$/);
+      if (m && m[1] !== sha8) {
+        await fs.unlink(path.join(OUT_DIR, f)).catch(() => {});
+      }
+    }
+  } catch (_) {}
+
   const meta = {
     builtAt: new Date().toISOString(),
     rowCount: out.length,
@@ -699,10 +740,20 @@ async function main() {
     niftySmall250: niftySmall250.syms.size,
     industryCoverage: Object.keys(industryBySym).length,
     buildDurationMs: Date.now() - startTs,
+    sha8,                                 // immutable URL: universeFull.<sha8>.json
+    rawBytes: json.length,
+    brotliBytes: brBuf.length,
   };
-  await fs.writeFile(OUT_JSON, JSON.stringify(out));
-  await fs.writeFile(OUT_META, JSON.stringify(meta, null, 2));
-  console.log(`[build] wrote ${OUT_JSON} (${(JSON.stringify(out).length / 1024).toFixed(1)} KB)`);
+
+  await Promise.all([
+    fs.writeFile(OUT_JSON, json),
+    fs.writeFile(hashedJson, json),
+    fs.writeFile(hashedBr, brBuf),
+    fs.writeFile(OUT_META, JSON.stringify(meta, null, 2)),
+  ]);
+  console.log(`[build] wrote ${OUT_JSON} (${(json.length / 1024).toFixed(1)} KB)`);
+  console.log(`[build] wrote ${hashedJson} (immutable, sha8=${sha8})`);
+  console.log(`[build] wrote ${hashedBr} (${(brBuf.length / 1024).toFixed(1)} KB, brotli q11, saves ${(100 * (1 - brBuf.length / json.length)).toFixed(1)}%)`);
   console.log(`[build] wrote ${OUT_META}`);
 }
 

@@ -34,13 +34,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+
+const brotli = promisify(zlib.brotliCompress);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, "..");
-const OUT_JSON = path.join(APP_ROOT, "js", "data", "mfFull.json");
-const OUT_META = path.join(APP_ROOT, "js", "data", "mfFull.meta.json");
+const OUT_DIR  = path.join(APP_ROOT, "js", "data");
+const OUT_JSON = path.join(OUT_DIR, "mfFull.json");
+const OUT_META = path.join(OUT_DIR, "mfFull.meta.json");
 
 const AMFI_URL = "https://portal.amfiindia.com/spages/NAVAll.txt";
 const UA = "Mozilla/5.0 (compatible; StockSaathi-Build/1.0; +https://stocksaathi.co.in)";
@@ -317,8 +322,32 @@ async function main() {
   }
 
   // ── Write output ────────────────────────────────────────────────────────
+  // Same hash-stamped + brotli-q11 pattern as build-universe.mjs. Front-end
+  // resolves the current sha8 from mfFull.meta.json (max-age=300) and then
+  // fetches the immutable mfFull.<sha8>.json (max-age=31536000, immutable).
   const json = JSON.stringify(rows);
-  const sha = crypto.createHash("sha256").update(json).digest("hex").slice(0, 8);
+  const sha8 = crypto.createHash("sha256").update(json).digest("hex").slice(0, 8);
+  const hashedJson = path.join(OUT_DIR, `mfFull.${sha8}.json`);
+  const hashedBr   = path.join(OUT_DIR, `mfFull.${sha8}.json.br`);
+
+  const brBuf = await brotli(Buffer.from(json, "utf-8"), {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: json.length,
+    },
+  });
+
+  // Cleanup stale hashed files from prior builds.
+  try {
+    const existing = await fs.readdir(OUT_DIR);
+    for (const f of existing) {
+      const m = f.match(/^mfFull\.([0-9a-f]{8})\.json(\.br)?$/);
+      if (m && m[1] !== sha8) {
+        await fs.unlink(path.join(OUT_DIR, f)).catch(() => {});
+      }
+    }
+  } catch (_) {}
+
   const meta = {
     generated_at: new Date().toISOString(),
     source: AMFI_URL,
@@ -327,12 +356,20 @@ async function main() {
     distinct_categories: stats.distinct_categories,
     by_bucket: stats.by_bucket,
     by_plan: stats.by_plan,
-    sha8: sha,
+    sha8,
+    raw_bytes: json.length,
+    brotli_bytes: brBuf.length,
   };
 
-  await fs.writeFile(OUT_JSON, json + "\n", "utf-8");
-  await fs.writeFile(OUT_META, JSON.stringify(meta, null, 2) + "\n", "utf-8");
-  console.log(`[mf] wrote ${OUT_JSON} (${(json.length / 1024).toFixed(1)} KB, sha8 ${sha})`);
+  await Promise.all([
+    fs.writeFile(OUT_JSON, json + "\n", "utf-8"),
+    fs.writeFile(hashedJson, json, "utf-8"),
+    fs.writeFile(hashedBr, brBuf),
+    fs.writeFile(OUT_META, JSON.stringify(meta, null, 2) + "\n", "utf-8"),
+  ]);
+  console.log(`[mf] wrote ${OUT_JSON} (${(json.length / 1024).toFixed(1)} KB)`);
+  console.log(`[mf] wrote ${hashedJson} (immutable, sha8=${sha8})`);
+  console.log(`[mf] wrote ${hashedBr} (${(brBuf.length / 1024).toFixed(1)} KB, brotli q11, saves ${(100 * (1 - brBuf.length / json.length)).toFixed(1)}%)`);
   console.log(`[mf] wrote ${OUT_META}`);
 }
 

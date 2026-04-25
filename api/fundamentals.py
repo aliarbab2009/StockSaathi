@@ -294,6 +294,12 @@ def fetch_tickertape(symbol):
     r = _tickertape_fetch(symbol)
     if not r:
         return None
+    # Tickertape ships TWO PE numbers: `pe` (annual fiscal-year ratio) and
+    # `ttmPe` (trailing-12-months — matches Yahoo's `trailingPE`). For the
+    # `pe_ratio` field exposed to the front-end we prefer ttmPe so all
+    # tiers report on the same time window. Falls back to annual pe when
+    # ttmPe is missing (rare — usually for newly-listed companies).
+    pe_for_ui = r.get("pe_ttm") if r.get("pe_ttm") is not None else r.get("pe_ratio")
     return {
         "name": r.get("name"),
         # Tickertape's `info.sector` is a sub-industry (e.g. "Packaged Foods &
@@ -302,8 +308,9 @@ def fetch_tickertape(symbol):
         "sector": r.get("sector_gic"),
         "industry": r.get("sector_tickertape"),
         "market_cap": r.get("market_cap"),
-        "pe_ratio": r.get("pe_ratio"),
+        "pe_ratio": pe_for_ui,
         "pe_ttm": r.get("pe_ttm"),
+        "pe_annual": r.get("pe_ratio"),     # surfaced for power users
         "pb_ratio": r.get("pb_ratio"),
         "beta": r.get("beta"),
         "dividend_yield": r.get("dividend_yield"),
@@ -451,10 +458,18 @@ def fetch_fundamentals(symbol, *, allow_cache=True, write_back=True):
             _normalize_dividend_yield(cached)
             return cached
 
-    # Tier 1+2+3+4 — fan-out merge.
-    r = fetch_v7(ticker)
+    # Tier 1+2+3+4 — fan-out merge. Tickertape ships first because it's a
+    # dedicated finance API with self-consistent ratios — its dividend_yield,
+    # PE (TTM), PB, beta, market_cap are typically fresher than Yahoo's
+    # consumer-page-derived numbers (which lag because their
+    # `trailingAnnualDividendRate` is a 12-month rolling sum that misses
+    # recent dividend hikes). Yahoo v10 / v7 / v8 fill the gaps Tickertape
+    # doesn't have (50-day-avg, 200-day-avg, exchange info, currency, OHLC).
+    # _merge keeps the base value when present, so this priority is correct
+    # for *every* field Tickertape ships.
+    r = fetch_tickertape(symbol)
     r = _merge(r, fetch_v10(ticker))
-    r = _merge(r, fetch_tickertape(symbol))
+    r = _merge(r, fetch_v7(ticker))
     r = _merge(r, fetch_v8_chart(ticker))
 
     if not r:

@@ -93,12 +93,35 @@ export function getInstrument(symbol) {
   return _bareStub(symbol, symbol.startsWith("MF_") ? "MF" : "EQUITY");
 }
 
+// Resolve the current immutable URL via the meta index. The meta file is
+// served with max-age=300 (small + churn-tolerant), and points at the
+// content-addressed `<name>.<sha8>.json` which is served with
+// max-age=31536000, immutable. This pattern eliminates the 304 round-trip
+// that was burning ~190 ms per cold load while letting the universe
+// content rev whenever the build script regenerates it.
+//
+// Falls back to the legacy un-hashed URL if the meta fetch fails (during
+// the rolling deploy where the meta is updated before the hashed file
+// reaches the edge cache, or for older clients pre-Landing-G).
+async function _resolveImmutableUrl(name) {
+  try {
+    const metaRes = await fetch(`./js/data/${name}.meta.json`, { cache: "default" });
+    if (!metaRes.ok) return `./js/data/${name}.json`;
+    const meta = await metaRes.json();
+    if (meta && typeof meta.sha8 === "string" && /^[0-9a-f]{8}$/.test(meta.sha8)) {
+      return `./js/data/${name}.${meta.sha8}.json`;
+    }
+  } catch (_) {}
+  return `./js/data/${name}.json`;
+}
+
 // ── Lazy load Tier-2 + upgrade the bootstrap stubs ──────────────────────────
 export function ensureUniverseLoaded() {
   if (_loadPromise) return _loadPromise;
   _loadPromise = (async () => {
     try {
-      const res = await fetch("./js/data/universeFull.json", { cache: "default" });
+      const url = await _resolveImmutableUrl("universeFull");
+      const res = await fetch(url, { cache: "default" });
       if (!res.ok) return false;
       const rows = await res.json();
       if (!Array.isArray(rows)) return false;
@@ -161,7 +184,8 @@ export function ensureMfUniverseLoaded() {
   if (_mfLoadPromise) return _mfLoadPromise;
   _mfLoadPromise = (async () => {
     try {
-      const res = await fetch("./js/data/mfFull.json", { cache: "default" });
+      const url = await _resolveImmutableUrl("mfFull");
+      const res = await fetch(url, { cache: "default" });
       if (!res.ok) return false;
       const rows = await res.json();
       if (!Array.isArray(rows)) return false;
