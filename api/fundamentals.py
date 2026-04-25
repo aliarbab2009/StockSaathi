@@ -410,19 +410,32 @@ def _normalize_dividend_yield(r):
     if not r:
         return r
     dy = r.get("dividend_yield")
-    if dy is None:
-        return r
     rate = r.get("dividend_rate")
     price = r.get("price") or r.get("prev_close")
+    # Path A: divYield missing entirely → derive from rate/price if possible.
+    if dy is None:
+        try:
+            if rate is not None and price is not None and float(price) > 0 and float(rate) > 0:
+                r["dividend_yield"] = float(rate) / float(price)
+        except (TypeError, ValueError):
+            pass
+        return r
+    # Path B: divYield present and looks like a fraction (Tickertape after
+    # _pct_to_frac, or Yahoo's `summaryDetail.dividendYield` raw → already
+    # 0.0041 etc.). Trust it. Do NOT clobber with Yahoo's stale
+    # `trailingAnnualDividendRate / price` — that field is a 12-month rolling
+    # sum that lags actual recent dividend hikes, while Tickertape's value
+    # is a fresh per-fiscal-quarter recomputation. Pre-Hotfix2 this was the
+    # exact bug ADFFOODS hit: Tickertape said 0.48%, Yahoo's stale rate/
+    # price said 0.46%, and the normalizer overwrote 0.48% with 0.46%.
     try:
-        if rate is not None and price is not None and float(price) > 0 and float(rate) > 0:
-            r["dividend_yield"] = float(rate) / float(price)
-            return r
-    except (TypeError, ValueError):
-        pass
-    try:
-        if float(dy) > 0.3:
-            r["dividend_yield"] = float(dy) / 100.0
+        dy_f = float(dy)
+        if dy_f > 0.3:
+            # Path C: divYield arrived as percent (some Yahoo paths return
+            # 0.41 meaning 0.41%). 0.3 threshold — no real-world stock
+            # yields >30% as fraction.
+            r["dividend_yield"] = dy_f / 100.0
+        # else: 0 < dy ≤ 0.3 → already fraction-shaped, leave as-is.
     except (TypeError, ValueError):
         pass
     return r
