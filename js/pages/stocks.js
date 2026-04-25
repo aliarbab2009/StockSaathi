@@ -85,11 +85,13 @@ export function renderStocks(main) {
   // or already in flight. Kicks the JSON fetch early so the "All NSE" pill
   // is click-ready by the time the user scans the toolbar.
   ensureUniverseLoaded();
-  // If the user lands on the Mutual Funds tab from a deep-link or a previous
-  // session, eager-load AMFI's catalog so the grid populates without a
-  // second click. Otherwise we defer until tab activation to keep cold-load
-  // payload small (~600 KB brotli).
-  if (filter.kind === "MF") ensureMfUniverseLoaded();
+  // Eager-load MF universe always — cold-load cost is ~250 KB brotli +
+  // ~1 s on a fast connection. Without this, the Mutual Funds pill
+  // shows "(10)" (legacy placeholder count) until the user clicks
+  // the pill, which forces them to click twice to see the real list.
+  // User-reported confusing UX: "MF still shows 10 until the pill is
+  // clicked". Now the count populates within ~1-2 s of page load.
+  ensureMfUniverseLoaded();
   // Also re-render once AMFI lands so the count pills + grid update.
   const onMfLoaded = () => { if (!cancelled) render(); };
   window.addEventListener("ss:mf-universe-loaded", onMfLoaded);
