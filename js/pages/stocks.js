@@ -925,9 +925,25 @@ export function renderStocks(main) {
           if (card.dataset.stub === "1") {
             const inst = getInstrument(sym);
             if (inst) {
+              // Defensive: if a non-MF card enters viewport without a
+              // live quote in cache (covers the long tail beyond the
+              // 21b viewport preheat — symbols user scrolls into after
+              // the initial 60), skip the hydrate-as-skeleton path
+              // entirely. The warm-up-from-observer batch fires below
+              // when the IO callback's `changed` flag flips true; once
+              // its quote arrives, rehydrateCardsInPlace renders this
+              // card directly into the hasLive=true layout. Net user
+              // experience: stub → fully-priced card in one transition,
+              // never the intermediate "hydrated with skeleton price"
+              // state. MFs short-circuit through this guard via
+              // inst.nav fallback so they always hydrate immediately.
+              const _q = quoteCache[sym];
+              if (inst.kind !== "MF" && _q?.pricePaise == null) {
+                continue;
+              }
               const seededCloses = getCloses(sym, 40);
               const closes = getIntradaySparkline(sym, seededCloses);
-              const quote = quoteCache[sym];
+              const quote = _q;
               const hasLive = quote?.pricePaise != null;
               // MF NAV fallback (see same logic in renderStockCardBody) —
               // MFs never poll a live quote so the card body must read
