@@ -448,8 +448,12 @@ export function renderStocks(main) {
       } else {
         liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
       }
+      // Pre-compute the change-line fingerprint so the first quote-tick
+      // after this rehydrate is a fingerprint hit in patchHydratedCards
+      // (no innerHTML rebuild on identical content). Mirrors data-spark-fp.
+      const changeFp = inst.kind === "MF" ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
       card.innerHTML = renderStockCardBody(inst, state, wlSet, {
-        closes, hasLive, price, change, isWatched, liveBadge,
+        closes, hasLive, price, change, isWatched, liveBadge, changeFp,
       });
       card.dataset.stub = "";
       card.dataset.rendered = "1";
@@ -892,8 +896,12 @@ export function renderStocks(main) {
               } else {
                 liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
               }
+              // Pre-compute the change-line fingerprint for first-tick
+              // no-op (mirrors data-spark-fp). MFs skip — patchHydratedCards
+              // never patches MF change lines (MFs aren't in symbolsToPoll).
+              const changeFp = inst.kind === "MF" ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
               card.innerHTML = renderStockCardBody(inst, state, wlSet, {
-                closes, hasLive, price, change, isWatched, liveBadge,
+                closes, hasLive, price, change, isWatched, liveBadge, changeFp,
               });
               card.dataset.stub = "";
               card.dataset.rendered = "1";
@@ -1486,7 +1494,7 @@ function renderStockCard(inst, state, wlSet) {
   const liveBadge = badge;
   return `
     <div class="stock-card" data-sym="${inst.symbol}" data-rendered="1" role="button" tabindex="0" aria-label="${escapeAttr(inst.name)}">
-      ${renderStockCardBody(inst, state, wlSet, { closes, hasLive, price, change, isWatched, liveBadge })}
+      ${renderStockCardBody(inst, state, wlSet, { closes, hasLive, price, change, isWatched, liveBadge, changeFp: inst.kind === "MF" ? null : computeChangeFp(change, quote?.source, quote?.stale, marketStatus().state) })}
     </div>
   `;
 }
