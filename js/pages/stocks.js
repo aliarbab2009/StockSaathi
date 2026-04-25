@@ -342,19 +342,26 @@ export function renderStocks(main) {
       // real grid instead of skeleton. Without this ordering, the gate
       // would still see _initialQuotesLoaded=false at render time even
       // though the quotes are already in quoteCache.
+      // Capture readiness BEFORE flipping _initialQuotesLoaded — if the
+      // page was already hydrated (Hotfix21b's preheat finished first
+      // and rendered the real grid), a render() here would wipe every
+      // card back to a stub. User-reported regression after Hotfix22:
+      // 'cards load, go skeleton, blink within 300ms, stable'. Skip
+      // the wipe and just patch the new quotes into the live DOM.
+      const wasReady = pageReady();
       _initialQuotesLoaded = true;
-      // Don't renderList() — that wipes the entire grid + scroll position
-      // (user-reported "scrolling ETF restarts the scrolling" + ~5x card
-      // re-hydrations during scroll = continuous flashing). Instead, in
-      // place re-render only the cards whose quotes just arrived.
-      rehydrateCardsInPlace(Object.keys(q));
-      // Trigger a render() if the skeleton is still up — Hotfix19c's
-      // gate gates on (_universeLoaded && _initialQuotesLoaded). The
-      // moment both are true we want to swap skeleton → real grid.
-      // Subsequent renders are debounced by patchHydratedCards but
-      // this first transition needs an explicit render call because
-      // rehydrateCardsInPlace only touches cards that already exist.
-      render();
+      if (wasReady) {
+        // Page is already showing fully-hydrated cards. Patch the new
+        // quotes into existing DOM nodes (fp-aware — skips when data
+        // unchanged). No render(), no wipe, no blink.
+        patchHydratedCards(q);
+      } else {
+        // Skeleton is still up. Hydrate cards that already exist (rare
+        // — usually the grid hasn't been emitted yet) and trigger the
+        // skeleton → real grid swap.
+        rehydrateCardsInPlace(Object.keys(q));
+        render();
+      }
     } catch {}
   })();
 
