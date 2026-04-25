@@ -34,6 +34,13 @@ const VIEWPORT_PREHEAT_SIZE = 60;
 // post-render warm-up flow fill prices. Prevents a hung upstream API
 // from holding the skeleton indefinitely on slow networks.
 const PREHEAT_FAIL_OPEN_MS = 3000;
+// IntersectionObserver rootMargin values. Hydrate observer uses 200%
+// (cards within 2 viewport heights of visible region get warmed up).
+// Dehydrate observer uses 600% (cards 6 viewport heights past visible
+// get torn back down to stubs to free DOM memory). Both deduced from
+// Hotfix7's analysis of "Show all 13,969" leaving 13k hydrated cards.
+const HYDRATE_ROOT_MARGIN = "200% 0px 200% 0px";
+const DEHYDRATE_ROOT_MARGIN = "600% 0px 600% 0px";
 let _debounceTimer = null;
 
 // Visible-symbols set + observer for viewport-only polling. Populated as
@@ -1033,7 +1040,7 @@ export function renderStocks(main) {
       }
     }, {
       root: null,                     // viewport
-      rootMargin: "200% 0px 200% 0px",
+      rootMargin: HYDRATE_ROOT_MARGIN,
       threshold: 0,
     });
 
@@ -1096,7 +1103,7 @@ export function renderStocks(main) {
         }
       }, {
         root: null,
-        rootMargin: "600% 0px 600% 0px",
+        rootMargin: DEHYDRATE_ROOT_MARGIN,
         threshold: 0,
       });
     }
