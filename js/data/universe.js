@@ -13,6 +13,8 @@ export {
   ONBOARDING_PORTFOLIOS,
   getInstrument,
   ensureUniverseLoaded,
+  ensureMfUniverseLoaded,
   getAllInstruments,
   getAllSectors,
+  getMfCategoryBuckets,
 } from "./universeLoader.js";

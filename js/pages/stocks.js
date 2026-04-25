@@ -2,7 +2,7 @@
 // STOCKS — Browse markets. Real-time prices via Yahoo Finance when possible.
 // =============================================================================
 
-import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, getInstrument, ensureUniverseLoaded } from "../data/universe.js";
+import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, getInstrument, ensureUniverseLoaded, ensureMfUniverseLoaded, getMfCategoryBuckets } from "../data/universe.js";
 import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getFreshCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
@@ -12,7 +12,9 @@ import { toast } from "../components/toast.js";
 
 // Default tab = Stocks (showing the full universe sorted by index prominence
 // — Nifty 50/100 stocks naturally land on top). No Featured/All split.
-let filter = { q: "", sector: "all", kind: "EQUITY", sort: "marketCap" };
+// `mfBucket` and `mfPlan` are MF-tab-only filters — preserved across tab
+// switches so coming back to Mutual Funds keeps the user's last view.
+let filter = { q: "", sector: "all", kind: "EQUITY", sort: "marketCap", mfBucket: "all", mfPlan: "all" };
 let quoteCache = {};
 let marketMood = null;       // { narrative, temperature } | null
 let _moodFetched = false;
@@ -73,6 +75,14 @@ export function renderStocks(main) {
   // or already in flight. Kicks the JSON fetch early so the "All NSE" pill
   // is click-ready by the time the user scans the toolbar.
   ensureUniverseLoaded();
+  // If the user lands on the Mutual Funds tab from a deep-link or a previous
+  // session, eager-load AMFI's catalog so the grid populates without a
+  // second click. Otherwise we defer until tab activation to keep cold-load
+  // payload small (~600 KB brotli).
+  if (filter.kind === "MF") ensureMfUniverseLoaded();
+  // Also re-render once AMFI lands so the count pills + grid update.
+  const onMfLoaded = () => { if (!cancelled) render(); };
+  window.addEventListener("ss:mf-universe-loaded", onMfLoaded);
 
   // Single source: the full merged Tier-1 + Tier-2 universe (~2700 rows).
   // No Featured / All-NSE distinction — the kind pill (Stocks / ETFs / MFs /
@@ -105,6 +115,7 @@ export function renderStocks(main) {
     unsub?.();
     pollUnsub?.();
     window.removeEventListener("ss:universe-loaded", onUniverseLoaded);
+    window.removeEventListener("ss:mf-universe-loaded", onMfLoaded);
     if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} aiSearchAbort = null; }
     if (_debounceTimer) { clearTimeout(_debounceTimer); _debounceTimer = null; }
     if (_cardObserver) { try { _cardObserver.disconnect(); } catch {} _cardObserver = null; }
@@ -232,10 +243,22 @@ export function renderStocks(main) {
         <button class="filter-pill ${filter.kind === "MF" ? "active" : ""}" data-kind="MF">Mutual Funds${mfCount ? ` (${mfCount})` : ""}</button>
         <button class="filter-pill ${filter.kind === "watchlist" ? "active" : ""}" data-kind="watchlist">★ Watchlist (${state.watchlist.length})</button>
       </div>
-      <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: auto;">
-        <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors</button>
-        ${allSectorsList.map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
-      </div>
+      ${filter.kind === "MF" ? `
+        <div class="filter-pills" style="margin-bottom: var(--sp-3); max-height: 88px; overflow-y: auto;">
+          <button class="filter-pill ${filter.mfBucket === "all" ? "active" : ""}" data-mfbucket="all">All categories</button>
+          ${getMfCategoryBuckets().map(b => `<button class="filter-pill ${filter.mfBucket === b ? "active" : ""}" data-mfbucket="${escapeAttr(b)}">${escapeHtml(b)}</button>`).join("")}
+        </div>
+        <div class="filter-pills" style="margin-bottom: var(--sp-5);">
+          <button class="filter-pill ${filter.mfPlan === "all" ? "active" : ""}" data-mfplan="all">All plans</button>
+          <button class="filter-pill ${filter.mfPlan === "Direct" ? "active" : ""}" data-mfplan="Direct" title="Direct plans have a lower expense ratio because no distributor commission is built in">Direct</button>
+          <button class="filter-pill ${filter.mfPlan === "Regular" ? "active" : ""}" data-mfplan="Regular" title="Regular plans pay a distributor commission embedded in the expense ratio">Regular</button>
+        </div>
+      ` : `
+        <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: auto;">
+          <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors</button>
+          ${allSectorsList.map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
+        </div>
+      `}
 
       <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
@@ -268,10 +291,16 @@ export function renderStocks(main) {
       });
     });
     main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; visibleCount = PAGE_SIZE; render(); }));
+    main.querySelectorAll("[data-mfbucket]").forEach(btn => btn.addEventListener("click", () => { filter.mfBucket = btn.dataset.mfbucket; visibleCount = PAGE_SIZE; render(); }));
+    main.querySelectorAll("[data-mfplan]").forEach(btn => btn.addEventListener("click", () => { filter.mfPlan = btn.dataset.mfplan; visibleCount = PAGE_SIZE; render(); }));
     main.querySelectorAll("[data-kind]").forEach(btn => btn.addEventListener("click", () => {
       filter.kind = btn.dataset.kind;
-      filter.sector = "all";      // sector list changes between curated and All-NSE views
+      filter.sector = "all";      // sector list changes between Stocks / ETFs / MFs / Watchlist
       visibleCount = PAGE_SIZE;
+      // First click on Mutual Funds — kick the AMFI catalog fetch so the
+      // grid populates with all ~14k schemes. Subsequent clicks are no-op
+      // because ensureMfUniverseLoaded de-dupes via _mfLoadPromise.
+      if (filter.kind === "MF") ensureMfUniverseLoaded();
       render();
     }));
     // Show more / Show all rebuild only the grid (renderList) — no need to
@@ -675,12 +704,23 @@ function applyFilters(all, f, state, quoteCache) {
   let list = all.slice();
   if (f.kind === "EQUITY") list = list.filter(i => i.kind === "EQUITY");
   else if (f.kind === "ETF") list = list.filter(i => i.kind === "ETF");
-  else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
+  else if (f.kind === "MF") {
+    list = list.filter(i => i.kind === "MF");
+    // MF-specific facets: category bucket (Equity/Debt/Hybrid/Index/etc.)
+    // and plan type (Direct/Regular). Both default to "all".
+    if (f.mfBucket && f.mfBucket !== "all") {
+      list = list.filter(i => i.category_bucket === f.mfBucket);
+    }
+    if (f.mfPlan && f.mfPlan !== "all") {
+      list = list.filter(i => i.plan_type === f.mfPlan);
+    }
+  }
   else if (f.kind === "watchlist") {
     const wl = new Set(state.watchlist);
     list = list.filter(i => wl.has(i.symbol));
   }
-  if (f.sector !== "all") list = list.filter(i => i.sector === f.sector);
+  // Sector filter only applies outside MF mode (MFs use mfBucket).
+  if (f.kind !== "MF" && f.sector !== "all") list = list.filter(i => i.sector === f.sector);
   if (f.q) {
     const q = f.q.toLowerCase();
     list = list.filter(i =>
