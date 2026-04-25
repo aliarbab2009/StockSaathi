@@ -33,8 +33,18 @@ export async function coach(event) {
   // Determine template key
   const templateKey = pickTemplateKey(event, biases);
 
-  // Instrument + analog (used by tick builder)
-  const instrument = event.symbol ? getInstrument(event.symbol) : null;
+  // Instrument + analog (used by tick builder).
+  //
+  // event.instrument takes precedence when callers supply one. The
+  // stockDetail page passes a merged instrument with liveFundamentals
+  // patched in (`{ ...inst, pe: liveFundamentals.pe_ratio, marketCap:
+  // liveFundamentals.market_cap, sector: liveSector }`), so the coach
+  // template gets the real PE/MarketCap/sector — not the universe's
+  // null PE that produces "P/E is —, which means investors are paying
+  // ₹— for every ₹1 of annual earnings." Pre-fix this branch always
+  // overwrote the merged instrument with a fresh getInstrument()
+  // lookup, throwing away the live-fundamentals merge.
+  const instrument = event.instrument || (event.symbol ? getInstrument(event.symbol) : null);
   const analog = event.symbol ? buildAnalogContext(event.symbol) : null;
 
   const tick = makeTick({
