@@ -295,6 +295,12 @@ export function renderStocks(main) {
           <button class="filter-pill ${filter.mfPlan === "Direct" ? "active" : ""}" data-mfplan="Direct" title="Direct plans have a lower expense ratio because no distributor commission is built in">Direct</button>
           <button class="filter-pill ${filter.mfPlan === "Regular" ? "active" : ""}" data-mfplan="Regular" title="Regular plans pay a distributor commission embedded in the expense ratio">Regular</button>
         </div>
+      ` : filter.kind === "ETF" ? `
+        <!-- ETF tab: equity-sector pills are useless here (every ETF row has
+             sector="ETF", so any "Banking"/"Pharma"/etc. pill click yields 0
+             results). Hide entirely. ETF category pills (Equity Index / Gold /
+             Liquid / International) would need build-time enrichment that
+             ships in a follow-up. -->
       ` : `
         <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: auto;">
           <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors</button>
@@ -835,9 +841,27 @@ function applyFilters(all, f, state, quoteCache) {
     // from index constituents (build-universe.mjs) and is the closest proxy
     // to "size" we have without an LLM-token-burning live fundamentals
     // call per card. Tie-break by symbol so order is stable.
+    //
+    // ETF prominence boost: every ETF row ships with idx=0 because
+    // build-universe.mjs only computes index membership for Nifty equity
+    // indices. Without this boost, ETFs sorted alphabetically and the most
+    // popular ones (NIFTYBEES, GOLDBEES, BANKBEES, JUNIORBEES, LIQUIDBEES)
+    // were buried hundreds of rows deep behind no-name "AB..." schemes.
+    // Bump these well-known tickers up via a hand-curated boost table.
+    // Real fix needs AUM ingestion in the build script — this is the
+    // stopgap until that lands.
+    const ETF_PROMINENCE = {
+      NIFTYBEES: 100, GOLDBEES: 95, BANKBEES: 90, JUNIORBEES: 85,
+      LIQUIDBEES: 80, SETFNIF50: 75, KOTAKLIQ: 70, ICICILIQ: 65,
+      CPSEETF: 60, ITBEES: 55, PSUBNKBEES: 50, SHARIABEES: 45,
+      MIDCAP150: 65, NIFTYIETF: 70, SETFNN50: 60, NIF100IETF: 60,
+      SILVERBEES: 65, SETFGOLD: 50,
+    };
     list.sort((a, b) => {
-      const ai = a.idx || a.idx_tags || 0;
-      const bi = b.idx || b.idx_tags || 0;
+      let ai = a.idx || a.idx_tags || 0;
+      let bi = b.idx || b.idx_tags || 0;
+      if (a.kind === "ETF") ai = ETF_PROMINENCE[a.symbol] || ai;
+      if (b.kind === "ETF") bi = ETF_PROMINENCE[b.symbol] || bi;
       if (ai !== bi) return bi - ai;
       return (a.symbol || "").localeCompare(b.symbol || "");
     });
@@ -857,14 +881,31 @@ function applyFilters(all, f, state, quoteCache) {
 // `min-height: 172px` preserves the layout box so the IO doesn't get
 // confused by zero-height rows and so the user's scroll position stays
 // consistent through the hydrate transition.
-function renderStubCard(inst) {
+// Format the symbol-line subtitle so MF cards show "AMC · Category" instead
+// of "MF_118718 · Equity" (technical AMFI code looks like garbage to users).
+// Equities/ETFs keep their existing "SYMBOL · Sector" layout.
+function _stubSubLine(inst) {
+  if (inst.kind === "MF") {
+    // AMC short name (first 2 words) is more recognisable than MF_<code>.
+    // category_bucket is set to inst.sector by universeLoader, but use
+    // category_bucket explicitly here in case sector ever ships differently.
+    const amcShort = inst.amc
+      ? escapeHtml(inst.amc.split(/\s+/).slice(0, 2).join(" "))
+      : escapeHtml(inst.symbol);
+    const cat = inst.category_bucket || inst.sector;
+    return cat && cat !== "Unknown" ? `${amcShort} · ${escapeHtml(cat)}` : amcShort;
+  }
   const sectorBit = inst.sector && inst.sector !== "Unknown" ? ` · ${escapeHtml(inst.sector)}` : "";
+  return `${escapeHtml(inst.symbol)}${sectorBit}`;
+}
+
+function renderStubCard(inst) {
   return `<div class="stock-card stock-card-stub" data-sym="${inst.symbol}" data-stub="1" role="button" tabindex="0" aria-label="${escapeAttr(inst.name)}" style="min-height: 172px;">
     <div class="stock-head">
       <div class="stock-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
       <div class="stock-title">
         <div class="name">${escapeHtml(inst.name)}</div>
-        <div class="sym">${inst.symbol}${sectorBit}</div>
+        <div class="sym">${_stubSubLine(inst)}</div>
       </div>
     </div>
     <div class="skeleton" style="width: 96px; height: 20px; margin-top: 6px;" aria-label="Loading price"></div>
@@ -1003,7 +1044,7 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
       <div class="stock-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
       <div class="stock-title">
         <div class="name">${escapeHtml(inst.name)}</div>
-        <div class="sym">${inst.symbol}${inst.sector && inst.sector !== "Unknown" ? ` · ${escapeHtml(inst.sector)}` : ""}</div>
+        <div class="sym">${_stubSubLine(inst)}</div>
       </div>
       <button class="watchlist-toggle" data-sym="${inst.symbol}" title="${isWatched ? "Remove from watchlist" : "Add to watchlist"}" aria-label="${isWatched ? "Remove" : "Add"}" style="background: transparent; padding: 4px; font-size: 16px;">${isWatched ? "★" : "☆"}</button>
     </div>
