@@ -360,18 +360,81 @@ export function renderStocks(main) {
     }
   }
 
+  // Site-wide skeleton state shown during the brief window between page
+  // mount and universeFull.json arriving. Replaces the previous behaviour
+  // where the page would flash 116 featured stocks first then re-render
+  // with the full 16,655-instrument universe. Skeleton is more honest:
+  // "we're loading" instead of "here's a different page that's about to
+  // change". Re-renders to the real layout once `ss:universe-loaded`
+  // fires (already wired via the existing onUniverseLoaded listener).
+  function renderSkeletonState() {
+    const skelCard = `<div class="stock-card stock-card-stub" style="min-height: 172px; pointer-events: none;">
+      <div class="stock-head">
+        <div class="stock-avatar skeleton" style="width: 32px; height: 32px;"></div>
+        <div class="stock-title">
+          <div class="skeleton" style="width: 140px; height: 14px;"></div>
+          <div class="skeleton" style="width: 80px; height: 10px; margin-top: 6px;"></div>
+        </div>
+      </div>
+      <div class="skeleton" style="width: 96px; height: 20px; margin-top: 8px;"></div>
+      <div class="skeleton" style="width: 70px; height: 12px; margin-top: 6px;"></div>
+      <div class="skeleton" style="width: 100%; height: 40px; margin-top: 8px;"></div>
+    </div>`;
+    const skelPill = (w) => `<span class="filter-pill skeleton" style="width: ${w}px; height: 32px; display: inline-block; border-radius: 16px;"></span>`;
+    const skelSectorPill = (w) => `<span class="filter-pill skeleton" style="width: ${w}px; height: 28px; display: inline-block; border-radius: 14px;"></span>`;
+    main.innerHTML = `
+      <div class="flex items-start justify-between wrap gap-3" style="margin-bottom: var(--sp-4);">
+        <div>
+          <h1>Markets</h1>
+          <p class="muted"><span class="skeleton" style="width: 240px; height: 14px; display: inline-block; vertical-align: middle;"></span></p>
+        </div>
+        <span class="data-badge"><span class="dot offline"></span> Loading…</span>
+      </div>
+      <div class="stocks-toolbar">
+        <div class="input-prefix">
+          <span class="px">🔍</span>
+          <input type="search" placeholder="Loading markets…" disabled style="opacity: 0.6;" />
+        </div>
+        <span class="skeleton" style="width: 110px; height: 32px; border-radius: 8px; display: inline-block;"></span>
+        <span class="skeleton" style="width: 200px; height: 38px; border-radius: 8px; display: inline-block;"></span>
+      </div>
+      <div class="filter-pills" style="margin-bottom: var(--sp-3);">
+        ${[100, 70, 130, 110].map(skelPill).join("")}
+      </div>
+      <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: hidden;">
+        ${[80, 60, 90, 75, 100, 65, 85, 70, 95, 80, 105, 70].map(skelSectorPill).join("")}
+      </div>
+      <div class="stocks-grid">
+        ${Array(12).fill(skelCard).join("")}
+      </div>
+    `;
+  }
+
   function render() {
     const state = getState();
     const wlSet = new Set(state.watchlist);
+    const allInst = getAllInstruments();
+    const universeReady = allInst.length > STOCKS.length;
+
+    // Pre-universe-loaded: emit a full-page skeleton instead of the
+    // 116-featured "real" view that briefly flashed in pre-Hotfix12. The
+    // user-visible delta was confusing — the page would render with
+    // ACC/ADANIENT/ADANIGREEN... for ~1 s, then re-render with the full
+    // 16,655-instrument universe. Skeleton state is more honest about
+    // "we're still loading" and matches the design language users
+    // already see on stub cards.
+    if (!universeReady) {
+      renderSkeletonState();
+      return;
+    }
+
     const fullList = applyFilters(source(), filter, state, quoteCache);
     const list = fullList.slice(0, visibleCount);
     const truncated = fullList.length > list.length;
     const src = getDataSource();
-    const allInst = getAllInstruments();
     const allSectorsList = getAllSectors();
     // Tab counts — derived from the full universe (all kinds), not the
     // filtered list. Shows "..." until Tier-2 lands.
-    const universeReady = allInst.length > STOCKS.length;
     const equityCount = universeReady ? allInst.filter(i => i.kind === "EQUITY").length : null;
     const etfCount    = universeReady ? allInst.filter(i => i.kind === "ETF").length : null;
     const mfCount     = universeReady ? allInst.filter(i => i.kind === "MF").length : null;
