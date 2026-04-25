@@ -14,11 +14,26 @@ import {
 } from "../data/prices.js";
 import { getInstrument } from "../data/universe.js";
 
+// MFs trade at end-of-day NAV with no intraday price movement and no
+// "panic sell" semantic — selling an MF is a redemption, settlement T+1
+// to T+3, and the tiny daily NAV moves (0.01–0.5% typical) are nothing
+// like the equity volatility these detectors are tuned for. Synthetic
+// stub-walk closes for MFs would produce random false-positives
+// (3-day stub drop ≥5% is easy to hit by chance). All bias detectors
+// that key off `trade.symbol` skip MFs via this helper.
+function _isMfSymbol(sym) {
+  if (!sym || typeof sym !== "string") return false;
+  if (sym.startsWith("MF_")) return true;
+  const inst = getInstrument(sym);
+  return inst?.kind === "MF";
+}
+
 // ---- PANIC SELL -----------------------------------------------------------
 // Fires when: SELL event AND (recent sharp drop OR significant intraday drop)
 //             AND holding was held briefly AND position was at a loss.
 export function detectPanicSell({ trade, holding }) {
   if (!trade || trade.side !== "SELL") return null;
+  if (_isMfSymbol(trade.symbol)) return null;   // MF redemption ≠ panic sell
   const sym = trade.symbol;
   const closes = getCloses(sym, 10);
   if (closes.length < 4) return null;
@@ -64,6 +79,7 @@ export function detectPanicSell({ trade, holding }) {
 export function detectFOMO({ trade, holdingBefore }) {
   if (!trade || trade.side !== "BUY") return null;
   if (holdingBefore) return null;                 // adding to existing = not FOMO
+  if (_isMfSymbol(trade.symbol)) return null;     // MF NAV doesn't FOMO-spike
 
   const sym = trade.symbol;
   const closes = getCloses(sym, 8);
@@ -123,6 +139,13 @@ export function detectSectorBias({ holdingsAfter, portfolioValue }) {
     // default, which would otherwise merge unrelated stocks into one
     // pseudo-sector and trigger a false sector_concentration signal.
     if (inst._stub) continue;
+    // Skip MF holdings — MF rows carry `sector = category_bucket` ("Equity",
+    // "Debt") which is a fund-type label not a sector. Counting an "Equity
+    // Mutual Fund" toward the user's "Equity" sector concentration would
+    // double-count diversified exposure as if it were a direct sector bet.
+    // MFs are inherently diversified within their bucket — concentration
+    // warnings should fire on direct stock holdings only.
+    if (inst.kind === "MF") continue;
     const px = getPriceAt(sym, 0);
     const v = Math.round(h.qty * px);
     const key = inst.sector || "Unknown";
@@ -177,6 +200,7 @@ export function detectDisposition({ transactions }) {
 // BUY fill price within 2% of 52-week high or low.
 export function detectAnchoring({ trade }) {
   if (!trade || trade.side !== "BUY") return null;
+  if (_isMfSymbol(trade.symbol)) return null;   // 52W range from synthetic stub for MFs
   const { hi, lo } = get52wRange(trade.symbol);
   // Bail if no seeded series (Tier-2 imported stock with no price history) —
   // get52wRange returns ±Infinity in that case, which makes distHi/distLo NaN.
@@ -224,6 +248,7 @@ export function detectChurning({ transactions, trade }) {
 // BUY of a stock that gained >5% TODAY.
 export function detectPumpChase({ trade }) {
   if (!trade || trade.side !== "BUY") return null;
+  if (_isMfSymbol(trade.symbol)) return null;   // MF NAV doesn't pump intraday
   const closes = getCloses(trade.symbol, 2);
   if (closes.length < 2) return null;
   const intraday = pctChange(closes[0], closes[1]);
