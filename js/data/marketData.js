@@ -461,6 +461,61 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
   return h;
 }
 
+// ---------- MF NAV history (mfapi.in via /api/mf-history) ------------------
+//
+// Returns the same shape as getHistory(): { ohlc, source } so callers
+// can use it interchangeably. Values are in PAISE (matches /api/history).
+//
+// tf values mirror the UI TF_MAP keys: "1M", "3M", "6M", "1Y", "3Y", "5Y".
+// "1D" and "1W" are not meaningful for NAV history (NAVs publish once per
+// day with no intraday candles), so they're remapped to "1M" so the chart
+// always renders something useful.
+//
+// In-memory cache: 1 hour. Falls back to { ohlc: [], source: "none" } on
+// network error so the chart shows the loading skeleton rather than crashing.
+
+const MF_HISTORY_TTL_MS = 60 * 60_000;
+const _mfHistoryCache = new Map();
+const _MF_TF_REMAP = { "1D": "1M", "1W": "1M" };
+
+export async function getMfHistory(symbol, tf = "1Y") {
+  const mappedTf = _MF_TF_REMAP[tf] || tf;
+  const key = `${symbol}|${mappedTf}`;
+
+  const cached = _mfHistoryCache.get(key);
+  if (cached && Date.now() - cached.ts < MF_HISTORY_TTL_MS) return cached.data;
+
+  // "MF_118718" → "118718". Reject anything that doesn't look like an
+  // AMFI scheme code so we don't burn an upstream call we know will fail.
+  const amfiCode = symbol && symbol.startsWith("MF_") ? symbol.slice(3) : symbol;
+  if (!amfiCode || !/^\d{1,6}$/.test(amfiCode)) {
+    return { ohlc: [], source: "none" };
+  }
+
+  let result = null;
+  try {
+    const res = await fetchJsonWithTimeout(
+      `/api/mf-history?code=${encodeURIComponent(amfiCode)}&tf=${encodeURIComponent(mappedTf)}`
+    );
+    if (res?.ok && Array.isArray(res.ohlc) && res.ohlc.length) {
+      result = {
+        ohlc:        res.ohlc,
+        source:      "mfapi",
+        scheme_name: res.scheme_name || "",
+        fund_house:  res.fund_house  || "",
+        asof_date:   res.asof_date   || "",
+        latest_nav_paise: res.latest_nav_paise ?? null,
+      };
+    }
+  } catch (_) {
+    // Network failure or timeout → fall through to empty fallback.
+  }
+
+  if (!result) result = { ohlc: [], source: "none" };
+  _mfHistoryCache.set(key, { data: result, ts: Date.now() });
+  return result;
+}
+
 // ---------- Live polling ---------------------------------------------------
 
 // Accepts EITHER a fixed symbols array (legacy callers like portfolio.js and

@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { getInstrument } from "../data/universe.js";
-import { getQuote, getHistory, subscribeToQuotes, quoteAge, getFundamentals, getFreshCachedQuote } from "../data/marketData.js";
+import { getQuote, getHistory, getMfHistory, subscribeToQuotes, quoteAge, getFundamentals, getFreshCachedQuote } from "../data/marketData.js";
 import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
 import { getSeries, getCloses, getPriceAt, getTodayChange, get52wRange, marketStatus } from "../data/prices.js";
@@ -215,9 +215,12 @@ export function renderStockDetail(main, params) {
       // Honour ui.interval if the user has zoomed in (overrides the
       // timeframe's default granularity with a finer one, e.g. "1m").
       const interval = ui.interval ?? tf.interval;
-      // 1D-tab fallback to last trading session when market is closed /
-      // weekend / holiday — see loadHistoryWithFallback.
-      const h = await loadHistoryWithFallback(symbol, tf, interval);
+      // MF branch — real NAV history from mfapi.in via /api/mf-history.
+      // Equities + ETFs go through the Yahoo path with 1D-fallback to last
+      // trading session on weekends/holidays/pre-market.
+      const h = inst.kind === "MF"
+        ? await getMfHistory(symbol, ui.timeframe)
+        : await loadHistoryWithFallback(symbol, tf, interval);
       if (myToken.cancelled) return;
       if (h) {
         liveHistory = h;
@@ -308,7 +311,10 @@ async function reloadHistory(inst, symbol) {
   // would produce nonsense sticky-shift math.
   _prevLastDataMs = null;
   render(inst, symbol);
-  const h = await loadHistoryWithFallback(symbol, tf, interval).catch(() => null);
+  // MF branch — see same logic in initial fetch (~line 220).
+  const h = inst.kind === "MF"
+    ? await getMfHistory(symbol, ui.timeframe).catch(() => null)
+    : await loadHistoryWithFallback(symbol, tf, interval).catch(() => null);
   if (myToken.cancelled) return;
   if (h) {
     liveHistory = h;
@@ -484,7 +490,12 @@ function render(inst, symbol) {
   const dayChangeVal = Math.round(curPrice * change);
 
   const tfSpec = TF_MAP[ui.timeframe] || TF_MAP["1M"];
-  const historyLoading = inst.kind !== "MF" && !liveHistory;
+  // Pre-Hotfix5: historyLoading was forced to false for MFs because there
+  // was no MF history fetch — the chart immediately rendered the synthetic
+  // stub-walk. Now that getMfHistory() actually fetches real NAV history
+  // from /api/mf-history, MFs need the same skeleton-until-resolved
+  // behaviour as equities.
+  const historyLoading = !liveHistory;
   const history = liveHistory?.ohlc?.length ? liveHistory.ohlc : getSeries(symbol).slice(-tfSpec.days);
 
   // Merge liveQuote into the last candle so the chart's newest tick matches
@@ -697,7 +708,7 @@ function render(inst, symbol) {
               <div class="dim text-xs">Loading ${ui.timeframe} chart…</div>
             </div>
           ` : inst.kind === "MF"
-            ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
+            ? `<div style="height: 300px;">${lineChart(closes.map(c => c / 100), { height: 300, color: "var(--brand)", rupees: true })}</div>`
             : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`}
           ${liveHistory?._fallbackLabel && ui.timeframe === "1D" ? `
             <div class="dim text-xs" style="margin-top: 6px; padding: 4px 8px; background: var(--bg-soft); border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px;">

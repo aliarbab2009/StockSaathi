@@ -83,11 +83,16 @@ export function sparkline(closes, { width = 220, height = 40, color = "#10B981",
 }
 
 // ---- LINE CHART (full) ---------------------------------------------------
+// `rupees: true` — values are already in rupees (not paise), so y-axis labels
+// get a ₹ prefix. Use this when the caller has converted NAV/price values
+// from paise (÷100) before invoking lineChart. Without this, y-axis labels
+// for an MF NAV chart showed "49.8k" (paise raw) instead of "₹498.62".
 export function lineChart(values, {
   width = 800, height = 300, color = "var(--brand)",
   showGrid = true, showAxes = true, areaFill = true,
   min: minArg = null, max: maxArg = null,
   paddingTop = 20, paddingBottom = 28, paddingLeft = 52, paddingRight = 20,
+  rupees = false,
 } = {}) {
   if (!values.length) return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}"></svg>`;
   const { min: autoMin, max: autoMax } = minMax(values);
@@ -112,7 +117,7 @@ export function lineChart(values, {
     for (let i = 0; i <= 4; i++) {
       const y = paddingTop + (i / 4) * plotH;
       const v = max - (i / 4) * (max - min);
-      const label = formatAxisNumber(v);
+      const label = rupees ? `₹${formatAxisNumber(v)}` : formatAxisNumber(v);
       yLabels += `<text class="chart-axis-label" x="${paddingLeft - 8}" y="${y + 4}" text-anchor="end">${label}</text>`;
     }
   }
