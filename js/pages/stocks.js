@@ -41,6 +41,11 @@ const PREHEAT_FAIL_OPEN_MS = 3000;
 // Hotfix7's analysis of "Show all 13,969" leaving 13k hydrated cards.
 const HYDRATE_ROOT_MARGIN = "200% 0px 200% 0px";
 const DEHYDRATE_ROOT_MARGIN = "600% 0px 600% 0px";
+// 2-second fail-open timeout for the mood banner. If the LLM mood call
+// is still inflight, drop the gate and let the banner appear later when
+// the fetch resolves. Keeps cold loads under the 2s perceived-instant
+// threshold even when the mood endpoint is slow.
+const MOOD_FAIL_OPEN_MS = 2000;
 let _debounceTimer = null;
 
 // Visible-symbols set + observer for viewport-only polling. Populated as
@@ -139,7 +144,7 @@ export function renderStocks(main) {
       _moodReady = true;
       render();
     }
-  }, 2000);
+  }, MOOD_FAIL_OPEN_MS);
 
   // Reset transient state on every (re-)entry so a stale in-flight AI
   // fetch or broken loading flag from the previous session doesn't leak
