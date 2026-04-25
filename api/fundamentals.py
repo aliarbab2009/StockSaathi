@@ -15,12 +15,20 @@ tier 2 fills gaps, etc. Verified live 2026-04-25:
 
 import os
 import re
+import sys
 import json
 import time
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote as url_quote
+
+# Vercel's @vercel/python runtime doesn't always include the handler's own
+# directory on sys.path at import time, so sibling underscore-helpers like
+# _yahoo_session.py + _tickertape.py fail to import unless we add it
+# explicitly. Confirmed via /api/debug-fundamentals: tiers work when called
+# from a handler that does sys.path.insert; silently fail otherwise.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ── Yahoo crumb session + Tickertape wrapper (sibling modules) ───────────────
 # Tolerate import failure on cold deploy edge cases — fall back to legacy

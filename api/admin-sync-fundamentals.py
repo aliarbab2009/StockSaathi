@@ -17,11 +17,16 @@ under 60s. Idempotent — re-running with the same offset is harmless.
 
 import json
 import os
+import sys
 import time
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote as url_quote
+
+# Same path-injection as fundamentals.py — Vercel doesn't auto-add api/ to
+# sys.path so sibling imports fail silently without this.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Sibling helpers (api/_yahoo_session.py + api/_tickertape.py + api/fundamentals.py)
 try:
