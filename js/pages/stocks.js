@@ -262,11 +262,25 @@ export function renderStocks(main) {
       // the whole card body in place via rehydrateCardsInPlace, which uses
       // the now-populated quoteCache to emit the correct hasLive=true layout.
       const priceEl = card.querySelector(".stock-price");
-      if (!priceEl && q.pricePaise != null) {
-        rehydrateCardsInPlace([sym]);
+      // Skeleton-state guard: if the card is missing .stock-price it was
+      // hydrated with hasLive=false (skeleton-shaped body). Two cases:
+      //  - We have a price now → re-render the body in place via the
+      //    hasLive=true path. rehydrateCardsInPlace replaces the whole
+      //    card.innerHTML so the change line + sparkline come along
+      //    correctly, no need to fall through.
+      //  - We still don't have a price → leave the skeleton as-is. Do NOT
+      //    fall through to the change/sparkline updates below; writing
+      //    just the change line on a card with no price slot reproduces
+      //    the OBS-screenshot bug ("change% + LIVE badge but no price").
+      // Invariant after this guard: patchHydratedCards only mutates
+      // fully-hydrated cards. Any future quote-source change that emits
+      // changePct without pricePaise can't reintroduce the half-broken
+      // render.
+      if (!priceEl) {
+        if (q.pricePaise != null) rehydrateCardsInPlace([sym]);
         continue;
       }
-      if (priceEl && q.pricePaise != null) {
+      if (q.pricePaise != null) {
         priceEl.textContent = formatRupees(q.pricePaise);
       }
       const changeEl = card.querySelector(".stock-change");
