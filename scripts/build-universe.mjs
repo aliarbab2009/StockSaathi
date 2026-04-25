@@ -307,7 +307,18 @@ function inferFromName(symbol, name) {
   if (/finance|financ|capital|investment|securities|broking|asset manag|housing finance|microfin|nbfc|holding|world money|forex|currency exchange|money limited/.test(n)) return "NBFC";
 
   // Tech / telecom / internet.
-  if (/software|technolog|infotech|systems|infosys|tcs|wipro|consultanc|digital|cyber|cloud|datamatic|persistent|coforge|mphasis|kpit|tata elxsi|happiest mind|zensar|hexaware|birlasoft|cyient|sonata|sasken|nazara|knowledgeware|alldigi|digitech|tech limited|tech ?services|solutions limited|it services|it consulting|business process|bpo|kpo|analytics|automation|saas\b|platform/.test(n)) return "IT Services";
+  //
+  // IT Services classification is split into two passes to handle the
+  // false-positive "technology" cases. Companies named like "Standard
+  // Engineering Technology Limited" (SETL) used to match the bare
+  // /technolog/ keyword and end up classified as IT Services, even
+  // though they're industrial/engineering firms. The narrow pass below
+  // anchors on stronger IT-specific keywords; the loose `technolog`
+  // check is gated on absence of `engineer` so industrial firms with
+  // "Engineering Technology" branding fall through to the
+  // Engineering/Infrastructure branch later in this function.
+  if (/software|infotech|systems|infosys|tcs|wipro|consultanc|digital|cyber|cloud|datamatic|persistent|coforge|mphasis|kpit|tata elxsi|happiest mind|zensar|hexaware|birlasoft|cyient|sonata|sasken|nazara|knowledgeware|alldigi|digitech|tech limited|tech ?services|solutions limited|it services|it consulting|business process|bpo|kpo|analytics|automation|saas\b|platform/.test(n)) return "IT Services";
+  if (/technolog/.test(n) && !/engineer/.test(n)) return "IT Services";
   // Telecom — added "telephone" + "mahanagar" + "nigam" so MTNL
   // ("Mahanagar Telephone Nigam Limited") classifies correctly. Pre-fix
   // MTNL fell through to "Other" because the regex only had "telecom"
