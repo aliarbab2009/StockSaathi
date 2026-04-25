@@ -429,6 +429,14 @@ export function renderStocks(main) {
       _cardObserver = null;
     }
     _visibleSymbols.clear();
+    // Reset the one-shot warm-up flag — without this, every tab switch
+    // (Stocks → ETFs → Mutual Funds → Watchlist) skips the immediate
+    // first-paint getQuoteBatch and users wait the full 10s subscribeToQuotes
+    // cycle for prices. Visible regression on prod: ETF cards stayed in the
+    // skeleton-stuck state (gray bars where price should be) for 10s after
+    // tab activation. Resetting here means the next IO callback's
+    // !_warmedFromObserver branch fires fresh for the new viewport batch.
+    _warmedFromObserver = false;
     if (typeof IntersectionObserver !== "function") {
       // Old browsers (or SSR test harness) — fall back to seeding all visible
       // symbols up front. The prefilter inside symbolsToPoll() then trims to
