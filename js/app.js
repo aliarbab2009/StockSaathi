@@ -65,7 +65,14 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", async () => {
     try {
       const reg = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
-      reg.update().catch(() => {});
+      // Periodic update check — long-open tabs catch up to recent
+      // deploys without waiting for the browser's own 24h-capped
+      // background update cycle. Pre-fix reg.update() ran exactly once
+      // on window.load, so a tab parked overnight could keep serving
+      // stale cached bundles past several deploys.
+      const checkForUpdate = () => { reg.update().catch(() => {}); };
+      checkForUpdate();
+      setInterval(checkForUpdate, 5 * 60 * 1000);
       reg.addEventListener("updatefound", () => {
         const sw = reg.installing;
         if (!sw) return;
