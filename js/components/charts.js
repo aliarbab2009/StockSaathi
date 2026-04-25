@@ -12,7 +12,13 @@
 function minMax(arr) {
   let min = Infinity, max = -Infinity;
   for (const v of arr) {
-    if (v == null) continue;
+    // Skip null/undefined AND any non-finite number (NaN, +/-Infinity).
+    // Without the isFinite check a single bad value (e.g. a hand-rolled
+    // synthetic series with a div-by-zero) would propagate NaN through
+    // every downstream coordinate and yield SVG attributes like
+    // `cx="NaN"` that the browser silently drops, leaving an invisible
+    // chart that's near-impossible to debug.
+    if (v == null || !Number.isFinite(v)) continue;
     if (v < min) min = v;
     if (v > max) max = v;
   }
@@ -31,10 +37,19 @@ function buildPath(values, width, height, { min, max, paddingTop = 6, paddingBot
   const plotH = height - paddingTop - paddingBottom;
   const stepX = values.length > 1 ? width / (values.length - 1) : 0;
   let d = "";
+  let started = false;
   for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    // Drop non-finite samples — a single NaN here would produce
+    // `M..L NaN,NaN L..` and the browser silently bins the entire
+    // sparkline. We "lift the pen" instead, breaking the line into
+    // segments around the gap (effectively a polyline of valid points).
+    if (v == null || !Number.isFinite(v)) continue;
     const x = i * stepX;
-    const y = paddingTop + plotH - ((values[i] - min) / range) * plotH;
-    d += (i === 0 ? "M" : "L") + x.toFixed(2) + "," + y.toFixed(2) + " ";
+    const y = paddingTop + plotH - ((v - min) / range) * plotH;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    d += (!started ? "M" : "L") + x.toFixed(2) + "," + y.toFixed(2) + " ";
+    started = true;
   }
   return d.trim();
 }
@@ -48,10 +63,18 @@ function buildAreaPath(values, width, height, opts) {
 // ---- SPARKLINE (small, stock-card) --------------------------------------
 export function sparkline(closes, { width = 220, height = 40, color = "#10B981", strokeWidth = 1.5 } = {}) {
   if (!closes || closes.length < 2) return "";
-  const { min, max } = minMax(closes);
-  const trend = closes[closes.length - 1] - closes[0];
+  // Filter to finite numbers only — Tier-2 stub fallback occasionally
+  // emits a NaN when the seeded walk hits a div-by-zero against a near-
+  // zero seed price (e.g. some illiquid micro-caps). Rather than letting
+  // that NaN poison the entire SVG, we strip it here and only render
+  // when at least 2 valid samples remain.
+  const cleaned = closes.filter(v => Number.isFinite(v));
+  if (cleaned.length < 2) return "";
+  const { min, max } = minMax(cleaned);
+  const trend = cleaned[cleaned.length - 1] - cleaned[0];
   const useColor = trend >= 0 ? "var(--green, #10B981)" : "var(--red, #EF4444)";
-  const path = buildPath(closes, width, height, { min, max, paddingTop: 2, paddingBottom: 2 });
+  const path = buildPath(cleaned, width, height, { min, max, paddingTop: 2, paddingBottom: 2 });
+  if (!path) return "";    // buildPath bailed — emit nothing rather than empty <path d="">
   return `
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
       <path d="${path}" fill="none" stroke="${useColor}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" />

@@ -2,7 +2,7 @@
 // STOCKS — Browse markets. Real-time prices via Yahoo Finance when possible.
 // =============================================================================
 
-import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, ensureUniverseLoaded } from "../data/universe.js";
+import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, getInstrument, ensureUniverseLoaded } from "../data/universe.js";
 import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getFreshCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
@@ -10,7 +10,9 @@ import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
 import { toast } from "../components/toast.js";
 
-let filter = { q: "", sector: "all", kind: "all", sort: "marketCap" };
+// Default tab = Stocks (showing the full universe sorted by index prominence
+// — Nifty 50/100 stocks naturally land on top). No Featured/All split.
+let filter = { q: "", sector: "all", kind: "EQUITY", sort: "marketCap" };
 let quoteCache = {};
 let marketMood = null;       // { narrative, temperature } | null
 let _moodFetched = false;
@@ -21,6 +23,12 @@ let aiSearchAbort = null;     // AbortController for the in-flight /api/ai call
 let visibleCount = 100;       // pagination window — grows with "Show more"
 const PAGE_SIZE = 100;
 let _debounceTimer = null;
+
+// Visible-symbols set + observer for viewport-only polling. Populated as
+// IntersectionObserver fires; consumed by symbolsToPoll() callback inside
+// renderStocks(). Cleared on hashchange leave.
+let _visibleSymbols = new Set();
+let _cardObserver = null;
 
 // Keywords that let the Ask-Saathi prefilter narrow a 2k-candidate pool down
 // to ~150 without sending everything to the LLM. Maps lowercase tokens to
@@ -48,6 +56,10 @@ const RISK_KEYWORDS = {
 export function renderStocks(main) {
   let cancelled = false;
   let pollUnsub = null;
+  // One-shot flag — first batch of viewport-visible symbols triggers an
+  // immediate getQuoteBatch so users see prices instantly. Subsequent
+  // scroll changes piggy-back on the 10s subscribeToQuotes cycle.
+  let _warmedFromObserver = false;
 
   // Reset transient state on every (re-)entry so a stale in-flight AI
   // fetch or broken loading flag from the previous session doesn't leak
@@ -62,16 +74,13 @@ export function renderStocks(main) {
   // is click-ready by the time the user scans the toolbar.
   ensureUniverseLoaded();
 
-  // Source list depends on the kind pill:
-  //   - "ALL_NSE" → full merged universe (~2700 rows, Tier 1 + Tier 2)
-  //   - "ETF" → full universe (ETFs only live in Tier 2)
-  //   - "watchlist" → full universe (otherwise watchlisted Tier-2 symbols
-  //     vanish from the grid even though they're persisted to Supabase)
-  //   - everything else → curated-only (~127 rows, fast render)
+  // Single source: the full merged Tier-1 + Tier-2 universe (~2700 rows).
+  // No Featured / All-NSE distinction — the kind pill (Stocks / ETFs / MFs /
+  // Watchlist) decides which slice the user sees, and the default sort by
+  // index prominence (Nifty 50/100 first) puts the famous names on top
+  // organically. This matches Groww / Zerodha Kite / Upstox UX.
   function source() {
-    return (filter.kind === "ALL_NSE" || filter.kind === "ETF" || filter.kind === "watchlist")
-      ? getAllInstruments()
-      : INSTRUMENTS;
+    return getAllInstruments();
   }
 
   // Prefill from in-memory cache SYNCHRONOUSLY so the very first paint
@@ -98,40 +107,59 @@ export function renderStocks(main) {
     window.removeEventListener("ss:universe-loaded", onUniverseLoaded);
     if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} aiSearchAbort = null; }
     if (_debounceTimer) { clearTimeout(_debounceTimer); _debounceTimer = null; }
+    if (_cardObserver) { try { _cardObserver.disconnect(); } catch {} _cardObserver = null; }
+    _visibleSymbols.clear();
   };
   window.addEventListener("hashchange", onLeave, { once: true });
 
-  // Cover EVERY equity in the universe — no more 50-stock cap. getQuoteBatch
-  // auto-chunks to stay under /api/live-quote's MAX_SYMBOLS=80, and the
-  // Supabase quote_cache (10s TTL, shared across users) means Yahoo only
-  // sees one hit per symbol per 10s regardless of how many users are
-  // polling. MFs have no real-time feed and go through synthMFQuote.
-  const allEquitySyms = STOCKS.map(s => s.symbol);
+  // Viewport-only polling. At 2,700+ universe symbols, polling all of them
+  // every 10s would burn the Vercel function budget AND saturate Yahoo's
+  // rate limits AND uselessly fetch quotes for cards the user can't see.
+  // The visible-symbols Set is populated by an IntersectionObserver wired
+  // in renderList() / render() (see attachCardObserver below). The poll
+  // callback reads the snapshot each tick. On cold load (before any card
+  // has rendered) we seed with the top-30 by idx prominence so users see
+  // real prices on the first row of cards immediately.
+  _visibleSymbols = new Set();
+  function symbolsToPoll() {
+    if (_visibleSymbols.size > 0) {
+      // Only poll EQUITY/ETF symbols — MFs have no real-time feed.
+      return Array.from(_visibleSymbols).filter(s => {
+        const inst = getInstrument(s);
+        return !inst || inst.kind !== "MF";
+      });
+    }
+    // Cold-start seed: top-30 by index prominence in the current source view.
+    const state = getState();
+    const list = applyFilters(source(), filter, state, quoteCache).slice(0, 30);
+    return list.filter(i => i.kind !== "MF").map(i => i.symbol);
+  }
 
   (async () => {
     try {
-      const q = await getQuoteBatch(allEquitySyms);
+      const seed = symbolsToPoll();
+      if (!seed.length) return;
+      const q = await getQuoteBatch(seed);
       if (cancelled) return;
       quoteCache = { ...quoteCache, ...q };
-      renderList();   // just the grid — toolbar already up
+      renderList();
     } catch {}
   })();
 
-  pollUnsub = subscribeToQuotes(allEquitySyms, (quotes) => {
+  pollUnsub = subscribeToQuotes(symbolsToPoll, (quotes) => {
     if (cancelled) return;
     quoteCache = { ...quoteCache, ...quotes };
     // Quote-tick update: ONLY the stock-card grid is re-rendered. The
-    // toolbar (search input + themed-select Top-by-size dropdown) and
-    // filter pills stay in place — this kills the "blink" where the
-    // sort dropdown flashed on every 10-second tick because the entire
-    // main.innerHTML was being rebuilt.
+    // toolbar (search input + themed-select sort dropdown) and filter pills
+    // stay in place — this kills the "blink" where the sort dropdown flashed
+    // on every 10-second tick because the entire main.innerHTML was rebuilt.
     renderList();
-    if (!marketMood && !_moodFetched && Object.keys(quoteCache).length > 50) {
+    if (!marketMood && !_moodFetched && Object.keys(quoteCache).length > 30) {
       _moodFetched = true;
       fetchMarketMood().then((m) => {
         if (cancelled) return;
         marketMood = m;
-        render();   // mood card is structural, needs full render once
+        render();
       }).catch(() => {});
     }
   }, 10_000);
@@ -145,6 +173,12 @@ export function renderStocks(main) {
     const src = getDataSource();
     const allInst = getAllInstruments();
     const allSectorsList = getAllSectors();
+    // Tab counts — derived from the full universe (all kinds), not the
+    // filtered list. Shows "..." until Tier-2 lands.
+    const universeReady = allInst.length > STOCKS.length;
+    const equityCount = universeReady ? allInst.filter(i => i.kind === "EQUITY").length : null;
+    const etfCount    = universeReady ? allInst.filter(i => i.kind === "ETF").length : null;
+    const mfCount     = universeReady ? allInst.filter(i => i.kind === "MF").length : null;
     // Preserve focus + caret on the search input across the re-render — every
     // keystroke triggers this render and the 10s live-quote poll does too, so
     // without this the user can't type more than one character at a time.
@@ -193,16 +227,14 @@ export function renderStocks(main) {
       </div>
 
       <div class="filter-pills" style="margin-bottom: var(--sp-3);">
-        <button class="filter-pill ${filter.kind === "all" ? "active" : ""}" data-kind="all">Featured</button>
-        <button class="filter-pill ${filter.kind === "ALL_NSE" ? "active" : ""}" data-kind="ALL_NSE">All NSE (${allInst.length > INSTRUMENTS.length ? allInst.length : "…"})</button>
-        <button class="filter-pill ${filter.kind === "EQUITY" ? "active" : ""}" data-kind="EQUITY">Stocks</button>
-        <button class="filter-pill ${filter.kind === "ETF" ? "active" : ""}" data-kind="ETF">ETFs (${allInst.filter(i => i.kind === "ETF").length || "…"})</button>
-        <button class="filter-pill ${filter.kind === "MF" ? "active" : ""}" data-kind="MF">Mutual Funds</button>
+        <button class="filter-pill ${filter.kind === "EQUITY" ? "active" : ""}" data-kind="EQUITY">Stocks${equityCount ? ` (${equityCount})` : ""}</button>
+        <button class="filter-pill ${filter.kind === "ETF" ? "active" : ""}" data-kind="ETF">ETFs${etfCount ? ` (${etfCount})` : ""}</button>
+        <button class="filter-pill ${filter.kind === "MF" ? "active" : ""}" data-kind="MF">Mutual Funds${mfCount ? ` (${mfCount})` : ""}</button>
         <button class="filter-pill ${filter.kind === "watchlist" ? "active" : ""}" data-kind="watchlist">★ Watchlist (${state.watchlist.length})</button>
       </div>
       <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: auto;">
         <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors</button>
-        ${(filter.kind === "ALL_NSE" ? allSectorsList : SECTORS).map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
+        ${allSectorsList.map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
       </div>
 
       <div id="stocks-grid-host">${list.length === 0
@@ -260,6 +292,7 @@ export function renderStocks(main) {
         else addToWatchlist(sym);
       });
     });
+    attachCardObserver(main.querySelector("#stocks-grid-host"));
 
     main.querySelector("#ask-saathi-btn")?.addEventListener("click", () => {
       const q = filter.q.trim();
@@ -323,6 +356,74 @@ export function renderStocks(main) {
     });
     host.querySelector("#stocks-show-more")?.addEventListener("click", () => { visibleCount += PAGE_SIZE; renderList(); });
     host.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = 1e9; renderList(); });
+    attachCardObserver(host);
+  }
+
+  // Viewport-aware observer. Drives both:
+  //   1) Which symbols get polled by subscribeToQuotes (symbolsToPoll callback
+  //      reads _visibleSymbols).
+  //   2) Future virtualization hooks — the ratio crossing already maps onto
+  //      "hydrate / dehydrate this card".
+  // rootMargin "200% 0px 200% 0px" — pre-warms quotes for cards 2 viewport
+  // heights above and below, so by the time the user scrolls them in, they
+  // already have a live tick. Naturally responds to user resolution + zoom
+  // (the browser computes intersection against the actual viewport box, not
+  // a fixed pixel count).
+  // threshold 0 — any pixel of the card visible within rootMargin counts.
+  function attachCardObserver(host) {
+    if (!host) return;
+    // Tear down the previous observer — DOM nodes from the prior render are
+    // gone, and disconnect() leaves the entry list dangling otherwise.
+    if (_cardObserver) {
+      try { _cardObserver.disconnect(); } catch {}
+      _cardObserver = null;
+    }
+    _visibleSymbols.clear();
+    if (typeof IntersectionObserver !== "function") {
+      // Old browsers (or SSR test harness) — fall back to seeding all visible
+      // symbols up front. The prefilter inside symbolsToPoll() then trims to
+      // EQUITY/ETF only and the cold-start branch caps at 30.
+      host.querySelectorAll(".stock-card[data-sym]").forEach(c => {
+        if (c.dataset.sym) _visibleSymbols.add(c.dataset.sym);
+      });
+      return;
+    }
+    _cardObserver = new IntersectionObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const sym = entry.target?.dataset?.sym;
+        if (!sym) continue;
+        if (entry.isIntersecting) {
+          if (!_visibleSymbols.has(sym)) { _visibleSymbols.add(sym); changed = true; }
+        } else {
+          if (_visibleSymbols.has(sym)) { _visibleSymbols.delete(sym); changed = true; }
+        }
+      }
+      // First-paint nudge: as soon as the initial entries fire, kick a quote
+      // batch for whatever's actually on screen so the user sees real prices
+      // within ~200ms instead of waiting for the 10s poll cycle.
+      if (changed && _visibleSymbols.size > 0 && !_warmedFromObserver) {
+        _warmedFromObserver = true;
+        const seed = Array.from(_visibleSymbols).filter(s => {
+          const inst = getInstrument(s);
+          return !inst || inst.kind !== "MF";
+        }).slice(0, 60);
+        if (seed.length) {
+          getQuoteBatch(seed).then(q => {
+            if (cancelled) return;
+            quoteCache = { ...quoteCache, ...q };
+            renderList();
+          }).catch(() => {});
+        }
+      }
+    }, {
+      root: null,                     // viewport
+      rootMargin: "200% 0px 200% 0px",
+      threshold: 0,
+    });
+    host.querySelectorAll(".stock-card[data-sym]").forEach(card => {
+      try { _cardObserver.observe(card); } catch {}
+    });
   }
 }
 
@@ -586,6 +687,7 @@ function applyFilters(all, f, state, quoteCache) {
   }
   let list = all.slice();
   if (f.kind === "EQUITY") list = list.filter(i => i.kind === "EQUITY");
+  else if (f.kind === "ETF") list = list.filter(i => i.kind === "ETF");
   else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
   else if (f.kind === "watchlist") {
     const wl = new Set(state.watchlist);
@@ -602,26 +704,38 @@ function applyFilters(all, f, state, quoteCache) {
   }
   if (f.sort === "gainers") list.sort((a, b) => changeFor(b.symbol, quoteCache) - changeFor(a.symbol, quoteCache));
   else if (f.sort === "losers") list.sort((a, b) => changeFor(a.symbol, quoteCache) - changeFor(b.symbol, quoteCache));
-  else if (f.sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
-  else if (f.sort === "marketCap") list.sort((a, b) => parseMarketCapCr(b.marketCap) - parseMarketCapCr(a.marketCap));
+  else if (f.sort === "name") list.sort((a, b) => (a.name || a.symbol || "").localeCompare(b.name || b.symbol || ""));
+  else if (f.sort === "marketCap") {
+    // Sort by index-membership prominence (Nifty 50 > Nifty 100 > Nifty 500 >
+    // Mid150 > Small250 > rest). Pre-Landing-F we used parseMarketCapCr on
+    // hand-typed marketCap strings; those fields are now null per the
+    // user's "zero hand-typed data" rule. idx_tags is computed at build time
+    // from index constituents (build-universe.mjs) and is the closest proxy
+    // to "size" we have without an LLM-token-burning live fundamentals
+    // call per card. Tie-break by symbol so order is stable.
+    list.sort((a, b) => {
+      const ai = a.idx || a.idx_tags || 0;
+      const bi = b.idx || b.idx_tags || 0;
+      if (ai !== bi) return bi - ai;
+      return (a.symbol || "").localeCompare(b.symbol || "");
+    });
+  }
   return list;
 }
 
 function renderStockCard(inst, state, wlSet) {
-  // Prefer the rolling intraday buffer built from live polls — falls back
-  // to the seeded 40-day walk on cold load before any poll has landed.
-  // For Tier-2 symbols (no curated price), the buffer will be empty and
-  // sparkline() handles that gracefully.
-  const seededCloses = inst.price != null ? getCloses(inst.symbol, 40) : [];
+  // Always pull the deterministic seeded walk from prices.js — it has a
+  // Tier-2 stub-fallback that produces a believable per-symbol synthetic
+  // chart even when there's no live quote yet. The intraday buffer
+  // overlays once subscribeToQuotes lands a tick. Drops the previous
+  // `inst.price != null` gate that left ALL Tier-2 cards with empty
+  // sparklines forever (the gate was a vestige of the hand-typed era).
+  const seededCloses = getCloses(inst.symbol, 40);
   const closes = getIntradaySparkline(inst.symbol, seededCloses);
   const quote = quoteCache[inst.symbol];
-  // LIVE first, always. inst.price is a seeded reference only — used as an
-  // initial skeleton placeholder before live data arrives. When the universe
-  // scales to all ~2700 NSE stocks, hand-maintaining static prices is
-  // impossible, so the UI must tolerate no-static-price gracefully.
   const hasLive = quote?.pricePaise != null;
-  const price = hasLive ? quote.pricePaise : (inst.price ?? null);
-  const change = quote?.changePct ?? (inst.price != null ? getTodayChange(inst.symbol) : 0);
+  const price = hasLive ? quote.pricePaise : null;
+  const change = quote?.changePct ?? getTodayChange(inst.symbol);
   // wlSet is hoisted at render time — O(1) membership check; old code used
   // state.watchlist.includes(sym) which was O(n) per card.
   const isWatched = wlSet ? wlSet.has(inst.symbol) : state.watchlist.includes(inst.symbol);
@@ -653,15 +767,19 @@ function renderStockCard(inst, state, wlSet) {
         rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Day range</span><span class="tabular">${formatRupees(quote.low)} – ${formatRupees(quote.high)}</span></div>`);
       }
     }
-    if (inst.sector) {
+    if (inst.sector && inst.sector !== "Unknown") {
       rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Sector</span><span>${escapeHtml(inst.sector)}</span></div>`);
     }
-    if (inst.marketCap) {
-      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Market cap</span><span>${escapeHtml(inst.marketCap)}</span></div>`);
+    if (inst.cap_bucket || inst.capBucket) {
+      const cap = inst.cap_bucket || inst.capBucket;
+      const capLabel = { mega: "Mega cap", large: "Large cap", mid: "Mid cap", small: "Small cap", micro: "Micro cap" }[cap] || cap;
+      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">Cap</span><span>${escapeHtml(capLabel)}</span></div>`);
     }
-    if (inst.pe != null && !isNaN(inst.pe)) {
-      rows.push(`<div class="ms-pop-row"><span class="ms-pop-key">P/E</span><span class="tabular">${Number(inst.pe).toFixed(1)}</span></div>`);
-    }
+    // Note: PE / Market Cap / Beta / DivYield no longer come from inst.* —
+    // they are fetched on-demand from /api/fundamentals when the user opens
+    // the stock detail page. Showing them here would require firing 100+
+    // /api/fundamentals calls per Markets render, which kills latency. The
+    // grid card stays minimal; the detail page does the heavier lookup.
     const pop = `
       <div class="market-status-pop" role="tooltip">
         <div class="ms-pop-head">
@@ -681,8 +799,11 @@ function renderStockCard(inst, state, wlSet) {
     } else {
       badge = `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
     }
-  } else if (inst.price != null) {
-    badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing — price shown is a reference, not current">SYNCING</span>`;
+  } else {
+    // No live quote yet (Tier-2 cold load before subscribeToQuotes ticks
+    // in viewport range). Show a generic SYNCING badge — sparkline still
+    // renders from the seeded stub walk so the card isn't blank.
+    badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing — sparkline shows deterministic synthetic walk until first quote tick">SYNCING</span>`;
   }
   const liveBadge = badge;
   return `
@@ -710,7 +831,7 @@ function renderStockCard(inst, state, wlSet) {
         </div>
         <span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "MED").toUpperCase()}</span>
       </div>
-      <div class="stock-sparkline">${(hasLive || inst.kind === "MF") && closes && closes.length > 1 ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
+      <div class="stock-sparkline">${closes && closes.length > 1 ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
     </div>
   `;
 }

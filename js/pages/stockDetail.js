@@ -68,6 +68,41 @@ let _prevLastDataMs = null;                  // tracked for sticky-right-edge lo
 // regardless of the user's machine timezone — pacific, eastern,
 // anywhere. Returns null on holidays / weekends so the chart falls
 // back to its default index-axis behaviour for previous-session data.
+// 1D-with-fallback loader. The bare /api/history?range=1d returns nothing
+// on weekends, market holidays, and the first ~5 minutes of the trading
+// day before any candle has formed. In those cases we refetch range=5d
+// interval=30m and slice to the most recent calendar-day's bars so the
+// 1D tab keeps showing the *last actual trading session* — same UX Groww
+// and Zerodha Kite ship. The returned object carries a `_fallbackLabel`
+// when the slice is non-empty so render() can show a "Showing last
+// session: 24 Apr" hint under the chart.
+async function loadHistoryWithFallback(symbol, tf, interval) {
+  let h = await getHistory(symbol, tf.range, interval).catch(() => null);
+  if (tf !== TF_MAP["1D"]) return h;
+  if (h && h.ohlc?.length >= 2) return h;
+  // Refetch wider granularity, slice to last calendar day in IST.
+  const wide = await getHistory(symbol, "5d", "30m").catch(() => null);
+  if (!wide?.ohlc?.length) return h;   // give up — caller falls back to skeleton
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const buckets = new Map();
+  for (const bar of wide.ohlc) {
+    const k = fmt.format(new Date(bar.t));
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(bar);
+  }
+  const lastKey = [...buckets.keys()].sort().pop();
+  const lastBars = lastKey ? buckets.get(lastKey) : null;
+  if (!lastBars || !lastBars.length) return h;
+  // Friendly date label — "24 Apr" / "12 Mar" — for the banner.
+  const labelFmt = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "short",
+  });
+  const label = labelFmt.format(new Date(lastBars[0].t));
+  return { ...wide, ohlc: lastBars, _fallbackLabel: label };
+}
+
 function todaysMarketWindowMs() {
   const ms = marketStatus();
   // marketStatus exposes istDate ("DD MMM YYYY"), istTime, isHoliday, weekday.
@@ -180,7 +215,9 @@ export function renderStockDetail(main, params) {
       // Honour ui.interval if the user has zoomed in (overrides the
       // timeframe's default granularity with a finer one, e.g. "1m").
       const interval = ui.interval ?? tf.interval;
-      const h = await getHistory(symbol, tf.range, interval);
+      // 1D-tab fallback to last trading session when market is closed /
+      // weekend / holiday — see loadHistoryWithFallback.
+      const h = await loadHistoryWithFallback(symbol, tf, interval);
       if (myToken.cancelled) return;
       if (h) {
         liveHistory = h;
@@ -206,23 +243,56 @@ export function renderStockDetail(main, params) {
       if (inst.kind === "MF") return;   // MFs don't have per-share fundamentals
       const f = await getFundamentals(symbol);
       if (myToken.cancelled) return;
-      if (f) { liveFundamentals = f; render(inst, symbol); }
+      if (f) {
+        liveFundamentals = f;
+        render(inst, symbol);
+        // Re-attempt the deferred STOCK_INTRO now that PE/MarketCap are
+        // available — without this, intros for any stock that was opened
+        // before fundamentals landed would never fire.
+        maybeFireStockIntro();
+      }
     } catch (e) { console.warn("fundamentals:", e); }
   })();
 
-  // Stock intro coach (non-blocking, first view only)
+  // Stock intro coach (non-blocking, first view only).
+  // Per Landing F: hand-typed inst.pe / inst.marketCap fields are gone
+  // from the universe shape. The intro template reads instrument data to
+  // generate "{NAME} is a {SECTOR} company. P/E is {pe}, ..." — so when
+  // the live fundamentals haven't landed yet OR the sector is unknown
+  // ("Other") we DEFER the intro until /api/fundamentals returns. Without
+  // this guard the coach feed gets permanently polluted with
+  // "RELIANCE is a Other company. P/E is —" gibberish that survives
+  // localStorage reloads.
   const existing = getState().coachMessages.some(m => m.eventType === "STOCK_INTRO" && m.triggerSymbol === symbol);
-  // Suppress STOCK_INTRO for Tier-2 stub instruments — the template reads
-  // inst.name / inst.sector / inst.pe and would otherwise persist
-  // "{SYMBOL} is a Unknown company. P/E is —, ..." permanently into
-  // state.coachMessages, polluting the coach feed with gibberish.
-  if (!existing && !inst._stub) {
-    coach({ type: "STOCK_INTRO", symbol, instrument: inst }).then(msg => {
+  function maybeFireStockIntro() {
+    if (existing || inst._stub) return;
+    if (inst.kind === "MF") {
+      // MFs don't have PE/sector — fire with a different template path.
+      coach({ type: "STOCK_INTRO", symbol, instrument: inst }).then(msg => {
+        if (myToken.cancelled) return;
+        msg.triggerSymbol = symbol;
+        recordCoachMessage(msg);
+      });
+      return;
+    }
+    // Equity / ETF: require both a real sector AND live fundamentals
+    // (PE in particular — the intro template references it). If either
+    // is missing, defer; the fundamentals fetch above will retrigger
+    // render() once data lands and we'll come through here again.
+    const hasSector = inst.sector && inst.sector !== "Other" && inst.sector !== "Unknown";
+    const hasPE = liveFundamentals?.pe_ratio != null;
+    if (!hasSector || !hasPE) return;
+    coach({
+      type: "STOCK_INTRO",
+      symbol,
+      instrument: { ...inst, pe: liveFundamentals.pe_ratio, marketCap: liveFundamentals.market_cap }
+    }).then(msg => {
       if (myToken.cancelled) return;
       msg.triggerSymbol = symbol;
       recordCoachMessage(msg);
     });
   }
+  maybeFireStockIntro();
 }
 
 // Reload — used on TF change. Nulls liveHistory first so the skeleton
@@ -238,7 +308,7 @@ async function reloadHistory(inst, symbol) {
   // would produce nonsense sticky-shift math.
   _prevLastDataMs = null;
   render(inst, symbol);
-  const h = await getHistory(symbol, tf.range, interval).catch(() => null);
+  const h = await loadHistoryWithFallback(symbol, tf, interval).catch(() => null);
   if (myToken.cancelled) return;
   if (h) {
     liveHistory = h;
@@ -477,6 +547,15 @@ function render(inst, symbol) {
           sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
         }
       }
+      // 1D fallback to last trading session — sessionWindow comes from the
+      // actual data range so zoom + crosshair still operate against real
+      // candle timestamps. _fallbackLabel is set inside loadHistoryWithFallback.
+      if (!sessionWindow && liveHistory?._fallbackLabel && chartOhlc.length >= 2) {
+        sessionWindow = {
+          fromMs: chartOhlc[0].t,
+          toMs: chartOhlc[chartOhlc.length - 1].t,
+        };
+      }
     } else if (chartOhlc.length >= 2) {
       // Data-bounded window for non-1D timeframes. Uses chartOhlc (the
       // live-injected array) so the window right-edge tracks the live
@@ -620,6 +699,13 @@ function render(inst, symbol) {
           ` : inst.kind === "MF"
             ? `<div style="height: 300px;">${lineChart(closes, { height: 300, color: "var(--brand)" })}</div>`
             : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`}
+          ${liveHistory?._fallbackLabel && ui.timeframe === "1D" ? `
+            <div class="dim text-xs" style="margin-top: 6px; padding: 4px 8px; background: var(--bg-soft); border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px;">
+              <span aria-hidden="true">📅</span>
+              Showing last session: ${escapeHtml(liveHistory._fallbackLabel)}
+              <span class="dim">· NSE was closed today</span>
+            </div>
+          ` : ""}
         </div>
 
         <div class="card stock-why-card" id="stock-why-card" style="margin-top: var(--sp-4);">
@@ -636,6 +722,16 @@ function render(inst, symbol) {
             <h3>Fundamentals</h3>
             ${liveFundamentals ? `<span class="data-badge"><span class="dot"></span> NSE</span>` : `<span class="data-badge"><span class="dot offline"></span> Loading…</span>`}
           </div>
+          ${liveFundamentals && inst.kind !== "MF"
+            && liveFundamentals.market_cap == null
+            && liveFundamentals.pe_ratio == null
+            && liveFundamentals.pb_ratio == null ? `
+            <div class="info-msg" style="margin-bottom: var(--sp-3); font-size: var(--text-xs); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--bg-soft); border: 1px solid var(--border);">
+              Detailed fundamentals are unavailable for ${escapeHtml(symbol)} via our automated feed. View on
+              <a href="https://www.tickertape.in/stocks/${escapeAttr(symbol.toLowerCase())}" target="_blank" rel="noopener noreferrer" style="color: var(--brand); font-weight: 600;">Tickertape ↗</a>
+              for the latest figures.
+            </div>
+          ` : ""}
           <div class="fundamentals">
             ${renderFundamentals(inst, liveFundamentals, hi, lo)}
           </div>
@@ -1381,14 +1477,18 @@ function fmtMarketCap(v) {
 }
 
 function renderFundamentals(inst, live, hi52, lo52) {
-  // Prefer live values when available, else fall back to seeded universe data
-  const mcap = live?.market_cap ? fmtMarketCap(live.market_cap) : (inst.marketCap || "—");
-  const pe = live?.pe_ratio != null ? live.pe_ratio.toFixed(2) : (inst.pe != null ? inst.pe.toString() : "—");
-  const pb = live?.pb_ratio != null ? live.pb_ratio.toFixed(2) : (inst.pb != null ? inst.pb.toString() : "—");
-  const beta = live?.beta != null ? live.beta.toFixed(2) : (inst.beta != null ? inst.beta.toString() : "—");
-  const dy = live?.dividend_yield != null
+  // ZERO hand-typed fallbacks — every numerical field comes from the
+  // /api/fundamentals 4-tier chain (Yahoo crumb → Tickertape → cache → v8).
+  // If a field is null after that chain, we render "—" rather than dragging
+  // in a hand-typed inst.pe / inst.marketCap value (those fields no longer
+  // exist on the instrument shape per Landing F).
+  const mcap = live?.market_cap ? fmtMarketCap(live.market_cap) : "—";
+  const pe   = live?.pe_ratio != null ? live.pe_ratio.toFixed(2) : "—";
+  const pb   = live?.pb_ratio != null ? live.pb_ratio.toFixed(2) : "—";
+  const beta = live?.beta != null ? live.beta.toFixed(2) : "—";
+  const dy   = live?.dividend_yield != null
     ? `${(live.dividend_yield * 100).toFixed(2)}%`
-    : (inst.divYield != null ? `${inst.divYield}%` : "—");
+    : "—";
   const hi = live?.fifty_two_week_high != null
     ? `₹${live.fifty_two_week_high.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
     : formatRupees(hi52);
