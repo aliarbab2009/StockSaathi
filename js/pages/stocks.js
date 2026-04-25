@@ -29,6 +29,11 @@ const PAGE_SIZE = 100;
 // Set to 60 = ~24 visible cards × 2.5 scroll buffer. Lifted to a named
 // const so future changes don't have to hunt for both call sites.
 const VIEWPORT_PREHEAT_SIZE = 60;
+// 3-second fail-open timeout: if the viewport-preheat batch hasn't
+// resolved within this window we drop the skeleton anyway and let the
+// post-render warm-up flow fill prices. Prevents a hung upstream API
+// from holding the skeleton indefinitely on slow networks.
+const PREHEAT_FAIL_OPEN_MS = 3000;
 let _debounceTimer = null;
 
 // Visible-symbols set + observer for viewport-only polling. Populated as
@@ -247,7 +252,7 @@ export function renderStocks(main) {
         _viewportPreheatDone = true;
         render();
       }
-    }, 3000);
+    }, PREHEAT_FAIL_OPEN_MS);
     getQuoteBatch(seed).then(q => {
       if (cancelled) return;
       quoteCache = { ...quoteCache, ...q };
