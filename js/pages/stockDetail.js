@@ -1482,22 +1482,29 @@ function renderFundamentals(inst, live, hi52, lo52) {
   // If a field is null after that chain, we render "—" rather than dragging
   // in a hand-typed inst.pe / inst.marketCap value (those fields no longer
   // exist on the instrument shape per Landing F).
-  const mcap = live?.market_cap ? fmtMarketCap(live.market_cap) : "—";
-  const pe   = live?.pe_ratio != null ? live.pe_ratio.toFixed(2) : "—";
-  const pb   = live?.pb_ratio != null ? live.pb_ratio.toFixed(2) : "—";
-  const beta = live?.beta != null ? live.beta.toFixed(2) : "—";
-  const dy   = live?.dividend_yield != null
+  // typeof === "number" instead of != null — Yahoo's v10 quoteSummary
+  // returns `dividend_yield: {}` (empty object) for many ETFs (NIFTYBEES,
+  // GOLDBEES, BANKBEES). Empty object is not null/undefined so `!= null`
+  // passes, then `{}.toFixed(2)` blows up to "NaN%" in the rendered UI.
+  // Same defence for every numeric field — non-finite values (NaN, Infinity,
+  // empty objects) all return "—" instead of crashing.
+  const _num = (v) => typeof v === "number" && Number.isFinite(v);
+  const mcap = _num(live?.market_cap) ? fmtMarketCap(live.market_cap) : "—";
+  const pe   = _num(live?.pe_ratio)   ? live.pe_ratio.toFixed(2) : "—";
+  const pb   = _num(live?.pb_ratio)   ? live.pb_ratio.toFixed(2) : "—";
+  const beta = _num(live?.beta)       ? live.beta.toFixed(2) : "—";
+  const dy   = _num(live?.dividend_yield)
     ? `${(live.dividend_yield * 100).toFixed(2)}%`
     : "—";
-  const hi = live?.fifty_two_week_high != null
+  const hi = _num(live?.fifty_two_week_high)
     ? `₹${live.fifty_two_week_high.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
     : formatRupees(hi52);
-  const lo = live?.fifty_two_week_low != null
+  const lo = _num(live?.fifty_two_week_low)
     ? `₹${live.fifty_two_week_low.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
     : formatRupees(lo52);
-  const eps = live?.eps != null ? `₹${live.eps.toFixed(2)}` : null;
-  const fma = live?.fifty_day_average != null ? `₹${live.fifty_day_average.toFixed(2)}` : null;
-  const tma = live?.two_hundred_day_average != null ? `₹${live.two_hundred_day_average.toFixed(2)}` : null;
+  const eps = _num(live?.eps) ? `₹${live.eps.toFixed(2)}` : null;
+  const fma = _num(live?.fifty_day_average) ? `₹${live.fifty_day_average.toFixed(2)}` : null;
+  const tma = _num(live?.two_hundred_day_average) ? `₹${live.two_hundred_day_average.toFixed(2)}` : null;
 
   return [
     fundRow(termHtml("Market Cap"), mcap),
