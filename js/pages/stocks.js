@@ -595,6 +595,15 @@ export function renderStocks(main) {
     `;
   }
 
+  // Single source of truth for "is the grid currently showing hydrated cards
+  // (vs. the loading skeleton)?" Used by render() to choose between
+  // renderSkeletonState() and the full grid emit, AND by every
+  // late-resolving callback that calls render() to decide whether
+  // to skip a redundant render that would wipe hydrated cards.
+  function pageReady() {
+    return _universeLoaded && _initialQuotesLoaded && _viewportPreheatDone && _moodReady;
+  }
+
   function render() {
     const state = getState();
     const wlSet = new Set(state.watchlist);
@@ -605,13 +614,13 @@ export function renderStocks(main) {
     // because curated.js's PLACEHOLDER_MFS still get included in allInst at
     // pre-universeFull state.
     const universeReady = _universeLoaded;
-    // Page is "real-grid ready" only when BOTH (a) the full universe has
-    // landed AND (b) the cold-start quote batch has resolved with real
-    // prices. This collapses frames 1 + 2 of the user's OBS capture into
+    // Page is "real-grid ready" only when ALL of (a) the full universe has
+    // landed (b) the cold-start quote batch has resolved (c) the viewport
+    // preheat (Hotfix21b) has resolved or failed-open (d) the mood banner
+    // is ready or failed-open. Collapses several intermediate frames into
     // a single skeleton state — the page either shows skeleton (waiting)
-    // or shows fully-priced cards (ready). No more "alphabetical 2,364
-    // cards with empty price slots for 2 seconds" intermediate state.
-    const pageReady = universeReady && _initialQuotesLoaded && _viewportPreheatDone && _moodReady;
+    // or shows fully-priced cards (ready).
+    const isReady = pageReady();
 
     // Pre-universe-loaded: emit a full-page skeleton instead of the
     // 116-featured "real" view that briefly flashed in pre-Hotfix12. The
@@ -620,7 +629,7 @@ export function renderStocks(main) {
     // 16,655-instrument universe. Skeleton state is more honest about
     // "we're still loading" and matches the design language users
     // already see on stub cards.
-    if (!pageReady) {
+    if (!isReady) {
       renderSkeletonState();
       return;
     }
