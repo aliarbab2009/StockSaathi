@@ -29,8 +29,18 @@ let _debounceTimer = null;
 // Visible-symbols set + observer for viewport-only polling. Populated as
 // IntersectionObserver fires; consumed by symbolsToPoll() callback inside
 // renderStocks(). Cleared on hashchange leave.
+//
+// Two observers cooperate:
+//   _cardObserver — narrow rootMargin (200%), drives hydration on entry
+//                   and viewport-set tracking for live-quote polling.
+//   _dehydrateObserver — wide rootMargin (-300% — only fires when the
+//                   card is at least 3 viewport heights past the visible
+//                   region), restores hydrated cards to stubs to free
+//                   DOM memory. Without this, "Show all 13,969" leaves
+//                   13k fully-hydrated cards in DOM forever.
 let _visibleSymbols = new Set();
 let _cardObserver = null;
+let _dehydrateObserver = null;
 
 // Keywords that let the Ask-Saathi prefilter narrow a 2k-candidate pool down
 // to ~150 without sending everything to the LLM. Maps lowercase tokens to
@@ -119,6 +129,7 @@ export function renderStocks(main) {
     if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} aiSearchAbort = null; }
     if (_debounceTimer) { clearTimeout(_debounceTimer); _debounceTimer = null; }
     if (_cardObserver) { try { _cardObserver.disconnect(); } catch {} _cardObserver = null; }
+    if (_dehydrateObserver) { try { _dehydrateObserver.disconnect(); } catch {} _dehydrateObserver = null; }
     _visibleSymbols.clear();
   };
   window.addEventListener("hashchange", onLeave, { once: true });
@@ -466,12 +477,12 @@ export function renderStocks(main) {
         }
         grid.appendChild(frag);
         // Observe the just-appended cards so the IO can hydrate them on
-        // scroll-into-view even before the full render finishes.
-        if (_cardObserver) {
-          for (const card of newCards) {
-            if (card?.dataset?.sym) {
-              try { _cardObserver.observe(card); } catch {}
-            }
+        // scroll-into-view even before the full render finishes. Both
+        // observers (hydrate + dehydrate) need to see every card.
+        for (const card of newCards) {
+          if (card?.dataset?.sym) {
+            try { _cardObserver?.observe(card); } catch {}
+            try { _dehydrateObserver?.observe(card); } catch {}
           }
         }
         rendered += CHUNK_SIZE;
@@ -505,11 +516,15 @@ export function renderStocks(main) {
   // threshold 0 — any pixel of the card visible within rootMargin counts.
   function attachCardObserver(host) {
     if (!host) return;
-    // Tear down the previous observer — DOM nodes from the prior render are
-    // gone, and disconnect() leaves the entry list dangling otherwise.
+    // Tear down both observers — DOM nodes from the prior render are gone,
+    // and disconnect() leaves the entry list dangling otherwise.
     if (_cardObserver) {
       try { _cardObserver.disconnect(); } catch {}
       _cardObserver = null;
+    }
+    if (_dehydrateObserver) {
+      try { _dehydrateObserver.disconnect(); } catch {}
+      _dehydrateObserver = null;
     }
     _visibleSymbols.clear();
     // Reset the one-shot warm-up flag — without this, every tab switch
@@ -601,8 +616,67 @@ export function renderStocks(main) {
       rootMargin: "200% 0px 200% 0px",
       threshold: 0,
     });
+
+    // Dehydrate observer — restores hydrated cards back to stubs when
+    // they're at least 3 viewport heights past the visible region.
+    //
+    // The negative rootMargin trick: rootMargin "-300% 0px -300% 0px"
+    // shrinks the IO's effective root box to 700% smaller than the
+    // viewport. Cards that fall outside this contracted box (i.e.,
+    // >300% above or below the viewport) report isIntersecting:false.
+    // We use that signal as "card is far enough away that DOM memory
+    // is wasted on its hydrated body — restore the stub".
+    //
+    // Why two observers instead of one with multiple thresholds?
+    // IntersectionObserver doesn't support multiple rootMargins per
+    // instance. Two cheap IOs is cleaner than tracking ratio-band logic
+    // in a single callback. Both observe the same elements; their
+    // callbacks run independently when the relevant boundary crosses.
+    //
+    // Memory math: 13,969 fully hydrated MF cards = ~30 KB DOM each =
+    // ~420 MB DOM. After dehydration, only ~30 cards near the viewport
+    // stay hydrated = ~900 KB. Long sessions stop OOMing on mid-Android.
+    if (typeof IntersectionObserver === "function") {
+      _dehydrateObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const card = entry.target;
+          // isIntersecting:false here means the card is OUTSIDE the
+          // -300% rootMargin — i.e., at least 3 viewport heights away
+          // from visible. Safe to dehydrate.
+          if (!entry.isIntersecting && card.dataset.rendered === "1") {
+            const sym = card.dataset.sym;
+            const inst = sym ? getInstrument(sym) : null;
+            if (!inst) continue;
+            // Re-emit the stub innerHTML — a small skeleton that takes
+            // ~200 chars / ~80 bytes of DOM memory vs ~30 KB for the
+            // hydrated body. The IO will rehydrate it on next intersect.
+            card.innerHTML = `
+              <div class="stock-head">
+                <div class="stock-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
+                <div class="stock-title">
+                  <div class="name">${escapeHtml(inst.name)}</div>
+                  <div class="sym">${_stubSubLine(inst)}</div>
+                </div>
+              </div>
+              <div class="skeleton" style="width: 96px; height: 20px; margin-top: 6px;" aria-label="Loading price"></div>
+              <div class="skeleton" style="width: 70px; height: 12px; margin-top: 6px;" aria-label="Loading change"></div>
+              <div class="skeleton" style="width: 100%; height: 40px; margin-top: 8px;" aria-label="Loading sparkline"></div>
+            `;
+            card.dataset.stub = "1";
+            card.dataset.rendered = "";
+            card.classList.add("stock-card-stub");
+          }
+        }
+      }, {
+        root: null,
+        rootMargin: "-300% 0px -300% 0px",
+        threshold: 0,
+      });
+    }
+
     host.querySelectorAll(".stock-card[data-sym]").forEach(card => {
       try { _cardObserver.observe(card); } catch {}
+      try { _dehydrateObserver?.observe(card); } catch {}
     });
   }
 
