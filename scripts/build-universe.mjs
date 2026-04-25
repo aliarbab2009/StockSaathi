@@ -308,7 +308,11 @@ function inferFromName(symbol, name) {
 
   // Tech / telecom / internet.
   if (/software|technolog|infotech|systems|infosys|tcs|wipro|consultanc|digital|cyber|cloud|datamatic|persistent|coforge|mphasis|kpit|tata elxsi|happiest mind|zensar|hexaware|birlasoft|cyient|sonata|sasken|nazara|knowledgeware|alldigi|digitech|tech limited|tech ?services|solutions limited|it services|it consulting|business process|bpo|kpo|analytics|automation|saas\b|platform/.test(n)) return "IT Services";
-  if (/telecom|airtel|vodafone|tata communic|tejas net|gtl|optifibre|fibre optic|fiber optic|optical fibre|bharti hexa/.test(n)) return "Telecom";
+  // Telecom — added "telephone" + "mahanagar" + "nigam" so MTNL
+  // ("Mahanagar Telephone Nigam Limited") classifies correctly. Pre-fix
+  // MTNL fell through to "Other" because the regex only had "telecom"
+  // (the company's name uses "telephone").
+  if (/telecom|telephone|airtel|vodafone|tata communic|tejas net|gtl|optifibre|fibre optic|fiber optic|optical fibre|bharti hexa|mahanagar.*telephone|telephone nigam/.test(n)) return "Telecom";
   if (/internet|e-?commerce|ecommerce|online|nykaa|zomato|eternal|info ?edge|naukri|justdial/.test(n)) return "Internet";
 
   // Pharma / healthcare.
