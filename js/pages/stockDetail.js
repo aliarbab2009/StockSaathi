@@ -639,7 +639,16 @@ function render(inst, symbol) {
   // ===================================================================
   if (!ms.open && inst.kind !== "MF") {
     if (ui.orderType !== "LIMIT") ui.orderType = "LIMIT";
-    if (!ui.limitPrice || +ui.limitPrice <= 0) {
+    // Only pre-fill from a real live quote. Pre-fix: when liveQuote was
+    // null at first render (typical for the first 1–10 s on cold load),
+    // curPrice fell back to getPriceAt() → prices.js synthetic walk:
+    //   anchor = 5000 + (seedFromString(symbol) % 500000)
+    // For MTNL that resolves to 162910 paise → ₹1629.10 even though
+    // the actual close was ₹30.61. The synthetic value got pinned to
+    // ui.limitPrice and the gate `!ui.limitPrice || <=0` prevented any
+    // re-sync once liveQuote arrived. Auto-resync stops once user
+    // edits (ui._limitDirty, set in the input handler).
+    if (liveQuote && !ui._limitDirty) {
       ui.limitPrice = (curPrice / 100).toFixed(2);
     }
   }
@@ -1067,7 +1076,12 @@ function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessi
   main.querySelectorAll("[data-otype]").forEach(btn => {
     btn.addEventListener("click", () => {
       ui.orderType = btn.dataset.otype;
-      if (ui.orderType === "LIMIT" && !ui.limitPrice) ui.limitPrice = (curPrice / 100).toFixed(2);
+      // Same liveQuote gate as the AMO branch — never seed from
+      // getPriceAt() synthetic walk. Stays empty until a real price
+      // arrives.
+      if (ui.orderType === "LIMIT" && !ui.limitPrice && liveQuote) {
+        ui.limitPrice = (curPrice / 100).toFixed(2);
+      }
       render(inst, symbol);
     });
   });
