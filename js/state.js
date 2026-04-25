@@ -52,7 +52,7 @@ function readUserState(userId) {
     const raw = localStorage.getItem(keyFor(userId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return parsed;
+    return migrateUserState(parsed);
   } catch { return null; }
 }
 
