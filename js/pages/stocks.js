@@ -72,6 +72,17 @@ export function renderStocks(main) {
   // immediate getQuoteBatch so users see prices instantly. Subsequent
   // scroll changes piggy-back on the 10s subscribeToQuotes cycle.
   let _warmedFromObserver = false;
+  // Tier-2 universe readiness — flipped true the moment universeFull.json
+  // has populated getAllInstruments() with thousands of rows. Pre-fix the
+  // skeleton-vs-real gate used `allInst.length > STOCKS.length`, which
+  // misfired because curated.js still ships 10 placeholder MFs that
+  // counted toward `allInst.length` (126 > 116 → "ready" before the
+  // 16,665-row universe blob actually landed). User-reported via 5-frame
+  // OBS capture: page flashed 116 featured stocks first, then re-rendered
+  // alphabetically with the full 2,364-equity universe but no prices yet,
+  // then prices arrived, then the mood banner appeared. Each transition
+  // was a visible jank step. Proper signal is below — wired in 19c.
+  let _universeLoaded = getAllInstruments().length > 1000;
 
   // Reset transient state on every (re-)entry so a stale in-flight AI
   // fetch or broken loading flag from the previous session doesn't leak
@@ -159,7 +170,7 @@ export function renderStocks(main) {
   });
   // Full universe lands asynchronously — re-render when the loader fires so
   // the instrument count pill and "All NSE" source both pick up Tier 2.
-  const onUniverseLoaded = () => { if (!cancelled) render(); };
+  const onUniverseLoaded = () => { if (cancelled) return; _universeLoaded = true; render(); };
   window.addEventListener("ss:universe-loaded", onUniverseLoaded);
   const onLeave = () => {
     cancelled = true;
@@ -453,7 +464,12 @@ export function renderStocks(main) {
     const state = getState();
     const wlSet = new Set(state.watchlist);
     const allInst = getAllInstruments();
-    const universeReady = allInst.length > STOCKS.length;
+    // Use the boolean tracked at function scope (set true by onUniverseLoaded
+    // event listener OR pre-flagged at mount when allInst > 1000 already).
+    // The previous `allInst.length > STOCKS.length` heuristic was off by 10
+    // because curated.js's PLACEHOLDER_MFS still get included in allInst at
+    // pre-universeFull state.
+    const universeReady = _universeLoaded;
 
     // Pre-universe-loaded: emit a full-page skeleton instead of the
     // 116-featured "real" view that briefly flashed in pre-Hotfix12. The
