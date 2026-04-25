@@ -188,8 +188,21 @@ export function getCloses(symbol, lastNDays = null) {
 
 /**
  * Get a specific day's price. 0 = today (latest), 1 = yesterday, etc.
+ *
+ * MF defensive branch: even after the universeLoader fix that maps
+ * `nav` → `inst.price`, the synthetic stub-walk for MFs still produces
+ * walk-around values rather than the actual NAV. For "today" (daysBack=0)
+ * we want the LATEST NAV, so prefer `inst.nav * 100` directly. This makes
+ * portfolio valuation, P&L math, and trade-confirmation totals accurate
+ * even before /api/mf-history populates a real series.
  */
 export function getPriceAt(symbol, daysBack = 0) {
+  if (daysBack === 0 && symbol && symbol.startsWith("MF_")) {
+    const inst = _resolveInstrument(symbol);
+    if (inst && inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0) {
+      return Math.round(inst.nav * 100);
+    }
+  }
   const s = getSeries(symbol);
   return s[s.length - 1 - daysBack]?.c;
 }
