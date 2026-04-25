@@ -83,6 +83,18 @@ export function renderStocks(main) {
   // then prices arrived, then the mood banner appeared. Each transition
   // was a visible jank step. Proper signal is below — wired in 19c.
   let _universeLoaded = getAllInstruments().length > 1000;
+  // First-batch quote readiness — flipped true the moment the warm-up
+  // getQuoteBatch() at line ~210 resolves with prices for the initial
+  // viewport (cold-start seed = top-30 by index prominence). Without
+  // this signal the skeleton would drop the moment universeFull lands
+  // (Hotfix19a) but the freshly-rendered cards would still show
+  // "Loading…" skeleton bars in their price slots for another 1-3 s
+  // until quotes arrived (frame 2 of the OBS capture). Pre-flagged
+  // true if quoteCache already covers most of the cold-start seed
+  // from getFreshCachedQuotes() — repeat visits within 30 s of the
+  // last poll get instant prices and shouldn't artificially gate on
+  // a fresh fetch they don't need.
+  let _initialQuotesLoaded = false;
 
   // Reset transient state on every (re-)entry so a stale in-flight AI
   // fetch or broken loading flag from the previous session doesn't leak
@@ -126,6 +138,14 @@ export function renderStocks(main) {
   // renderStockCard until the first getQuoteBatch() returns below.
   const allSyms = INSTRUMENTS.map(i => i.symbol);
   quoteCache = { ...quoteCache, ...getFreshCachedQuotes(allSyms) };
+  // Pre-flag _initialQuotesLoaded true if the fresh-cache already covers
+  // a meaningful slice of cold-start symbols. Without this, repeat visits
+  // within 30 s of the last poll would gate on a fresh batch they don't
+  // need, briefly showing the skeleton even though all the prices the
+  // user is about to see are already in cache. Threshold 5 is below the
+  // cold-start seed of 30 (line ~200) so we don't accidentally count an
+  // empty cache as ready.
+  if (Object.keys(quoteCache).length >= 5) _initialQuotesLoaded = true;
 
   render();
   // Subscribe with a state-slice diff so we only re-render when something
@@ -216,11 +236,25 @@ export function renderStocks(main) {
       const q = await getQuoteBatch(seed);
       if (cancelled) return;
       quoteCache = { ...quoteCache, ...q };
+      // Mark first-batch ready BEFORE rehydrating — the skeleton-vs-real
+      // gate (Hotfix19c) re-checks readiness on every render, so flipping
+      // this flag first means the next render() call below paints the
+      // real grid instead of skeleton. Without this ordering, the gate
+      // would still see _initialQuotesLoaded=false at render time even
+      // though the quotes are already in quoteCache.
+      _initialQuotesLoaded = true;
       // Don't renderList() — that wipes the entire grid + scroll position
       // (user-reported "scrolling ETF restarts the scrolling" + ~5x card
       // re-hydrations during scroll = continuous flashing). Instead, in
       // place re-render only the cards whose quotes just arrived.
       rehydrateCardsInPlace(Object.keys(q));
+      // Trigger a render() if the skeleton is still up — Hotfix19c's
+      // gate gates on (_universeLoaded && _initialQuotesLoaded). The
+      // moment both are true we want to swap skeleton → real grid.
+      // Subsequent renders are debounced by patchHydratedCards but
+      // this first transition needs an explicit render call because
+      // rehydrateCardsInPlace only touches cards that already exist.
+      render();
     } catch {}
   })();
 
