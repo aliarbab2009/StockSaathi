@@ -247,35 +247,60 @@ export function renderStocks(main) {
   function patchHydratedCards(quotes) {
     const host = main.querySelector("#stocks-grid-host");
     if (!host) return;
+    const ms = marketStatus();
     for (const sym of Object.keys(quotes)) {
       const sel = `.stock-card[data-sym="${CSS.escape(sym)}"][data-rendered="1"]`;
       const card = host.querySelector(sel);
       if (!card) continue;
       const q = quotes[sym];
+      // Detect "card was hydrated as skeleton" — i.e., it has no .stock-price
+      // element because hasLive was false at hydration time. patchHydratedCards
+      // can't fill in just the price text on such a card; the layout structure
+      // is different (skeleton div, not .stock-price + .stock-change). The
+      // user-visible bug pre-fix: card showed change% + LIVE badge but NO
+      // price (top-row cards in the OBS screenshot). Recovery path: re-render
+      // the whole card body in place via rehydrateCardsInPlace, which uses
+      // the now-populated quoteCache to emit the correct hasLive=true layout.
       const priceEl = card.querySelector(".stock-price");
+      if (!priceEl && q.pricePaise != null) {
+        rehydrateCardsInPlace([sym]);
+        continue;
+      }
       if (priceEl && q.pricePaise != null) {
         priceEl.textContent = formatRupees(q.pricePaise);
       }
       const changeEl = card.querySelector(".stock-change");
       if (changeEl && q.changePct != null) {
         // Fingerprint-guarded write — same pattern as the sparkline fix
-        // below. Pre-fix this ran every 10s for every visible card with
-        // no live-quote data change at all (e.g., outside market hours
-        // when the change% number is identical across ticks). Each
-        // innerHTML rewrite torn down + rebuilt the LIVE/DELAYED pill
-        // child, causing a visible flash on the badge + the change-line
-        // text. With ~12-30 visible cards, that's ~12-30 simultaneous
-        // flashes every 10 seconds — user-reported as "everything
-        // flashing like mad" (especially the CLOSED tag and pills).
+        // below. Outside market hours getCloses returns identical seeded
+        // data, so this skip is hit on >99% of poll ticks.
+        //
+        // Badge logic now respects market status: CLOSED/PRE-OPEN take
+        // precedence over LIVE/DELAYED. Pre-fix patchHydratedCards
+        // unconditionally stamped LIVE/DELAYED, overwriting the correct
+        // CLOSED badge that had been placed at hydration time. Visible
+        // bug in the OBS screenshot: "LIVE" pills displayed on every
+        // card while the navbar showed "NSE · Closed 6:29 PM IST".
         const stale = q.stale ? "1" : "0";
         const newClass = `stock-change ${deltaClass(q.changePct)}`;
-        const fp = `${q.changePct.toFixed(4)}|${stale}|${newClass}`;
+        const badgeKey = ms.state !== "open"
+          ? `closed:${ms.state}`
+          : (q.source && q.source !== "mf-static" && q.source !== "synthetic" ? `live:${stale}` : "syncing");
+        const fp = `${q.changePct.toFixed(4)}|${badgeKey}|${newClass}`;
         if (changeEl.dataset.changeFp !== fp) {
           changeEl.dataset.changeFp = fp;
           changeEl.className = newClass;
-          const badge = q.stale
-            ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Stale feed">DELAYED</span>`
-            : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
+          let badge;
+          if (ms.state !== "open") {
+            const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
+            badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
+          } else if (q.source && q.source !== "mf-static" && q.source !== "synthetic") {
+            badge = q.stale
+              ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Stale feed">DELAYED</span>`
+              : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
+          } else {
+            badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
+          }
           changeEl.innerHTML = `${formatPct(q.changePct, { sign: true })} today ${badge}`;
         }
       }
