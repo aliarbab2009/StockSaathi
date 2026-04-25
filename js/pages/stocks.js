@@ -274,9 +274,20 @@ export function renderStocks(main) {
     getQuoteBatch(seed).then(q => {
       if (cancelled) return;
       quoteCache = { ...quoteCache, ...q };
+      // Capture readiness BEFORE flipping _viewportPreheatDone — if the
+      // fail-open timer beat us to it, the page is already showing the
+      // hydrated grid and a render() here would wipe every card.
+      const wasReady = pageReady();
       _viewportPreheatDone = true;
       if (_viewportPreheatTimer) { clearTimeout(_viewportPreheatTimer); _viewportPreheatTimer = null; }
-      render();
+      if (wasReady) {
+        // Timer fired first. Page already rendered. Patch in the fresh
+        // quotes (fp-aware — no DOM rewrite when fingerprints match)
+        // instead of re-rendering and wiping the grid.
+        patchHydratedCards(q);
+      } else {
+        render();
+      }
     }).catch(() => {
       // fail-open — timer fallback handles this
     });
