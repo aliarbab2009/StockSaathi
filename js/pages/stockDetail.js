@@ -1090,7 +1090,14 @@ function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessi
   if (limitInput) {
     limitInput.addEventListener("input", (e) => {
       const v = parseFloat(e.target.value);
-      if (Number.isFinite(v) && v > 0) ui.limitPrice = v;
+      if (Number.isFinite(v) && v > 0) {
+        ui.limitPrice = v;
+        // Mark the input as user-edited so the live-quote auto-resync
+        // logic in render() stops overwriting it. Without this flag,
+        // every quote tick would reset the typed value back to the
+        // current close.
+        ui._limitDirty = true;
+      }
     });
   }
 
