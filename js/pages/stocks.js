@@ -218,7 +218,51 @@ export function renderStocks(main) {
   });
   // Full universe lands asynchronously — re-render when the loader fires so
   // the instrument count pill and "All NSE" source both pick up Tier 2.
-  const onUniverseLoaded = () => { if (cancelled) return; _universeLoaded = true; render(); };
+  // Fetch quotes for the top N symbols of the post-universeFull sort
+  // order so when the skeleton drops, the visible viewport already has
+  // real prices. 60 covers ~24 visible cards × 2.5x scroll buffer. The
+  // 3-second timeout ensures a slow upstream API doesn't hold the
+  // skeleton indefinitely (fail-open: drop skeleton, prices fill in
+  // via warm-up-from-observer as before, just with the visible
+  // staircase the user reported — better than infinite skeleton).
+  let _viewportPreheatTimer = null;
+  function kickViewportPreheat() {
+    if (_viewportPreheatDone || cancelled) return;
+    const state = getState();
+    const top = applyFilters(source(), filter, state, quoteCache).slice(0, 60);
+    const seed = top.filter(i => i.kind !== "MF").map(i => i.symbol);
+    if (seed.length === 0) {
+      _viewportPreheatDone = true;
+      render();
+      return;
+    }
+    if (_viewportPreheatTimer) clearTimeout(_viewportPreheatTimer);
+    _viewportPreheatTimer = setTimeout(() => {
+      if (!cancelled && !_viewportPreheatDone) {
+        _viewportPreheatDone = true;
+        render();
+      }
+    }, 3000);
+    getQuoteBatch(seed).then(q => {
+      if (cancelled) return;
+      quoteCache = { ...quoteCache, ...q };
+      _viewportPreheatDone = true;
+      if (_viewportPreheatTimer) { clearTimeout(_viewportPreheatTimer); _viewportPreheatTimer = null; }
+      render();
+    }).catch(() => {
+      // fail-open — timer fallback handles this
+    });
+  }
+  // Already-loaded path: if universeFull was loaded by another page or
+  // earlier this session, the ss:universe-loaded event won't fire for
+  // this mount. Kick the preheat immediately in that case.
+  if (_universeLoaded) kickViewportPreheat();
+  const onUniverseLoaded = () => {
+    if (cancelled) return;
+    _universeLoaded = true;
+    render();
+    kickViewportPreheat();
+  };
   window.addEventListener("ss:universe-loaded", onUniverseLoaded);
   const onLeave = () => {
     cancelled = true;
