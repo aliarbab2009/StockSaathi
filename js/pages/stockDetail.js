@@ -282,13 +282,25 @@ export function renderStockDetail(main, params) {
     // (PE in particular — the intro template references it). If either
     // is missing, defer; the fundamentals fetch above will retrigger
     // render() once data lands and we'll come through here again.
-    const hasSector = inst.sector && inst.sector !== "Other" && inst.sector !== "Unknown";
+    // Prefer the live Tickertape sector over the universe sector — Tickertape
+    // ships the GIC sector ("Financials", "Consumer Staples", "Energy") which
+    // is more accurate and up-to-date than build-universe.mjs's sector
+    // assignment ("Banking", "Food", etc. derived from NSE Industry overlay).
+    // E.g. HDFCBANK universe="Banking" but Tickertape says "Financials";
+    // ADFFOODS universe="Food" but Tickertape says "Consumer Staples".
+    const liveSector = liveFundamentals?.sector || inst.sector;
+    const hasSector = liveSector && liveSector !== "Other" && liveSector !== "Unknown";
     const hasPE = liveFundamentals?.pe_ratio != null;
     if (!hasSector || !hasPE) return;
     coach({
       type: "STOCK_INTRO",
       symbol,
-      instrument: { ...inst, pe: liveFundamentals.pe_ratio, marketCap: liveFundamentals.market_cap }
+      instrument: {
+        ...inst,
+        pe: liveFundamentals.pe_ratio,
+        marketCap: liveFundamentals.market_cap,
+        sector: liveSector,   // override stale universe sector
+      }
     }).then(msg => {
       if (myToken.cancelled) return;
       msg.triggerSymbol = symbol;
@@ -741,13 +753,17 @@ function render(inst, symbol) {
             ${liveFundamentals ? `<span class="data-badge"><span class="dot"></span> NSE</span>` : `<span class="data-badge"><span class="dot offline"></span> Loading…</span>`}
           </div>
           ${liveFundamentals && inst.kind !== "MF"
-            && liveFundamentals.market_cap == null
-            && liveFundamentals.pe_ratio == null
-            && liveFundamentals.pb_ratio == null ? `
+            && (liveFundamentals.market_cap == null
+                || liveFundamentals.pe_ratio == null
+                || liveFundamentals.pb_ratio == null) ? `
+            <!-- Show banner if ANY of the three core ratios is missing —
+                 not just when ALL three are missing. ETFs typically have
+                 PE but no market_cap or pb_ratio; pre-fix the banner only
+                 fired in the rare all-null case so users with partial-data
+                 ETFs/stocks saw an apparently complete card with silent gaps. -->
             <div class="info-msg" style="margin-bottom: var(--sp-3); font-size: var(--text-xs); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--bg-soft); border: 1px solid var(--border);">
-              Detailed fundamentals are unavailable for ${escapeHtml(symbol)} via our automated feed. View on
-              <a href="https://www.tickertape.in/stocks/${escapeAttr(symbol.toLowerCase())}" target="_blank" rel="noopener noreferrer" style="color: var(--brand); font-weight: 600;">Tickertape ↗</a>
-              for the latest figures.
+              Some fundamentals are missing for ${escapeHtml(symbol)} via our automated feed. View full details on
+              <a href="https://www.tickertape.in/stocks/${escapeAttr(symbol.toLowerCase())}" target="_blank" rel="noopener noreferrer" style="color: var(--brand); font-weight: 600;">Tickertape ↗</a>.
             </div>
           ` : ""}
           <div class="fundamentals">
@@ -1647,9 +1663,14 @@ function renderFundamentals(inst, live, hi52, lo52) {
   }
 
   // Equity branch — original layout.
+  // P/E label clarified to "P/E (TTM)" since pe_ratio is explicitly the
+  // trailing-12-months value from Tickertape (matches Yahoo's trailingPE).
+  // Annual fiscal-year PE is exposed via pe_annual for power users but
+  // not displayed by default (it's typically older + materially different
+  // — RELIANCE TTM 21.59 vs annual 25.80, e.g.).
   return [
     fundRow(termHtml("Market Cap"), mcap),
-    fundRow(termHtml("P/E Ratio"), pe),
+    fundRow(termHtml("P/E Ratio (TTM)", "P/E (TTM)"), pe),
     fundRow(termHtml("P/B Ratio"), pb),
     fundRow(termHtml("Dividend Yield", "Div Yield"), dy),
     fundRow(termHtml("Beta"), beta),
