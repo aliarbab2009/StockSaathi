@@ -1,0 +1,15 @@
+[project]
+name = "stocksaathi"
+version = "0.1.0"
+description = "StockSaathi — static site with @vercel/python serverless functions (stdlib-only handlers)"
+requires-python = ">=3.12"
+# Empty deps list. The api/*.py handlers (BaseHTTPRequestHandler-based)
+# use only the Python stdlib — urllib, json, http.server, time, os, re.
+# api-backup/ has its own pyproject for the Fly.io shim with fastapi/uvicorn,
+# but that runs on a different host. Vercel's @vercel/python builder reads
+# this file to satisfy uv lock during the framework=python build path.
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
