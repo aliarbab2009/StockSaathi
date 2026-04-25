@@ -1007,10 +1007,17 @@ export function renderStocks(main) {
           getQuoteBatch(seed).then(q => {
             if (cancelled) return;
             quoteCache = { ...quoteCache, ...q };
-            // In-place re-render of the just-quoted cards only. Pre-fix
-            // this called renderList() which wiped the grid and forced
-            // a chain reaction of re-hydrations through the IO observer.
-            rehydrateCardsInPlace(Object.keys(q));
+            // patchHydratedCards is fingerprint-aware: cards whose price
+            // and change-line haven't changed skip the innerHTML rewrite
+            // entirely. Pre-fix this called rehydrateCardsInPlace which
+            // unconditionally rebuilt every card's body — visible blink
+            // ~200 ms after the page settled even when the data was
+            // identical to what the preheat had already loaded.
+            // patchHydratedCards detects skeleton-state cards (those
+            // missing .stock-price after a stub-only emit) and falls
+            // back to rehydrateCardsInPlace([sym]) for those, so cards
+            // beyond the preheat still get their full hydrate path.
+            patchHydratedCards(q);
           }).catch(() => {});
         }
       }
