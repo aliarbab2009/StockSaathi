@@ -324,6 +324,14 @@ function inferFromName(symbol, name) {
   // MTNL fell through to "Other" because the regex only had "telecom"
   // (the company's name uses "telephone").
   if (/telecom|telephone|airtel|vodafone|tata communic|tejas net|gtl|optifibre|fibre optic|fiber optic|optical fibre|bharti hexa|mahanagar.*telephone|telephone nigam/.test(n)) return "Telecom";
+
+  // Jewellery / gems / precious metals — added so jewelry exporters and
+  // retailers stop falling through to "Other". RGL ("Renaissance Global
+  // Limited") is the user-reported case. Catches B2B exporters and the
+  // long tail of small-cap gem houses (Goldiam, Rajesh Exports, etc.).
+  // NSE Industry Classification already handles diversified retailers
+  // like Titan/Kalyan via the "Consumer" path before this regex runs.
+  if (/jewel|gems? ?and ?jewel|gemstone|diamond|ornament|bullion|kundan|polki|gold limited|gold loan|silver limited|renaissance global|asian star|goldiam|rajesh exports|vaibhav global|pc ?jewel|tbz\b|kalyan ?jewel|joyalukkas|senco gold|thangamayil|mini diamond|bhakti gems|d ?p ?abhushan/.test(n)) return "Jewellery";
   if (/internet|e-?commerce|ecommerce|online|nykaa|zomato|eternal|info ?edge|naukri|justdial/.test(n)) return "Internet";
 
   // Pharma / healthcare.
