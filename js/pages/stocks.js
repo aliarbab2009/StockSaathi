@@ -17,7 +17,7 @@ import { toast } from "../components/toast.js";
 let filter = { q: "", sector: "all", kind: "EQUITY", sort: "marketCap", mfBucket: "all", mfPlan: "all" };
 let quoteCache = {};
 let marketMood = null;       // { narrative, temperature } | null
-let _moodFetched = false;
+let _moodFetched = false; // true after first /api/market-mood resolves
 let aiSearch = null;          // { matches: ["TCS", ...], rationale: "..." } | null — when present, overrides the normal filter pipeline
 let aiSearchLoading = false;
 let aiSearchQuery = "";
