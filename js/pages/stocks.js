@@ -648,19 +648,6 @@ async function fetchMarketMood() {
   return d;
 }
 
-// Parse the "1.25L Cr", "87,500 Cr", "3.2L Cr" style strings in universe.js
-// into a plain number of crores so we can sort numerically. Falls back to
-// 0 for anything we can't parse — those sink to the bottom, which is fine.
-function parseMarketCapCr(s) {
-  if (!s) return 0;
-  const str = String(s).toLowerCase().replace(/,/g, "").trim();
-  const n = parseFloat(str);
-  if (!Number.isFinite(n)) return 0;
-  if (str.includes("l cr") || str.includes("lc")) return n * 1e5;   // lakh crore
-  if (str.includes("k cr")) return n * 1e3;
-  return n;
-}
-
 function changeFor(sym, quoteCache) {
   const q = quoteCache?.[sym];
   if (q && Number.isFinite(q.changePct)) return q.changePct;
