@@ -215,11 +215,26 @@ export function renderStocks(main) {
       }
       const changeEl = card.querySelector(".stock-change");
       if (changeEl && q.changePct != null) {
-        changeEl.className = `stock-change ${deltaClass(q.changePct)}`;
-        const badge = q.stale
-          ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Stale feed">DELAYED</span>`
-          : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
-        changeEl.innerHTML = `${formatPct(q.changePct, { sign: true })} today ${badge}`;
+        // Fingerprint-guarded write — same pattern as the sparkline fix
+        // below. Pre-fix this ran every 10s for every visible card with
+        // no live-quote data change at all (e.g., outside market hours
+        // when the change% number is identical across ticks). Each
+        // innerHTML rewrite torn down + rebuilt the LIVE/DELAYED pill
+        // child, causing a visible flash on the badge + the change-line
+        // text. With ~12-30 visible cards, that's ~12-30 simultaneous
+        // flashes every 10 seconds — user-reported as "everything
+        // flashing like mad" (especially the CLOSED tag and pills).
+        const stale = q.stale ? "1" : "0";
+        const newClass = `stock-change ${deltaClass(q.changePct)}`;
+        const fp = `${q.changePct.toFixed(4)}|${stale}|${newClass}`;
+        if (changeEl.dataset.changeFp !== fp) {
+          changeEl.dataset.changeFp = fp;
+          changeEl.className = newClass;
+          const badge = q.stale
+            ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Stale feed">DELAYED</span>`
+            : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
+          changeEl.innerHTML = `${formatPct(q.changePct, { sign: true })} today ${badge}`;
+        }
       }
       const sparkEl = card.querySelector(".stock-sparkline");
       if (sparkEl) {
