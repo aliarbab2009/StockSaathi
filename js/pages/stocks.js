@@ -223,7 +223,22 @@ export function renderStocks(main) {
       if (sparkEl) {
         const seededCloses = getCloses(sym, 40);
         const closes = getIntradaySparkline(sym, seededCloses);
-        if (closes && closes.length > 1) sparkEl.innerHTML = sparkline(closes);
+        if (closes && closes.length > 1) {
+          // Fingerprint-guarded write: cheap length+last-value check skips
+          // the innerHTML rewrite when the sparkline data hasn't changed.
+          // Pre-fix this ran unconditionally every 10s for every visible
+          // card, tearing down + rebuilding the SVG DOM subtree even when
+          // closes was byte-identical to last tick. Result: every card
+          // visibly re-painted on every quote tick — user-reported as
+          // "cards near the top keep flashing/blinking like mad". Outside
+          // market hours getCloses returns identical seeded data, so this
+          // skip is hit on >99% of poll ticks.
+          const fp = `${closes.length}:${closes[closes.length - 1]}`;
+          if (sparkEl.dataset.sparkFp !== fp) {
+            sparkEl.dataset.sparkFp = fp;
+            sparkEl.innerHTML = sparkline(closes);
+          }
+        }
       }
     }
   }
