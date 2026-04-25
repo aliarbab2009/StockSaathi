@@ -46,6 +46,12 @@ const DEHYDRATE_ROOT_MARGIN = "600% 0px 600% 0px";
 // the fetch resolves. Keeps cold loads under the 2s perceived-instant
 // threshold even when the mood endpoint is slow.
 const MOOD_FAIL_OPEN_MS = 2000;
+// Instrument-kind strings. Universe.json uses these as discriminator
+// values for stocks.kind. Hoisted to consts so typos at usage sites
+// are syntax errors at write time rather than silent never-matches.
+const KIND_MF = "MF";
+const KIND_EQUITY = "EQUITY";
+const KIND_ETF = "ETF";
 let _debounceTimer = null;
 
 // Visible-symbols set + observer for viewport-only polling. Populated as
