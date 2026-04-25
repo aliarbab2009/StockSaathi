@@ -234,7 +234,7 @@ export function renderStocks(main) {
   function kickViewportPreheat() {
     if (_viewportPreheatDone || cancelled) return;
     const state = getState();
-    const top = applyFilters(source(), filter, state, quoteCache).slice(0, 60);
+    const top = applyFilters(source(), filter, state, quoteCache).slice(0, VIEWPORT_PREHEAT_SIZE);
     const seed = top.filter(i => i.kind !== "MF").map(i => i.symbol);
     if (seed.length === 0) {
       _viewportPreheatDone = true;
