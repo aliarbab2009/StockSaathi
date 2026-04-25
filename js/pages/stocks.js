@@ -989,9 +989,19 @@ export function renderStocks(main) {
       // within ~200ms instead of waiting for the 10s poll cycle.
       if (changed && _visibleSymbols.size > 0 && !_warmedFromObserver) {
         _warmedFromObserver = true;
+        // Only fetch symbols MISSING from quoteCache. Pre-fix the warm-up
+        // batch always re-fetched every visible symbol, which after the
+        // Hotfix21b viewport preheat meant a redundant round-trip for
+        // 24-60 cards that already had fresh quotes — and the resulting
+        // rehydrate produced a visible card-grid blink ~200 ms after
+        // the page settled. User-reported: 'graph and prices on the
+        // card again blink after the page loads'. Filtering to misses
+        // skips the round-trip entirely when the preheat already
+        // covers the viewport (typical case post-21b).
         const seed = Array.from(_visibleSymbols).filter(s => {
           const inst = getInstrument(s);
-          return !inst || inst.kind !== "MF";
+          if (inst?.kind === "MF") return false;
+          return !quoteCache[s]?.pricePaise;
         }).slice(0, 60);
         if (seed.length) {
           getQuoteBatch(seed).then(q => {
