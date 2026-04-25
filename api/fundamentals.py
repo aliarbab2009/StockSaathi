@@ -201,6 +201,9 @@ def fetch_v7(ticker):
         "pb_ratio": q.get("priceToBook"),
         "beta": q.get("beta"),
         "dividend_yield": q.get("trailingAnnualDividendYield") or q.get("dividendYield"),
+        # Absolute INR-per-share annual dividend. Used by _normalize_dividend_yield
+        # below as the source of truth — yield = rate/price is unambiguous.
+        "dividend_rate": q.get("trailingAnnualDividendRate") or q.get("dividendRate"),
         "eps": q.get("epsTrailingTwelveMonths"),
         "fifty_two_week_high": q.get("fiftyTwoWeekHigh"),
         "fifty_two_week_low": q.get("fiftyTwoWeekLow"),
@@ -263,6 +266,9 @@ def fetch_v10(ticker):
         "pb_ratio": _raw(ks, "priceToBook"),
         "beta": _raw(sd, "beta") or _raw(ks, "beta"),
         "dividend_yield": _raw(sd, "trailingAnnualDividendYield") or _raw(sd, "dividendYield"),
+        # Absolute INR-per-share annual dividend (cross-checked in
+        # _normalize_dividend_yield to reconcile fraction vs percent).
+        "dividend_rate": _raw(sd, "trailingAnnualDividendRate") or _raw(sd, "dividendRate"),
         "eps": _raw(ks, "trailingEps") or _raw(fd, "currentPrice"),
         "fifty_two_week_high": _raw(sd, "fiftyTwoWeekHigh"),
         "fifty_two_week_low": _raw(sd, "fiftyTwoWeekLow"),
@@ -370,6 +376,51 @@ def _merge(base, extra):
     return merged
 
 
+def _normalize_dividend_yield(r):
+    """Reconcile dividend_yield units across tiers.
+
+    Yahoo and Tickertape disagree on whether dividend_yield is a fraction
+    (0.0041 = 0.41%) or a percent value (0.41 = 0.41%). Worse, Yahoo flips
+    between the two depending on the symbol — observed live 2026-04-25:
+      RELIANCE: 0.41 (percent-style — front-end ×100 renders "41.00%")
+      ADFFOODS: 0.0048 (fraction-style — renders "0.48%", correct)
+    Tickertape's _pct_to_frac already divides by 100, so its output is
+    fraction. The mismatch lives entirely in Yahoo v7/v10's `dividendYield`
+    field, which encodes the same number two different ways.
+
+    Strategy:
+      1. Source of truth: if `dividend_rate` (absolute INR/share) and
+         `price` are both available, compute yield = rate / price. This
+         is unambiguous and matches the way the NSE itself reports yield.
+      2. Fallback heuristic: any dividend_yield > 0.3 is impossibly high
+         as a fraction (>30% yield doesn't exist for any sane stock), so
+         treat it as percent and divide by 100. The 0.3 threshold has a
+         small ambiguity zone for ultra-low-yield growth stocks (0.2-0.3%
+         as percent slips through), but rate/price covers those when the
+         data is available, and the fallback is "show 20-30% yield" vs
+         "show 0.20-0.30%" — both look obviously wrong, so users notice.
+    """
+    if not r:
+        return r
+    dy = r.get("dividend_yield")
+    if dy is None:
+        return r
+    rate = r.get("dividend_rate")
+    price = r.get("price") or r.get("prev_close")
+    try:
+        if rate is not None and price is not None and float(price) > 0 and float(rate) > 0:
+            r["dividend_yield"] = float(rate) / float(price)
+            return r
+    except (TypeError, ValueError):
+        pass
+    try:
+        if float(dy) > 0.3:
+            r["dividend_yield"] = float(dy) / 100.0
+    except (TypeError, ValueError):
+        pass
+    return r
+
+
 def fetch_fundamentals(symbol, *, allow_cache=True, write_back=True):
     """Returns a merged fundamentals dict for an NSE symbol.
 
@@ -385,12 +436,19 @@ def fetch_fundamentals(symbol, *, allow_cache=True, write_back=True):
     ticker = symbol if "." in symbol else f"{symbol}.NS"
 
     # Tier 0 — cache. Returns a complete row if fresh.
+    # Cache may contain pre-normalization rows from earlier deploys (where
+    # divYield=0.41 for RELIANCE got persisted in percent-style). Run
+    # _normalize_dividend_yield on the way out so the front-end always
+    # receives a fraction. Cache rows get rewritten by the daily cron in
+    # the new shape; this read-side normalization closes the gap until
+    # then without requiring a manual cache purge.
     if allow_cache:
         cached = read_cache(symbol)
         if cached and cached.get("market_cap") is not None and cached.get("pe_ratio") is not None:
             cached["symbol"] = symbol
             cached["ticker"] = ticker
             cached["source"] = "cache"
+            _normalize_dividend_yield(cached)
             return cached
 
     # Tier 1+2+3+4 — fan-out merge.
@@ -401,6 +459,11 @@ def fetch_fundamentals(symbol, *, allow_cache=True, write_back=True):
 
     if not r:
         return {"error": "all_sources_failed"}
+
+    # Apply unit normalization BEFORE writing back to cache so the next read
+    # already has the corrected fraction. Otherwise the cache poisons every
+    # subsequent fetch for 24 h.
+    _normalize_dividend_yield(r)
 
     r["symbol"] = symbol
     r["ticker"] = ticker
