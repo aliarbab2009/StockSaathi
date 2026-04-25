@@ -198,7 +198,14 @@ export function ensureMfUniverseLoaded() {
           // sector pill row doesn't drown in 47 distinct categories) so
           // filterPipelines / getCloses don't need MF-specific branches.
           kind: "MF",
-          price: null,
+          // NAV-as-paise so synthMFQuote, getPriceAt, getHoldingsValue and the
+          // generateSeries stub-walk anchor all read the right base. Without
+          // this, every MF flowed through `Math.round(null * drift)` which JS
+          // coerces to 0 — visible to users as "₹0.00" in the price header,
+          // wrong portfolio valuations, and a chart anchored to a random
+          // synthetic walk (₹50–5000) instead of the real NAV (e.g. ₹1006
+          // for Money Market). Audited and root-caused 2026-04-25.
+          price: r.nav != null ? Math.round(r.nav * 100) : null,
           marketCap: null,
           pe: null,
           pb: null,
