@@ -357,12 +357,8 @@ export function renderStocks(main) {
         // CLOSED badge that had been placed at hydration time. Visible
         // bug in the OBS screenshot: "LIVE" pills displayed on every
         // card while the navbar showed "NSE · Closed 6:29 PM IST".
-        const stale = q.stale ? "1" : "0";
         const newClass = `stock-change ${deltaClass(q.changePct)}`;
-        const badgeKey = ms.state !== "open"
-          ? `closed:${ms.state}`
-          : (q.source && q.source !== "mf-static" && q.source !== "synthetic" ? `live:${stale}` : "syncing");
-        const fp = `${q.changePct.toFixed(4)}|${badgeKey}|${newClass}`;
+        const fp = computeChangeFp(q.changePct, q.source, q.stale, ms.state);
         if (changeEl.dataset.changeFp !== fp) {
           changeEl.dataset.changeFp = fp;
           changeEl.className = newClass;
@@ -1556,6 +1552,25 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
     </div>
     <div class="stock-sparkline"${closes && closes.length > 1 ? ` data-spark-fp="${closes.length}:${closes[closes.length - 1]}"` : ""}>${closes && closes.length > 1 ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
   `;
+}
+
+// Stock-card change-line fingerprint. Used by the patchHydratedCards
+// re-render guard (read side) AND — once 21a.2/21a.3 land — by every
+// caller that emits a fresh card body via renderStockCardBody (write
+// side). Both sides compute identical fingerprints from identical
+// inputs, so the first quote-tick after initial render becomes a
+// fingerprint hit → no innerHTML rebuild → no DOM teardown → no
+// flash. Mirrors the data-spark-fp contract introduced in Hotfix20a.
+//
+// Output format must stay byte-identical between the read and write
+// paths or every first-tick will miss the guard and re-paint
+// silently. Format: `${changePct.toFixed(4)}|${badgeKey}|stock-change <delta>`
+function computeChangeFp(changePct, source, stale, msState) {
+  const newClass = `stock-change ${deltaClass(changePct)}`;
+  const badgeKey = msState !== "open"
+    ? `closed:${msState}`
+    : (source && source !== "mf-static" && source !== "synthetic" ? `live:${stale ? "1" : "0"}` : "syncing");
+  return `${(changePct ?? 0).toFixed(4)}|${badgeKey}|${newClass}`;
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
