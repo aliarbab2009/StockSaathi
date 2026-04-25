@@ -73,6 +73,13 @@ if ("serviceWorker" in navigator) {
       const checkForUpdate = () => { reg.update().catch(() => {}); };
       checkForUpdate();
       setInterval(checkForUpdate, 5 * 60 * 1000);
+      // Re-check on tab refocus — most common path back from
+      // background. Catches the "I left my tab open yesterday and you
+      // shipped 5 hotfixes overnight" case faster than the 5-min
+      // interval would.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") checkForUpdate();
+      });
       reg.addEventListener("updatefound", () => {
         const sw = reg.installing;
         if (!sw) return;
