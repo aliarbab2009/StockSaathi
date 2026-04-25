@@ -758,6 +758,7 @@ function render(inst, symbol) {
 
       <aside>
         <div class="card trade-box">
+          ${inst.kind === "MF" ? renderMfInvestBox(inst, symbol, curPrice, holding) : `
           ${!ms.open ? `
             <div class="amo-banner" style="margin-bottom: var(--sp-3); padding: var(--sp-3); border-radius: var(--r-md); background: color-mix(in srgb, var(--brand) 7%, var(--bg-soft)); border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--border)); font-size: var(--text-xs); line-height: 1.45;">
               <div style="font-weight: 600; color: var(--text-strong); margin-bottom: 2px;">🕗 NSE Closed — AMO mode</div>
@@ -829,6 +830,7 @@ function render(inst, symbol) {
                 ? `Virtual money · Queues as AMO · Fills at ${escapeHtml(ms.nextOpenLabel || "next market open")}`
                 : "Virtual money · Reviewed on a confirmation step · Coach reflection follows every trade"}
             </div>
+          `}
           `}
         </div>
       </aside>
@@ -1080,6 +1082,81 @@ function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessi
     } catch (e) {
       console.error("[trade] reviewTrade threw:", e);
       toast({ kind: "error", message: e?.message || "Trade review failed. Check console." });
+    }
+  });
+
+  // ── MF-specific handlers ──────────────────────────────────────────────
+  // Live-update the units estimate + total as the user types in the
+  // amount field. Approx-units math uses curPrice (paise) which for MFs
+  // is set from inst.nav by the universeLoader fix.
+  const mfAmt = main.querySelector("#mf-amount-input");
+  if (mfAmt) {
+    const updateEstimate = () => {
+      const amount = parseFloat(mfAmt.value || "0");
+      const navRupees = curPrice > 0 ? curPrice / 100 : 0;
+      const units = navRupees > 0 ? (amount / navRupees).toFixed(4) : "—";
+      const unitsEl = main.querySelector("#mf-units-estimate");
+      const totalEl = main.querySelector("#mf-amount-display");
+      if (unitsEl) unitsEl.textContent = units;
+      if (totalEl) totalEl.textContent = `₹${(amount || 0).toLocaleString("en-IN")}`;
+    };
+    mfAmt.addEventListener("input", updateEstimate);
+  }
+
+  // MF Invest button — converts ₹ amount → unit count at current NAV,
+  // then routes through the standard reviewTrade flow with that unit count.
+  main.querySelector("#mf-invest-btn")?.addEventListener("click", async () => {
+    try {
+      const amountInput = main.querySelector("#mf-amount-input");
+      const amount = parseFloat(amountInput?.value || "0");
+      if (!amount || amount <= 0) {
+        toast({ kind: "error", message: "Enter a valid amount." });
+        return;
+      }
+      const navRupees = curPrice > 0 ? curPrice / 100 : 0;
+      if (navRupees <= 0) {
+        toast({ kind: "error", message: "NAV not available right now. Try again in a moment." });
+        return;
+      }
+      // Allotment math: units = amount / NAV (rupees). 4 decimal places
+      // matches AMFI's standard unit allotment precision.
+      const units = +(amount / navRupees).toFixed(4);
+      ui.side = "BUY";
+      ui.qty = units;
+      toast({ kind: "info", message: "Processing…", duration: 1500 });
+      await reviewTrade(inst, symbol, curPrice, holding);
+    } catch (e) {
+      console.error("[mf-invest]", e);
+      toast({ kind: "error", message: e?.message || "Invest failed. Check console." });
+    }
+  });
+
+  // MF Redeem — same conversion, opposite side.
+  main.querySelector("#mf-redeem-btn")?.addEventListener("click", async () => {
+    try {
+      const redeemInput = main.querySelector("#mf-redeem-input");
+      const amount = parseFloat(redeemInput?.value || "0");
+      if (!amount || amount <= 0) {
+        toast({ kind: "error", message: "Enter a valid redeem amount." });
+        return;
+      }
+      const navRupees = curPrice > 0 ? curPrice / 100 : 0;
+      if (navRupees <= 0) {
+        toast({ kind: "error", message: "NAV not available right now. Try again in a moment." });
+        return;
+      }
+      const units = +(amount / navRupees).toFixed(4);
+      if (!holding || holding.qty < units - 1e-9) {
+        toast({ kind: "error", message: `You only hold ${(holding?.qty || 0).toFixed(4)} units.` });
+        return;
+      }
+      ui.side = "SELL";
+      ui.qty = units;
+      toast({ kind: "info", message: "Processing…", duration: 1500 });
+      await reviewTrade(inst, symbol, curPrice, holding);
+    } catch (e) {
+      console.error("[mf-redeem]", e);
+      toast({ kind: "error", message: e?.message || "Redeem failed. Check console." });
     }
   });
 }
@@ -1583,6 +1660,126 @@ function renderFundamentals(inst, live, hi52, lo52) {
     tma ? fundRow(termHtml("200-day moving average", "200-day avg"), tma) : "",
     fundRow(termHtml("Risk tier"), `<span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "med").toUpperCase()}</span>`, true),
   ].filter(Boolean).join("");
+}
+
+// Build the MF-appropriate Invest/SIP/Redeem box. Replaces the entire
+// equity Buy/Sell + Market/Limit + AMO trade-box for MFs.
+//
+// Indian MF mechanics that drive this UI:
+//   - Buy in RUPEES (not units). User says "invest ₹5,000".
+//   - Cutoff: 1:30 PM IST for equity/debt funds; 12:00 noon for liquid/overnight
+//     (SEBI 2021 + 2025 revisions). Pre-cutoff order = today's NAV
+//     (declared ~9 PM IST). Post-cutoff = tomorrow's NAV.
+//   - Settlement: T+1 (liquid) to T+3 (equity). No intraday exit.
+//   - SIP: monthly auto-debit ₹100/₹500 min, fixed deduction date.
+//   - Redemption: ₹ amount or units. Same cutoff. Exit load 1% within
+//     1 year for most equity funds.
+//   - No bid/ask, no Market/Limit, no order book, no AMO.
+//
+// Phase 1 (this commit): Lump Sum Invest tab + Redeem tab if holding.
+// Phase 2 (follow-up): SIP setup, exit-load warning with held-time math,
+// step-up SIP, STP/SWP.
+function renderMfInvestBox(inst, symbol, curNavPaise, holding) {
+  // Cutoff: liquid/overnight → 12:00 IST; everything else → 13:30 IST.
+  const cat = (inst.category_bucket || inst.category || "").toLowerCase();
+  const isLiquidLike = /liquid|overnight|money market/.test(cat);
+  const cutoffLabel = isLiquidLike ? "12:00 PM IST" : "1:30 PM IST";
+  // Compute current IST hour:minute to pick same-day vs next-day NAV msg.
+  let beforeCutoff = false;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    const parts = fmt.formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
+    const totalMin = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
+    const cutoffMin = isLiquidLike ? (12 * 60) : (13 * 60 + 30);
+    beforeCutoff = totalMin < cutoffMin;
+  } catch (_) {}
+  const navNote = beforeCutoff
+    ? `Order before <strong>${cutoffLabel}</strong> today gets <strong>today's NAV</strong> (declared ~9 PM IST).`
+    : `After <strong>${cutoffLabel}</strong> cutoff — order will get <strong>tomorrow's NAV</strong>.`;
+
+  // Initial amount default: ₹5000 first investment, ₹1000 if user already holds
+  // (typical "additional purchase" amount).
+  const defaultAmount = holding ? 1000 : 5000;
+  const minInitial = 500;
+
+  // Holding card (only when user holds the fund).
+  const holdingHtml = holding ? (() => {
+    const units = holding.qty;
+    const avgCost = holding.avgCostPaise;
+    const navPaise = curNavPaise || 0;
+    const valueP = navPaise > 0 ? Math.round(units * navPaise) : null;
+    const cost = Math.round(units * avgCost);
+    const pl = valueP != null ? (valueP - cost) : null;
+    const plPct = cost > 0 && pl != null ? pl / cost : null;
+    return `
+      <div style="margin-bottom: var(--sp-3); padding: var(--sp-3); background: var(--bg-soft); border-radius: var(--r-md); font-size: var(--text-xs);">
+        <div class="flex justify-between"><span class="dim">Units held</span><span class="tabular">${units.toFixed(4)}</span></div>
+        <div class="flex justify-between" style="margin-top: 4px;"><span class="dim">Avg cost / unit</span><span class="tabular">${formatRupees(avgCost)}</span></div>
+        ${valueP != null ? `
+          <div class="flex justify-between" style="margin-top: 4px;"><span class="dim">Current value</span><span class="tabular">${formatRupees(valueP)}</span></div>
+          <div class="flex justify-between" style="margin-top: 4px;">
+            <span class="dim">P&amp;L</span>
+            <span class="tabular ${deltaClass(plPct)}">${formatRupees(pl, { sign: true })} (${formatPct(plPct, { sign: true })})</span>
+          </div>
+        ` : ""}
+      </div>
+    `;
+  })() : "";
+
+  // Approx units estimate at current NAV — informative only; actual units
+  // get allotted at the day-end NAV after AMC processing.
+  const navRupees = curNavPaise > 0 ? curNavPaise / 100 : 0;
+  const approxUnits = navRupees > 0 ? (defaultAmount / navRupees).toFixed(4) : "—";
+
+  return `
+    <div class="trade-head" style="margin-bottom: var(--sp-3);">
+      <h3 style="font-size: var(--text-base); margin-bottom: 4px;">${holding ? "Manage holding" : "Invest in this fund"}</h3>
+      <div class="dim text-xs" style="line-height: 1.5;">${navNote}</div>
+    </div>
+
+    ${holdingHtml}
+
+    <div class="lb-tabs" style="margin-bottom: var(--sp-3); width: 100%;">
+      <button class="lb-tab ${ui.side === "BUY" ? "active" : ""}" data-side="BUY" style="flex:1;">${holding ? "Invest more" : "Invest"}</button>
+      ${holding ? `<button class="lb-tab ${ui.side === "SELL" ? "active" : ""}" data-side="SELL" style="flex:1;">Redeem</button>` : ""}
+    </div>
+
+    ${ui.side === "BUY" ? `
+      <div style="margin-bottom: var(--sp-3);">
+        <label class="label" for="mf-amount-input">Amount (₹)</label>
+        <input class="input" id="mf-amount-input" type="number" min="${holding ? 100 : minInitial}" step="100"
+          value="${defaultAmount}" placeholder="min ₹${holding ? 100 : minInitial}" inputmode="decimal" />
+        <div class="dim text-xs" style="margin-top: 4px;">
+          ${holding ? "Min ₹100 additional purchase." : `Min ₹${minInitial} first investment, ₹100 additional.`}
+        </div>
+      </div>
+      <div class="order-summary">
+        <div class="row"><span>NAV</span><span class="num">${curNavPaise ? formatRupees(curNavPaise) : "—"}</span></div>
+        <div class="row"><span>Approx units</span><span class="num dim" id="mf-units-estimate">${approxUnits}</span></div>
+        <div class="row total"><span>Investment</span><span class="num" id="mf-amount-display">₹${defaultAmount.toLocaleString("en-IN")}</span></div>
+      </div>
+      <button class="btn btn-block btn-buy" id="mf-invest-btn">${holding ? "Invest More" : "Invest"}</button>
+      <div class="dim text-xs center" style="margin-top: var(--sp-3); line-height: 1.5;">
+        Virtual money · Units allotted at day-end NAV · No intraday price · Settlement T+1 to T+3
+      </div>
+    ` : `
+      <div style="margin-bottom: var(--sp-3);">
+        <label class="label" for="mf-redeem-input">Redeem amount (₹)</label>
+        <input class="input" id="mf-redeem-input" type="number" min="100" step="100"
+          value="${holding && curNavPaise ? Math.floor(holding.qty * curNavPaise / 100) : 0}" inputmode="decimal" />
+        <div class="dim text-xs" style="margin-top: 4px; line-height: 1.5;">
+          ${/equity|elss|small cap|mid cap|flexi cap|focused/i.test(cat) ? "1% exit load if redeemed within 1 year. " : ""}
+          Money credited T+1 (liquid) to T+3 (equity) business days.
+        </div>
+      </div>
+      <button class="btn btn-block btn-sell" id="mf-redeem-btn">Redeem</button>
+      <div class="dim text-xs center" style="margin-top: var(--sp-3); line-height: 1.5;">
+        Virtual money · Redemption at day-end NAV · No intraday exit
+      </div>
+    `}
+  `;
 }
 
 function renderOrderBook(symbol, curPrice) {
