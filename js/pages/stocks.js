@@ -205,7 +205,11 @@ export function renderStocks(main) {
       const q = await getQuoteBatch(seed);
       if (cancelled) return;
       quoteCache = { ...quoteCache, ...q };
-      renderList();
+      // Don't renderList() — that wipes the entire grid + scroll position
+      // (user-reported "scrolling ETF restarts the scrolling" + ~5x card
+      // re-hydrations during scroll = continuous flashing). Instead, in
+      // place re-render only the cards whose quotes just arrived.
+      rehydrateCardsInPlace(Object.keys(q));
     } catch {}
   })();
 
@@ -296,6 +300,63 @@ export function renderStocks(main) {
           }
         }
       }
+    }
+  }
+
+  // Re-render the inner body of specific cards in place, without wiping
+  // the grid. Used when the warm-up batch (initial mount + IO first-fire)
+  // returns quotes for cards that were already hydrated in skeleton state
+  // (because quoteCache was empty at hydration time). Replacing card.innerHTML
+  // preserves the outer wrapper — IO observations stay intact, scroll
+  // position is preserved, no chain-reaction of re-hydrations.
+  //
+  // Pre-fix: warm-up callbacks called renderList() which wiped #stocks-grid-host
+  // entirely. That re-emitted all stubs, re-attached observers, fired IO
+  // for visible cards which hydrated them again, then quote tick patched.
+  // ~5 round-trips per cycle, ~5x re-hydrations per visible card during
+  // scroll = continuous user-visible flashing + scroll position resets.
+  function rehydrateCardsInPlace(syms) {
+    if (!Array.isArray(syms) || !syms.length) return;
+    const host = main.querySelector("#stocks-grid-host");
+    if (!host) return;
+    const state = getState();
+    const wlSet = new Set(state.watchlist);
+    const ms = marketStatus();
+    for (const sym of syms) {
+      if (!sym) continue;
+      const card = host.querySelector(`.stock-card[data-sym="${CSS.escape(sym)}"]`);
+      if (!card) continue;
+      const inst = getInstrument(sym);
+      if (!inst) continue;
+      const seededCloses = getCloses(sym, 40);
+      const closes = getIntradaySparkline(sym, seededCloses);
+      const quote = quoteCache[sym];
+      const hasLive = quote?.pricePaise != null;
+      const navFallbackPaise = (inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0)
+        ? Math.round(inst.nav * 100)
+        : null;
+      const price = hasLive ? quote.pricePaise : navFallbackPaise;
+      const change = quote?.changePct ?? getTodayChange(sym);
+      const isWatched = wlSet.has(sym);
+      let liveBadge;
+      if (inst.kind === "MF") {
+        liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV">NAV</span>`;
+      } else if (ms.state !== "open") {
+        const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
+        liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
+      } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
+        liveBadge = quote.stale
+          ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;">DELAYED</span>`
+          : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
+      } else {
+        liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
+      }
+      card.innerHTML = renderStockCardBody(inst, state, wlSet, {
+        closes, hasLive, price, change, isWatched, liveBadge,
+      });
+      card.dataset.stub = "";
+      card.dataset.rendered = "1";
+      card.classList.remove("stock-card-stub");
     }
   }
 
@@ -684,7 +745,10 @@ export function renderStocks(main) {
           getQuoteBatch(seed).then(q => {
             if (cancelled) return;
             quoteCache = { ...quoteCache, ...q };
-            renderList();
+            // In-place re-render of the just-quoted cards only. Pre-fix
+            // this called renderList() which wiped the grid and forced
+            // a chain reaction of re-hydrations through the IO observer.
+            rehydrateCardsInPlace(Object.keys(q));
           }).catch(() => {});
         }
       }
