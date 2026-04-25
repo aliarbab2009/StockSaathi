@@ -90,11 +90,21 @@ if ("serviceWorker" in navigator) {
         });
       });
       let reloaded = false;
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
+      const safeReload = () => {
         if (reloaded) return;
         reloaded = true;
-        window.location.reload();
-      });
+        // Don't yank the page out from under a user mid-keystroke.
+        // Wait for the focused input to lose focus, then reload. Falls
+        // back to immediate reload if nothing's focused.
+        const ae = document.activeElement;
+        const typing = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable);
+        if (typing) {
+          ae.addEventListener("blur", () => window.location.reload(), { once: true });
+        } else {
+          window.location.reload();
+        }
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", safeReload);
     } catch (err) {
       console.warn("SW registration failed (non-critical):", err);
     }
