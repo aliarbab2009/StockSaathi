@@ -513,14 +513,14 @@ export function renderStocks(main) {
       const closes = getIntradaySparkline(sym, seededCloses);
       const quote = quoteCache[sym];
       const hasLive = quote?.pricePaise != null;
-      const navFallbackPaise = (inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0)
+      const navFallbackPaise = (inst.kind === KIND_MF && typeof inst.nav === "number" && inst.nav > 0)
         ? Math.round(inst.nav * 100)
         : null;
       const price = hasLive ? quote.pricePaise : navFallbackPaise;
       const change = quote?.changePct ?? getTodayChange(sym);
       const isWatched = wlSet.has(sym);
       let liveBadge;
-      if (inst.kind === "MF") {
+      if (inst.kind === KIND_MF) {
         liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV">NAV</span>`;
       } else if (ms.state !== "open") {
         const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
@@ -535,7 +535,7 @@ export function renderStocks(main) {
       // Pre-compute the change-line fingerprint so the first quote-tick
       // after this rehydrate is a fingerprint hit in patchHydratedCards
       // (no innerHTML rebuild on identical content). Mirrors data-spark-fp.
-      const changeFp = inst.kind === "MF" ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
+      const changeFp = inst.kind === KIND_MF ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
       card.innerHTML = renderStockCardBody(inst, state, wlSet, {
         closes, hasLive, price, change, isWatched, liveBadge, changeFp,
       });
@@ -976,7 +976,7 @@ export function renderStocks(main) {
               // MF NAV fallback (see same logic in renderStockCardBody) —
               // MFs never poll a live quote so the card body must read
               // inst.nav directly to show a real price.
-              const navFallbackPaise = (inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0)
+              const navFallbackPaise = (inst.kind === KIND_MF && typeof inst.nav === "number" && inst.nav > 0)
                 ? Math.round(inst.nav * 100)
                 : null;
               const price = hasLive ? quote.pricePaise : navFallbackPaise;
@@ -984,7 +984,7 @@ export function renderStocks(main) {
               const isWatched = wlSet.has(sym);
               const ms = marketStatus();
               let liveBadge;
-              if (inst.kind === "MF") {
+              if (inst.kind === KIND_MF) {
                 liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV">NAV</span>`;
               } else if (ms.state !== "open") {
                 const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
@@ -999,7 +999,7 @@ export function renderStocks(main) {
               // Pre-compute the change-line fingerprint for first-tick
               // no-op (mirrors data-spark-fp). MFs skip — patchHydratedCards
               // never patches MF change lines (MFs aren't in symbolsToPoll).
-              const changeFp = inst.kind === "MF" ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
+              const changeFp = inst.kind === KIND_MF ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
               card.innerHTML = renderStockCardBody(inst, state, wlSet, {
                 closes, hasLive, price, change, isWatched, liveBadge, changeFp,
               });
@@ -1490,7 +1490,7 @@ function applyFilters(all, f, state, quoteCache) {
 // of "MF_118718 · Equity" (technical AMFI code looks like garbage to users).
 // Equities/ETFs keep their existing "SYMBOL · Sector" layout.
 function _stubSubLine(inst) {
-  if (inst.kind === "MF") {
+  if (inst.kind === KIND_MF) {
     // AMC short name (first 2 words) is more recognisable than MF_<code>.
     // category_bucket is set to inst.sector by universeLoader, but use
     // category_bucket explicitly here in case sector ever ships differently.
@@ -1534,7 +1534,7 @@ function renderStockCard(inst, state, wlSet) {
   // symbolsToPoll() because Yahoo has no MF intraday data). Without this
   // fallback the card showed "—" + "NAV NAV" — visible nonsense.
   // inst.nav is rupees from AMFI; convert to paise so formatRupees works.
-  const navFallbackPaise = (inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0)
+  const navFallbackPaise = (inst.kind === KIND_MF && typeof inst.nav === "number" && inst.nav > 0)
     ? Math.round(inst.nav * 100)
     : null;
   const price = hasLive ? quote.pricePaise : navFallbackPaise;
@@ -1552,7 +1552,7 @@ function renderStockCard(inst, state, wlSet) {
   //   seeded only    → SYNCING
   const ms = marketStatus();
   let badge = "";
-  if (inst.kind === "MF") {
+  if (inst.kind === KIND_MF) {
     badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV — refreshed once per day after market close">NAV</span>`;
   } else if (ms.state !== "open") {
     const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
@@ -1611,7 +1611,7 @@ function renderStockCard(inst, state, wlSet) {
   const liveBadge = badge;
   return `
     <div class="stock-card" data-sym="${inst.symbol}" data-rendered="1" role="button" tabindex="0" aria-label="${escapeAttr(inst.name)}">
-      ${renderStockCardBody(inst, state, wlSet, { closes, hasLive, price, change, isWatched, liveBadge, changeFp: inst.kind === "MF" ? null : computeChangeFp(change, quote?.source, quote?.stale, marketStatus().state) })}
+      ${renderStockCardBody(inst, state, wlSet, { closes, hasLive, price, change, isWatched, liveBadge, changeFp: inst.kind === KIND_MF ? null : computeChangeFp(change, quote?.source, quote?.stale, marketStatus().state) })}
     </div>
   `;
 }
@@ -1638,7 +1638,7 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
     change = quote?.changePct ?? getTodayChange(inst.symbol);
     isWatched = wlSet ? wlSet.has(inst.symbol) : (state?.watchlist || []).includes(inst.symbol);
     const ms = marketStatus();
-    if (inst.kind === "MF") {
+    if (inst.kind === KIND_MF) {
       liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Mutual Fund NAV — refreshed once per day after market close">NAV</span>`;
     } else if (ms.state !== "open") {
       const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
@@ -1662,7 +1662,7 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
     </div>
     <div class="flex items-center justify-between">
       <div>
-        ${hasLive || inst.kind === "MF" ? `
+        ${hasLive || inst.kind === KIND_MF ? `
           <div class="stock-price tabular">${formatRupees(price)}</div>
           <div class="stock-change ${deltaClass(change)}"${opts?.changeFp ? ` data-change-fp="${escapeAttr(opts.changeFp)}"` : ""}>${hasLive ? `${formatPct(change, { sign: true })} today` : `<span class="dim">NAV</span>`} ${liveBadge}</div>
         ` : `
