@@ -95,6 +95,22 @@ export function renderStocks(main) {
   // last poll get instant prices and shouldn't artificially gate on
   // a fresh fetch they don't need.
   let _initialQuotesLoaded = false;
+  // Mood-banner readiness — flipped true either when fetchMarketMood()
+  // resolves with a narrative OR when the 2-second budget expires (the
+  // banner is "nice to have" UX; we never want to gate the entire page
+  // on a slow LLM call). Pre-fix the mood card appeared 1-2 s after the
+  // skeleton dropped, pushing every card on the page down by 90 px and
+  // producing the visible layout shift in frame 4 of the OBS capture.
+  // Now the skeleton holds until mood is either ready or timed out, so
+  // when the real grid renders it does so WITH the mood banner already
+  // in place — no shift, no flash.
+  let _moodReady = false;
+  setTimeout(() => {
+    if (!cancelled && !_moodReady) {
+      _moodReady = true;
+      render();
+    }
+  }, 2000);
 
   // Reset transient state on every (re-)entry so a stale in-flight AI
   // fetch or broken loading flag from the previous session doesn't leak
@@ -280,6 +296,7 @@ export function renderStocks(main) {
       fetchMarketMood().then((m) => {
         if (cancelled) return;
         marketMood = m;
+        _moodReady = true;
         render();
       }).catch(() => {});
     }
@@ -510,7 +527,7 @@ export function renderStocks(main) {
     // a single skeleton state — the page either shows skeleton (waiting)
     // or shows fully-priced cards (ready). No more "alphabetical 2,364
     // cards with empty price slots for 2 seconds" intermediate state.
-    const pageReady = universeReady && _initialQuotesLoaded;
+    const pageReady = universeReady && _initialQuotesLoaded && _moodReady;
 
     // Pre-universe-loaded: emit a full-page skeleton instead of the
     // 116-featured "real" view that briefly flashed in pre-Hotfix12. The
