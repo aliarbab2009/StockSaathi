@@ -392,7 +392,19 @@ export function renderStocks(main) {
   // input, Top-by-size dropdown, filter pills) stays intact, so the
   // themed-select doesn't get torn down + re-mounted every 10 seconds
   // and the dropdown stops blinking.
-  function renderList() {
+  //
+  // Chunked render: when visibleCount > CHUNK_THRESHOLD, we render the grid
+  // in 200-stub batches with a requestAnimationFrame yield between batches.
+  // Without this, "Show all 2,364" on Stocks held the main thread for ~10 s
+  // (user-reported), and "Show all 13,969" on Mutual Funds triggered the
+  // browser's "Tab not responding" warning. Each 200-stub batch parses in
+  // ~20 ms and the RAF yield lets the browser paint what's there before the
+  // next batch lands — user sees progressive fill instead of 10 s blank.
+  const CHUNK_SIZE = 200;
+  const CHUNK_THRESHOLD = 300;   // sub-300 lists render synchronously
+  let _renderListSeq = 0;        // monotonic — cancels stale chunked renders
+  async function renderList() {
+    const mySeq = ++_renderListSeq;
     const state = getState();
     const wlSet = new Set(state.watchlist);
     const host = main.querySelector("#stocks-grid-host");
@@ -404,15 +416,80 @@ export function renderStocks(main) {
     const fullList = applyFilters(source(), filter, state, quoteCache);
     const list = fullList.slice(0, visibleCount);
     const truncated = fullList.length > list.length;
-    host.innerHTML = list.length === 0
-      ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-      : `<div class="stocks-grid">${list.map(inst => renderStubCard(inst)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`;
+    if (list.length === 0) {
+      host.innerHTML = `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`;
+      attachGridDelegation(host);
+      attachCardObserver(host);
+      return;
+    }
+    // Build the pager footer string once — same for sync and chunked paths.
+    const pagerHtml = truncated
+      ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;">
+          <button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button>
+          <button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button>
+        </div>`
+      : "";
+
+    if (list.length <= CHUNK_THRESHOLD) {
+      // Synchronous path — small lists render in one shot.
+      host.innerHTML = `<div class="stocks-grid">${list.map(inst => renderStubCard(inst)).join("")}</div>${pagerHtml}`;
+      attachGridDelegation(host);
+      attachCardObserver(host);
+    } else {
+      // Chunked path — render the first batch immediately so users see
+      // SOMETHING within ~20 ms of clicking, then progressively fill.
+      host.innerHTML = `<div class="stocks-grid"></div><div id="stocks-loading-indicator" class="dim text-xs center" style="margin: var(--sp-4) 0; padding: var(--sp-3);">Loading ${list.length.toLocaleString("en-IN")} stubs…</div>`;
+      const grid = host.querySelector(".stocks-grid");
+      // Wire the click delegation + create the IO once UP FRONT (with no
+      // cards yet — observe-list starts empty). Then we incrementally
+      // observe each chunk's cards as they're rendered. This is the key
+      // ordering: if we called attachCardObserver at the END instead, it
+      // would disconnect+recreate the IO and the cards in earlier chunks
+      // would lose their observation between final render and final IO
+      // setup, leaving them un-hydratable.
+      attachGridDelegation(host);
+      attachCardObserver(host);   // creates IO, observes nothing (grid empty)
+      let rendered = 0;
+      while (rendered < list.length) {
+        // Bail out if a newer renderList() supersedes this one (e.g. user
+        // changed sort/filter mid-render). Without this, two concurrent
+        // chunked renders would interleave in the same grid.
+        if (mySeq !== _renderListSeq || cancelled) return;
+        const slice = list.slice(rendered, rendered + CHUNK_SIZE);
+        const tmp = document.createElement("div");
+        tmp.innerHTML = slice.map(inst => renderStubCard(inst)).join("");
+        const frag = document.createDocumentFragment();
+        const newCards = [];
+        while (tmp.firstChild) {
+          newCards.push(tmp.firstChild);
+          frag.appendChild(tmp.firstChild);
+        }
+        grid.appendChild(frag);
+        // Observe the just-appended cards so the IO can hydrate them on
+        // scroll-into-view even before the full render finishes.
+        if (_cardObserver) {
+          for (const card of newCards) {
+            if (card?.dataset?.sym) {
+              try { _cardObserver.observe(card); } catch {}
+            }
+          }
+        }
+        rendered += CHUNK_SIZE;
+        // Yield to the browser. RAF runs once per frame (~16 ms at 60 Hz),
+        // so each chunk gets a fresh frame to paint into. Total time for
+        // 13,969 MFs is ~70 chunks × ~16 ms = ~1.1 s of progressive fill —
+        // the user sees stubs appearing in waves instead of a frozen tab,
+        // and Chrome no longer fires the "Tab not responding" popup.
+        if (rendered < list.length) {
+          await new Promise(r => requestAnimationFrame(r));
+        }
+      }
+      // Remove the loading indicator and append the pager footer.
+      host.querySelector("#stocks-loading-indicator")?.remove();
+      if (pagerHtml) host.insertAdjacentHTML("beforeend", pagerHtml);
+    }
     host.querySelector("#stocks-show-more")?.addEventListener("click", () => { visibleCount += PAGE_SIZE; renderList(); });
-    host.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = 1e9; renderList(); });
-    // attachGridDelegation is idempotent (replaces .onclick), safe to re-call
-    // after innerHTML wipes the children.
-    attachGridDelegation(host);
-    attachCardObserver(host);
+    host.querySelector("#stocks-show-all")?.addEventListener("click", () => { visibleCount = fullList.length; renderList(); });
   }
 
   // Viewport-aware observer. Drives both:
