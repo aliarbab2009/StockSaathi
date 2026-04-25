@@ -55,6 +55,38 @@ function readUserState(userId) {
     return parsed;
   } catch { return null; }
 }
+
+// One-time client-side migrations applied to whatever shape the user's
+// localStorage held when the page last persisted. Runs on every read but
+// must be idempotent — produces the same output if called twice. Wired
+// into readUserState in the next commit.
+function migrateUserState(st) {
+  if (!st || typeof st !== "object") return st;
+  // Migration: purge gibberish STOCK_INTRO coach messages persisted from
+  // pre-Hotfix15 runs of the page. Pattern: the orchestrator pre-fix
+  // discarded the merged event.instrument and looked up the universe row
+  // afresh — which had inst.pe=null (Landing F stripped hand-typed PE
+  // values), producing the literal text "P/E is —, which means investors
+  // are paying ₹— for every ₹1 of annual earnings." for every stock.
+  // Plus a sister symptom: "{NAME} is a Other company." from stocks that
+  // were classified before sector taxonomy expanded. Both messages stick
+  // forever once persisted because the existing-symbol guard at
+  // stockDetail.js:269 prevents a fresh STOCK_INTRO from re-firing.
+  if (Array.isArray(st.coachMessages) && st.coachMessages.length) {
+    const before = st.coachMessages.length;
+    st.coachMessages = st.coachMessages.filter(m => {
+      if (m?.eventType !== "STOCK_INTRO") return true;
+      const body = String(m?.payload?.body || m?.body || m?.text || "");
+      if (/P\/E is\s+[—-]/.test(body)) return false;
+      if (/is a Other company/.test(body)) return false;
+      return true;
+    });
+    if (st.coachMessages.length < before) {
+      console.info(`[state migration] purged ${before - st.coachMessages.length} stale STOCK_INTRO message(s)`);
+    }
+  }
+  return st;
+}
 function writeUserState(userId, st) {
   const stamped = { ...st, _persistedAt: Date.now() };
   try {
