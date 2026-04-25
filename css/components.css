@@ -1267,11 +1267,28 @@
    18.0 (Sept 2024); older Safari falls into the @supports-not branch
    below for a partial improvement (paint/layout containment without the
    skip-when-offscreen behaviour). */
+/* IMPORTANT: content-visibility: auto suppresses IntersectionObserver
+   callbacks for offscreen elements in Chromium. Our Hotfix4 stub virtualization
+   relies on the IO firing within rootMargin "200% 0px" to hydrate stubs BEFORE
+   they scroll into view — but if the stub itself is content-visibility-skipped,
+   the IO sees isIntersecting:false and the hydrate branch never runs. Cards
+   then stay frozen at the skeleton state until they fully enter the visible
+   viewport, which defeats the whole pre-warm purpose.
+
+   Fix: apply content-visibility ONLY to stubs (.stock-card-stub), where the
+   skipped-paint behaviour is desired AND the IO doesn't need to fire (a stub
+   that hydrates while still offscreen is what we want). Hydrated cards
+   (.stock-card without .stock-card-stub) get standard paint containment via
+   the @supports-not branch, preserving the IO callback timing.
+
+   Also bumped contain-intrinsic-size from 0 180px to 0 172px to match the
+   stub's inline min-height — eliminates the 8px CLS reflow when stubs hydrate. */
 @supports (content-visibility: auto) {
-  .stock-card {
+  .stock-card-stub {
     content-visibility: auto;
-    contain-intrinsic-size: 0 180px;
+    contain-intrinsic-size: 0 172px;
   }
+  .stock-card { contain: layout paint; }
 }
 @supports not (content-visibility: auto) {
   .stock-card { contain: layout paint; }
