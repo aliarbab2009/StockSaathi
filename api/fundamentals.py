@@ -229,8 +229,17 @@ def _raw(obj, *path):
         if cur is None:
             return None
         cur = cur.get(k) if isinstance(cur, dict) else None
-    if isinstance(cur, dict) and "raw" in cur:
-        return cur.get("raw")
+    if isinstance(cur, dict):
+        # Yahoo v10 wraps numbers in {raw, fmt, longFmt}. Pull the raw
+        # number when present.
+        if "raw" in cur:
+            return cur.get("raw")
+        # Empty dict {} or unrecognised shape — return None so downstream
+        # JSON serialisation doesn't ship `{}` as the field value. Front-end
+        # checks like `dividend_yield != null` treat `{}` as a valid value
+        # and then `{}.toFixed(2)` blows up to "NaN%". Returning None here
+        # makes the front-end's `_num()` guard work correctly.
+        return None
     return cur
 
 
