@@ -1539,7 +1539,7 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
       <div>
         ${hasLive || inst.kind === "MF" ? `
           <div class="stock-price tabular">${formatRupees(price)}</div>
-          <div class="stock-change ${deltaClass(change)}">${hasLive ? `${formatPct(change, { sign: true })} today` : `<span class="dim">NAV</span>`} ${liveBadge}</div>
+          <div class="stock-change ${deltaClass(change)}"${opts?.changeFp ? ` data-change-fp="${escapeAttr(opts.changeFp)}"` : ""}>${hasLive ? `${formatPct(change, { sign: true })} today` : `<span class="dim">NAV</span>`} ${liveBadge}</div>
         ` : `
           <div class="skeleton" style="width: 96px; height: 20px;" aria-label="Loading price"></div>
           <div class="stock-change" style="display:flex; align-items:center; gap:6px;">
