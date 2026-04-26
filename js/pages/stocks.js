@@ -1298,6 +1298,48 @@ export function renderStocks(main) {
   }
 }
 
+// Hotfix28b: detect "highest/lowest/biggest/top X" queries that map
+// to a single fundamentals_cache column, and route them to the
+// deterministic /api/screener endpoint instead of the LLM. The LLM
+// can't actually answer these queries because the candidates table
+// it sees has no 52w-high / market-cap / etc. columns â€” the
+// fundamentals data lives only in Supabase. By detecting the pattern
+// up front and going straight to the SQL sort, we get correct
+// results in <100 ms with zero LLM tokens spent. Returns the same
+// shape as opMarketSearch so the existing aiSearch render path
+// handles screener results identically.
+function detectScreenerQuery(query) {
+  const q = query.toLowerCase().trim();
+  // Order phrases â€” a stronger word ("highest") wins over a generic
+  // word ("biggest") if both match.
+  const desc = /\b(highest|biggest|largest|most|top|priciest|costliest)\b/;
+  const asc = /\b(lowest|smallest|least|bottom|cheapest)\b/;
+  // Metric phrases. Each maps query language to a fundamentals_cache
+  // column. Order matters â€” more specific phrases first.
+  const metricPatterns = [
+    [/\b52[\s-]?(?:week|w|wk)[\s-]?high\b|\bone[\s-]?year[\s-]?high\b|\b1y[\s-]?high\b|\byearly[\s-]?high\b/, "fifty_two_week_high"],
+    [/\b52[\s-]?(?:week|w|wk)[\s-]?low\b|\bone[\s-]?year[\s-]?low\b|\b1y[\s-]?low\b|\byearly[\s-]?low\b/,  "fifty_two_week_low"],
+    [/\bmarket[\s-]?cap(italization)?\b|\bmcap\b/,                                                          "market_cap"],
+    [/\bp\/?e\b|\bprice[\s-]?to[\s-]?earnings\b/,                                                           "pe_ratio"],
+    [/\bp\/?b\b|\bprice[\s-]?to[\s-]?book\b/,                                                                "pb_ratio"],
+    [/\b(dividend[\s-]?yield|yield|dividend)\b/,                                                             "dividend_yield"],
+    [/\bbeta\b/,                                                                                              "beta"],
+    [/\broe\b|\breturn[\s-]?on[\s-]?equity\b/,                                                                "roe"],
+    [/\beps\b|\bearnings[\s-]?per[\s-]?share\b/,                                                              "eps"],
+  ];
+  let metric = null;
+  for (const [re, col] of metricPatterns) { if (re.test(q)) { metric = col; break; } }
+  if (!metric) return null;
+  let order = null;
+  if (desc.test(q)) order = "desc";
+  else if (asc.test(q)) order = "asc";
+  // For most metrics the natural reading of the bare metric name is
+  // descending ("the 52-week high" implies the biggest). Default to
+  // desc if a direction word is absent.
+  if (!order) order = "desc";
+  return { metric, order };
+}
+
 async function runAiSearch(query, render) {
   if (aiSearchLoading) return;
   // Abort any prior in-flight AI call so stale responses can't overwrite the
@@ -1310,15 +1352,28 @@ async function runAiSearch(query, render) {
   aiSearchQuery = query;
   render();
   try {
-    const candidates = buildAiSearchCandidates(query);
-    const res = await fetch("/api/ai?op=market-search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, candidates }),
-      signal,
-    });
-    if (!res.ok) throw new Error("http_" + res.status);
-    const d = await res.json();
+    // Try the deterministic screener path first. If the query maps to
+    // a known sortable metric, /api/screener returns a SQL-sorted top-N
+    // from fundamentals_cache â€” correct, fast, no LLM tokens.
+    const screen = detectScreenerQuery(query);
+    let d;
+    if (screen) {
+      const url = `/api/screener?metric=${encodeURIComponent(screen.metric)}&order=${encodeURIComponent(screen.order)}&limit=12`;
+      const res = await fetch(url, { signal });
+      if (!res.ok) throw new Error("http_" + res.status);
+      d = await res.json();
+    } else {
+      // Free-text query that needs LLM interpretation.
+      const candidates = buildAiSearchCandidates(query);
+      const res = await fetch("/api/ai?op=market-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, candidates }),
+        signal,
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      d = await res.json();
+    }
     if (signal.aborted) return;
     aiSearch = d?.matches?.length ? { matches: d.matches, rationale: d.rationale || "" } : { matches: [], rationale: d?.rationale || "No matches in the current universe." };
   } catch (e) {
