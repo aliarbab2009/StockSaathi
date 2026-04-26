@@ -743,7 +743,7 @@ function render(inst, symbol) {
               const label = tf === "CUSTOM"
                 ? (ui.timeframe === "CUSTOM" && ui.customFrom && ui.customTo
                     ? `${ui.customFrom} → ${ui.customTo}`
-                    : "Customâ€¦")
+                    : "Custom…")
                 : tf;
               return `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${label}</button>`;
             }).join("")}
@@ -1048,26 +1048,27 @@ function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessi
   main.querySelectorAll(".tf-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const tf = btn.dataset.tf;
-      // Hotfix48b: CUSTOM opens a tiny inline date-range prompt. Uses
-      // native browser date inputs in a quick prompt() pair to avoid
-      // a heavyweight modal. From-to dates default to last 6 months
-      // (a sensible 'something other than 1D-MAX' bracket).
+      // Hotfix49b: CUSTOM opens a CSS modal (was native prompt() pair).
+      // Native prompts steal focus, look like a 1995 alert(), and ignore
+      // the app's theming. Custom modal uses two <input type="date">
+      // controls inside a styled card; ESC + click-outside cancel; the
+      // chosen range stamps onto ui.customFrom / ui.customTo and triggers
+      // the same reloadHistory flow.
       if (tf === "CUSTOM") {
-        const today = new Date();
-        const sixMoAgo = new Date(today.getTime() - 180 * 86400000);
-        const defFrom = sixMoAgo.toISOString().slice(0, 10);
-        const defTo   = today.toISOString().slice(0, 10);
-        const fromStr = prompt("Start date (YYYY-MM-DD):", ui.customFrom || defFrom);
-        if (!fromStr) return;
-        const toStr   = prompt("End date (YYYY-MM-DD):", ui.customTo || defTo);
-        if (!toStr) return;
-        // Basic shape check; the API will reject invalid dates.
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
-          alert("Please enter dates as YYYY-MM-DD (e.g. 2023-01-15).");
-          return;
-        }
-        ui.customFrom = fromStr;
-        ui.customTo   = toStr;
+        _openCustomRangeModal({
+          initialFrom: ui.customFrom,
+          initialTo: ui.customTo,
+          onSubmit: ({ from, to }) => {
+            ui.customFrom = from;
+            ui.customTo   = to;
+            ui.timeframe = "CUSTOM";
+            ui.zoom = { scale: 1, centerMs: null, manualPan: false };
+            ui.interval = null;
+            reloadHistory(inst, symbol);
+            startHistoryPoll(inst, symbol);
+          },
+        });
+        return;   // skip the default tf-switch path below; modal's onSubmit handles it
       }
       // Every TF switch resets zoom: each timeframe has its own data
       // range and centerMs from the previous TF would land off-range
@@ -1126,13 +1127,21 @@ function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessi
   // skip while the chart-host is showing the loading skeleton — there's
   // no SVG inside it to hang hover events off, and we don't want to
   // attach hover to seeded history the user doesn't actually see.
-  if (inst.kind !== "MF" && chartOhlc?.length) {
+  // Hotfix49a: previously this was gated on `inst.kind !== "MF"`. After
+  // Hotfix47c-d MFs render through stockChart (with synthesized day-over-
+  // day OHLC for candle mode), so they have the same SVG structure stocks
+  // do â€” the hover crosshair + tooltip work identically. User-reported
+  // 'mfs have no cursors or are traversable' â€” this was the gate.
+  // For candle mode, pass the synthesized OHLC so the tooltip's o/h/l/c
+  // values reflect what the rendered candle shows. For area mode, raw
+  // OHLC works (h=l=c=NAV per day, tooltip shows the close).
+  if (chartOhlc?.length) {
     const host = main.querySelector("#stock-chart-host");
     if (host && host.querySelector(".chart-svg")) {
-      // Use the live-merged chartOhlc (not raw liveHistory.ohlc) so the
-      // hover tooltip's close value matches the chart's last-price badge
-      // matches the header price. All three read from the same source.
-      attachStockChartHover(host, chartOhlc, { mode: ui.chartMode });
+      const hoverOhlc = (inst.kind === "MF" && ui.chartMode === "candle")
+        ? _synthMfDayOverDayOhlc(chartOhlc)
+        : chartOhlc;
+      attachStockChartHover(host, hoverOhlc, { mode: ui.chartMode });
 
       // Attach zoom + pan gestures ONLY when xAxisRange is active (1D
       // intraday window). Other timeframes use the index-axis fallback
@@ -1836,6 +1845,67 @@ function isTerminatedFund(inst) {
     }
   }
   return { terminated: false, navDate, ageDays: null };
+}
+
+// Hotfix49b: custom date-range picker modal. Replaces the prior native
+// prompt() pair with a CSS-styled modal in #modal-root. Two date inputs
+// (HTML5 type=date), defaults to the existing custom range or last
+// 6 months. Submit fires onSubmit({from, to}); cancel closes silently.
+// ESC key + click-outside cancel; tab/shift-tab loops within the modal.
+function _openCustomRangeModal({ initialFrom, initialTo, onSubmit }) {
+  const root = document.getElementById("modal-root");
+  if (!root) return;
+  const today = new Date();
+  const sixMoAgo = new Date(today.getTime() - 180 * 86400000);
+  const defFrom = initialFrom || sixMoAgo.toISOString().slice(0, 10);
+  const defTo   = initialTo   || today.toISOString().slice(0, 10);
+  const todayIso = today.toISOString().slice(0, 10);
+
+  root.innerHTML = `
+    <div class="modal-overlay" id="custom-range-overlay" role="dialog" aria-modal="true" aria-labelledby="custom-range-title">
+      <div class="modal" style="max-width: 420px;">
+        <h3 id="custom-range-title" style="margin: 0 0 var(--sp-1); font-size: var(--text-lg);">Custom date range</h3>
+        <div class="dim text-xs" style="margin-bottom: var(--sp-4);">Pick a window. Yahoo data goes back ~10 years.</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-bottom: var(--sp-4);">
+          <div>
+            <label class="label" for="custom-from">From</label>
+            <input class="input" id="custom-from" type="date" value="${escapeAttr(defFrom)}" max="${todayIso}" />
+          </div>
+          <div>
+            <label class="label" for="custom-to">To</label>
+            <input class="input" id="custom-to" type="date" value="${escapeAttr(defTo)}" max="${todayIso}" />
+          </div>
+        </div>
+        <div id="custom-range-err" class="dim text-xs" style="color: var(--negative); min-height: 16px; margin-bottom: var(--sp-2);"></div>
+        <div style="display:flex; gap: var(--sp-2); justify-content: flex-end;">
+          <button class="btn btn-ghost" id="custom-range-cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" id="custom-range-apply" type="button">Apply</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const overlay = root.querySelector("#custom-range-overlay");
+  const fromEl  = root.querySelector("#custom-from");
+  const toEl    = root.querySelector("#custom-to");
+  const errEl   = root.querySelector("#custom-range-err");
+  const close = () => { root.innerHTML = ""; document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  root.querySelector("#custom-range-cancel").addEventListener("click", close);
+  root.querySelector("#custom-range-apply").addEventListener("click", () => {
+    const from = fromEl.value;
+    const to   = toEl.value;
+    if (!from || !to) { errEl.textContent = "Please pick both dates."; return; }
+    if (new Date(to) <= new Date(from)) { errEl.textContent = "‘To’ must be after ‘From’."; return; }
+    const dayMs = 86400000;
+    const span = (new Date(to) - new Date(from)) / dayMs;
+    if (span > 366 * 10) { errEl.textContent = "Range can't exceed 10 years."; return; }
+    close();
+    onSubmit({ from, to });
+  });
+  // Auto-focus the From input so keyboard users don't have to tab in.
+  setTimeout(() => fromEl?.focus(), 50);
 }
 
 // Hotfix47c: AMFI publishes one NAV per scheme per day, so the raw MF
