@@ -172,7 +172,18 @@ export function renderStocks(main) {
   // clicked". Now the count populates within ~1-2 s of page load.
   ensureMfUniverseLoaded();
   // Also re-render once AMFI lands so the count pills + grid update.
-  const onMfLoaded = () => { if (!cancelled) render(); };
+  const onMfLoaded = () => {
+    if (cancelled) return;
+    // The MF-loaded event re-renders to update the MF count pill in
+    // the filter bar. If the page is already showing hydrated cards
+    // (likely â€” MF universe is fetched in parallel with stocks
+    // universe + cold-start), the render() wipes the grid for what
+    // amounts to a count-pill text update. Skip the wipe; the count
+    // will surface on the next genuine re-render. Same wasReady
+    // guard pattern as 23b/c/d/e.
+    const wasReady = pageReady();
+    if (!wasReady) render();
+  };
   window.addEventListener("ss:mf-universe-loaded", onMfLoaded);
 
   // Single source: the full merged Tier-1 + Tier-2 universe (~2700 rows).
