@@ -195,6 +195,12 @@ export function mountRouter() {
       r.render(main, r.params);
     } catch (err) {
       console.error(`[router] ${r.name} render failed:`, err);
+      // Hotfix50b: surface the actual error message + stack in the UI
+      // so we can debug without DevTools. Plain pre-formatted text in a
+      // collapsible details element â€” doesn't break the existing layout
+      // for non-developers (still shows the friendly heading first).
+      const errMsg = String(err && err.message || err || "unknown error");
+      const errStack = String(err && err.stack || "");
       main.innerHTML = `
         <div class="empty-state">
           <span class="emoji" aria-hidden="true">⚠</span>
@@ -204,11 +210,22 @@ export function mountRouter() {
             <button class="btn btn-primary" id="route-retry">Reload page</button>
             <a href="#/" class="btn btn-outline">Go home</a>
           </div>
+          <details style="margin-top:24px; max-width: 720px; margin-left:auto; margin-right:auto; text-align:left;">
+            <summary class="dim text-xs" style="cursor:pointer; user-select:none;">Show technical details</summary>
+            <pre style="background:var(--bg-soft); border-radius:var(--r-sm); padding:12px; margin-top:8px; font-size:11px; line-height:1.5; overflow:auto; max-height:240px; white-space:pre-wrap; word-break:break-word;">${escapeHtml(errMsg)}\n\n${escapeHtml(errStack)}</pre>
+          </details>
         </div>
       `;
       main.querySelector("#route-retry")?.addEventListener("click", () => {
         window.location.reload();
       });
+    }
+    // Local escape helper used by the error boundary above. Inline so the
+    // router doesn't grow a new module-level import for one call.
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = String(s ?? "");
+      return d.innerHTML;
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
