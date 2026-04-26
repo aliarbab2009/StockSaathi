@@ -321,14 +321,27 @@ export function renderStocks(main) {
     // before the next frame.
     const seed = top.filter(i => i.kind !== KIND_MF && !quoteCache[i.symbol]?.pricePaise).map(i => i.symbol);
     if (seed.length === 0) {
+      // Hotfix42: ALSO flip _initialQuotesLoaded. When Hotfix27b skipped
+      // the cold-start IIFE on warm-cache loads, _initialQuotesLoaded
+      // would only get set by the line 215 fresh-cache pre-flag â€” which
+      // requires localStorage to have â‰¥5 quotes already. On a fresh
+      // profile arriving at /stocks via another page (Portfolio â†’ Markets),
+      // that pre-flag misses and the preheat fast-path here never sets
+      // _initialQuotesLoaded â€” pageReady stays false forever, skeleton
+      // sticks. Now the no-network path flips both flags symmetrically.
       _viewportPreheatDone = true;
+      _initialQuotesLoaded = true;
       render();
       return;
     }
     if (_viewportPreheatTimer) clearTimeout(_viewportPreheatTimer);
     _viewportPreheatTimer = setTimeout(() => {
       if (!cancelled && !_viewportPreheatDone) {
+        // Same fix on the fail-open path â€” if preheat hangs and timer
+        // fires, we still need _initialQuotesLoaded to flip so pageReady
+        // can return true.
         _viewportPreheatDone = true;
+        _initialQuotesLoaded = true;
         render();
       }
     }, PREHEAT_FAIL_OPEN_MS);
@@ -340,6 +353,9 @@ export function renderStocks(main) {
       // hydrated grid and a render() here would wipe every card.
       const wasReady = pageReady();
       _viewportPreheatDone = true;
+      // Hotfix42: same flag-symmetry fix on the success path. Preheat
+      // populating quoteCache is sufficient evidence quotes are loaded.
+      _initialQuotesLoaded = true;
       if (_viewportPreheatTimer) { clearTimeout(_viewportPreheatTimer); _viewportPreheatTimer = null; }
       if (wasReady) {
         // Timer fired first. Page already rendered. Patch in the fresh
