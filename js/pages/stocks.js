@@ -282,6 +282,17 @@ export function renderStocks(main) {
       _lastWlSig = wlSig;
       _lastUserSig = userSig;
       _lastHoldingsSig = holdingsSig;
+      // wasReady guard. Same pattern as Hotfix23. The Supabase async
+      // session-resume completes ~1-3 s after mount â€” often AFTER the
+      // mood-banner fail-open at 2 s already flipped pageReady to
+      // true. When auth resume lands, watchlist/holdings sigs change
+      // legitimately and a render() here would wipe every hydrated
+      // card. The watchlist-star + holdings-badge updates won't
+      // surface until the next genuine re-render (filter/sort/search
+      // change, watchlist toggle on a different page) â€” minor stale-
+      // decoration tradeoff vs. the visible grid blink. Same
+      // tradeoff we already accepted for the mood banner + MF count.
+      if (pageReady()) return;
       render();
     }
   });
