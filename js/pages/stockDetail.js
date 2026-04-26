@@ -41,7 +41,7 @@ const TF_MAP = {
   "5Y":  { range: "5y",  interval: "1wk", days: 260*5 },
   "MAX": { range: "max", interval: "1mo", days: 260*10},
 };
-const TF_ORDER = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
+const TF_ORDER = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX", "CUSTOM"];
 
 let ui = {
   side: "BUY", qty: 1,
@@ -331,10 +331,28 @@ async function reloadHistory(inst, symbol) {
   // would produce nonsense sticky-shift math.
   _prevLastDataMs = null;
   render(inst, symbol);
-  // MF branch — see same logic in initial fetch (~line 220).
-  const h = inst.kind === "MF"
-    ? await getMfHistory(symbol, ui.timeframe).catch(() => null)
-    : await loadHistoryWithFallback(symbol, tf, interval).catch(() => null);
+  // Hotfix48b: CUSTOM range fetch path. Sends from/to dates to the
+  // backend instead of a preset range. Picks an interval based on the
+  // span: <1y -> 1d, 1-5y -> 1wk, >5y -> 1mo. MFs don't support custom
+  // ranges yet (mfapi.in's API only takes preset tfs); MF + CUSTOM
+  // falls back to ALL.
+  let h;
+  if (ui.timeframe === "CUSTOM" && ui.customFrom && ui.customTo) {
+    if (inst.kind === "MF") {
+      h = await getMfHistory(symbol, "ALL").catch(() => null);
+    } else {
+      const dayMs = 86400000;
+      const span = (new Date(ui.customTo) - new Date(ui.customFrom)) / dayMs;
+      const customInterval = span < 365 ? "1d" : span < 5 * 365 ? "1wk" : "1mo";
+      h = await getHistory(symbol, "1y", customInterval, {
+        from: ui.customFrom, to: ui.customTo,
+      }).catch(() => null);
+    }
+  } else if (inst.kind === "MF") {
+    h = await getMfHistory(symbol, ui.timeframe).catch(() => null);
+  } else {
+    h = await loadHistoryWithFallback(symbol, tf, interval).catch(() => null);
+  }
   if (myToken.cancelled) return;
   if (h) {
     liveHistory = h;
@@ -717,8 +735,18 @@ function render(inst, symbol) {
         </div>
 
         <div class="tf-buttons" style="display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap;">
-          <div style="display:flex; gap:4px;">
-            ${TF_ORDER.map(tf => `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${tf}</button>`).join("")}
+          <div style="display:flex; gap:4px; flex-wrap: wrap;">
+            ${TF_ORDER.map(tf => {
+              // Hotfix48b: render the CUSTOM button with a different
+              // label so it reads as a control, not a preset window.
+              // Click opens the date-range picker (handled below).
+              const label = tf === "CUSTOM"
+                ? (ui.timeframe === "CUSTOM" && ui.customFrom && ui.customTo
+                    ? `${ui.customFrom} → ${ui.customTo}`
+                    : "Customâ€¦")
+                : tf;
+              return `<button class="tf-btn ${ui.timeframe === tf ? "active" : ""}" data-tf="${tf}">${label}</button>`;
+            }).join("")}
           </div>
           ${ui.zoom.scale > 1 ? `
             <button class="btn btn-ghost btn-sm" id="zoom-reset-btn" title="Reset chart zoom" style="font-size: 11px; padding: 4px 10px;">↻ Reset zoom (${ui.zoom.scale.toFixed(1)}×${ui.interval ? ` · ${ui.interval}` : ""})</button>
@@ -1019,15 +1047,37 @@ async function fetchStockWhy(main, symbol, inst, curPricePaise, changePct) {
 function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessionWindow) {
   main.querySelectorAll(".tf-btn").forEach(btn => {
     btn.addEventListener("click", () => {
+      const tf = btn.dataset.tf;
+      // Hotfix48b: CUSTOM opens a tiny inline date-range prompt. Uses
+      // native browser date inputs in a quick prompt() pair to avoid
+      // a heavyweight modal. From-to dates default to last 6 months
+      // (a sensible 'something other than 1D-MAX' bracket).
+      if (tf === "CUSTOM") {
+        const today = new Date();
+        const sixMoAgo = new Date(today.getTime() - 180 * 86400000);
+        const defFrom = sixMoAgo.toISOString().slice(0, 10);
+        const defTo   = today.toISOString().slice(0, 10);
+        const fromStr = prompt("Start date (YYYY-MM-DD):", ui.customFrom || defFrom);
+        if (!fromStr) return;
+        const toStr   = prompt("End date (YYYY-MM-DD):", ui.customTo || defTo);
+        if (!toStr) return;
+        // Basic shape check; the API will reject invalid dates.
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
+          alert("Please enter dates as YYYY-MM-DD (e.g. 2023-01-15).");
+          return;
+        }
+        ui.customFrom = fromStr;
+        ui.customTo   = toStr;
+      }
       // Every TF switch resets zoom: each timeframe has its own data
       // range and centerMs from the previous TF would land off-range
       // or outside the new sessionWindow. Starting fresh at scale=1
       // always keeps the post-switch view sensible.
-      if (ui.timeframe !== btn.dataset.tf) {
+      if (ui.timeframe !== tf) {
         ui.zoom = { scale: 1, centerMs: null, manualPan: false };
         ui.interval = null;
       }
-      ui.timeframe = btn.dataset.tf;
+      ui.timeframe = tf;
       reloadHistory(inst, symbol);
       // Restart the 1D poll lifecycle on TF changes — entering 1D
       // starts the 30-s refresh; leaving it lets the existing

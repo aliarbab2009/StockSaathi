@@ -399,7 +399,12 @@ async function _getQuoteBatchInner(uniq) {
 }
 
 export async function getHistory(symbol, range = "1y", interval = "1d", opts = {}) {
-  const key = `${symbol}|${range}|${interval}`;
+  // Hotfix48a: custom date-range support. Caller can pass opts.from /
+  // opts.to as YYYY-MM-DD strings; the API receives them and returns the
+  // exact window. Cache key includes the custom range so different
+  // custom queries don't share cache.
+  const customKey = (opts.from && opts.to) ? `|${opts.from}|${opts.to}` : "";
+  const key = `${symbol}|${range}|${interval}${customKey}`;
   // Caller-provided AbortSignal (from the stockDetail live-refresh path).
   // When set, any in-flight fetch aborts cleanly and the function throws
   // an AbortError so the caller can drop the result. Cached hits still
@@ -433,8 +438,13 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
     // Preferred: dedicated /api/history endpoint (reliable, returns paise).
     // Falls through to legacy fetchYahooHistory → synthHistory on failure.
     try {
+      // Hotfix48a: when opts.from + opts.to provided, request a custom
+      // date window via from/to params (server uses period1/period2).
+      const customQs = (opts.from && opts.to)
+        ? `&from=${encodeURIComponent(opts.from)}&to=${encodeURIComponent(opts.to)}`
+        : "";
       const res = await fetchJsonWithTimeout(
-        `/api/history?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`,
+        `/api/history?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}${customQs}`,
         { signal: sig }
       );
       if (sig?.aborted) {
