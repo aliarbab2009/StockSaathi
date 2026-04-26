@@ -96,8 +96,12 @@ export function lineChart(values, {
 } = {}) {
   if (!values.length) return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}"></svg>`;
   const { min: autoMin, max: autoMax } = minMax(values);
-  const min = minArg != null ? minArg : autoMin - (autoMax - autoMin) * 0.08;
-  const max = maxArg != null ? maxArg : autoMax + (autoMax - autoMin) * 0.08;
+  // Hotfix44b: tightened from 0.08 -> 0.03 to match dualLineChart fix.
+  // Same reason: 8% padding made y-axis labels overshoot the actual
+  // peak/trough values by enough to be misleading on charts that
+  // already have small absolute ranges (portfolio P&L vs. â‚¹1L start).
+  const min = minArg != null ? minArg : autoMin - (autoMax - autoMin) * 0.03;
+  const max = maxArg != null ? maxArg : autoMax + (autoMax - autoMin) * 0.03;
   const plotW = width - paddingLeft - paddingRight;
   const plotH = height - paddingTop - paddingBottom;
 
