@@ -173,9 +173,13 @@ export function renderStockDetail(main, params) {
       if (myToken.cancelled) return;
       const fresh = getInstrument(symbol);
       if (fresh && fresh.name && fresh.name !== symbol) {
-        // Replace inst in this closure scope is fine â€” render() reads
-        // the new inst by call-arg, not by lexical reference.
-        render(fresh, symbol);
+        // Hotfix53b: also reassign activeInst so the periodic polls
+        // below (subscribe + subscribeToQuotes) re-render with the
+        // fresh inst on subsequent ticks. Without this the title
+        // flipped back to 'MF_100037' every 12 seconds when the poll
+        // re-rendered with the stale bare-stub.
+        activeInst = fresh;
+        render(activeInst, symbol);
       }
     }).catch(() => {});
   }
@@ -206,7 +210,15 @@ export function renderStockDetail(main, params) {
   const preQuote = inst.kind !== "MF" ? getFreshCachedQuote(symbol) : null;
   if (preQuote) liveQuote = preQuote;
 
-  render(inst, symbol);
+  // Hotfix53b: mutable instance reference. The subscribe/poll callbacks
+  // below close over this variable by reference, so when Hotfix52a's
+  // ensureMfUniverseLoaded resolves and assigns a fresh inst, every
+  // subsequent render() call (state ticks, 12s quote polls, history
+  // poll) picks up the new instrument. Without this, the polling cycle
+  // re-rendered with the stale bare-stub inst every 12s and reverted
+  // the title back to 'MF_100037'.
+  let activeInst = inst;
+  render(activeInst, symbol);
   // Guard: any render() call during an in-flight zoom/pan gesture replaces
   // main.innerHTML and wipes the SVG mid-gesture. Defer until the next
   // tick lands after the gesture ends. render() is idempotent so skipping
@@ -214,14 +226,14 @@ export function renderStockDetail(main, params) {
   // slightly-staler-by-12s price that auto-heals on the next tick.
   const unsub = subscribe(() => {
     if (myToken.cancelled || _gestureActive) return;
-    render(inst, symbol);
+    render(activeInst, symbol);
   });
   const pollUnsub = subscribeToQuotes([symbol], (quotes) => {
     if (myToken.cancelled) return;
     if (quotes[symbol]) {
       liveQuote = quotes[symbol];
       if (_gestureActive) return;    // defer render until gesture ends
-      render(inst, symbol);
+      render(activeInst, symbol);
     }
   }, 12_000);  // 12s refresh on the currently-open stock
   const onLeave = () => {

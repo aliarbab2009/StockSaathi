@@ -831,7 +831,7 @@ export function renderStocks(main) {
             if (equityCt) parts.push(`${fmt(equityCt)} stocks`);
             if (etfCt)    parts.push(`${fmt(etfCt)} ETFs`);
             if (mfActive) parts.push(`${fmt(mfActive)} mutual funds`);
-            return parts.join(" Â· ");
+            return parts.join(" · ");   // Hotfix53a: JS-escape the middle dot to avoid mojibake (was '·' double-encoded UTF-8)
           })()}</p>
         </div>
         <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
