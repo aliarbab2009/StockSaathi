@@ -476,7 +476,16 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
 
 const MF_HISTORY_TTL_MS = 60 * 60_000;
 const _mfHistoryCache = new Map();
-const _MF_TF_REMAP = { "1D": "1M", "1W": "1M" };
+// Hotfix47b: extended to remap the new YTD/5Y/MAX timeframes to MF API
+// values. The MF API (api/mf-history.py) accepts {1M, 3M, 6M, 1Y, 3Y,
+// 5Y, ALL}. Frontend uses YTD/MAX names â€” remap here.
+//   1D, 1W   â†’ 1M (MF NAV is daily; sub-day not meaningful)
+//   YTD      â†’ 1Y (we fetch 1Y and the chart caller may slice client-
+//                  side; for now showing 'last 12 months' is close
+//                  enough to YTD for the typical MF user)
+//   MAX      â†’ ALL (full AMFI history for the scheme)
+//   5Y, 1M, 3M, 6M, 1Y pass through unchanged
+const _MF_TF_REMAP = { "1D": "1M", "1W": "1M", "YTD": "1Y", "MAX": "ALL" };
 
 export async function getMfHistory(symbol, tf = "1Y") {
   const mappedTf = _MF_TF_REMAP[tf] || tf;

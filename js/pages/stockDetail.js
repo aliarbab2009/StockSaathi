@@ -25,15 +25,23 @@ import { termHtml } from "../features/aiExplainer.js";
 
 // Timeframe → Yahoo range/interval. 1D uses 5m intraday so the chart looks
 // like Groww's (dense 1-min-ish bars), not a sparse 5-daily-candle bar.
+//
+// Hotfix47a: added YTD, 5Y, MAX. /api/history accepts all of these (see
+// _RANGE_RE in api/history.py). User asked for long-term context that
+// the previous 1Y cap blocked. Interval ladders down for longer ranges
+// so we don't overload the chart with 2,500 daily candles on MAX.
 const TF_MAP = {
-  "1D": { range: "1d",  interval: "5m",  days: 1   },
-  "1W": { range: "5d",  interval: "30m", days: 5   },
-  "1M": { range: "1mo", interval: "1d",  days: 22  },
-  "3M": { range: "3mo", interval: "1d",  days: 66  },
-  "6M": { range: "6mo", interval: "1d",  days: 130 },
-  "1Y": { range: "1y",  interval: "1d",  days: 260 },
+  "1D":  { range: "1d",  interval: "5m",  days: 1     },
+  "1W":  { range: "5d",  interval: "30m", days: 5     },
+  "1M":  { range: "1mo", interval: "1d",  days: 22    },
+  "3M":  { range: "3mo", interval: "1d",  days: 66    },
+  "6M":  { range: "6mo", interval: "1d",  days: 130   },
+  "YTD": { range: "ytd", interval: "1d",  days: 260   },
+  "1Y":  { range: "1y",  interval: "1d",  days: 260   },
+  "5Y":  { range: "5y",  interval: "1wk", days: 260*5 },
+  "MAX": { range: "max", interval: "1mo", days: 260*10},
 };
-const TF_ORDER = ["1D", "1W", "1M", "3M", "6M", "1Y"];
+const TF_ORDER = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
 
 let ui = {
   side: "BUY", qty: 1,
