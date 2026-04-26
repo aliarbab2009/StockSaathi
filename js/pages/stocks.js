@@ -527,7 +527,7 @@ export function renderStocks(main) {
       }
       const sparkEl = card.querySelector(".stock-sparkline");
       if (sparkEl) {
-        const seededCloses = getCloses(sym, 40);
+        const seededCloses = getCloses(sym, SPARKLINE_SEED_LENGTH);
         const closes = getIntradaySparkline(sym, seededCloses);
         if (closes && closes.length > 1) {
           // Fingerprint-guarded write: cheap length+last-value check skips
@@ -574,7 +574,7 @@ export function renderStocks(main) {
       if (!card) continue;
       const inst = getInstrument(sym);
       if (!inst) continue;
-      const seededCloses = getCloses(sym, 40);
+      const seededCloses = getCloses(sym, SPARKLINE_SEED_LENGTH);
       const closes = getIntradaySparkline(sym, seededCloses);
       const quote = quoteCache[sym];
       const hasLive = quote?.pricePaise != null;
@@ -1043,7 +1043,7 @@ export function renderStocks(main) {
               if (inst.kind !== KIND_MF && _q?.pricePaise == null) {
                 continue;
               }
-              const seededCloses = getCloses(sym, 40);
+              const seededCloses = getCloses(sym, SPARKLINE_SEED_LENGTH);
               const closes = getIntradaySparkline(sym, seededCloses);
               const quote = _q;
               const hasLive = quote?.pricePaise != null;
@@ -1600,7 +1600,7 @@ function renderStockCard(inst, state, wlSet) {
   // overlays once subscribeToQuotes lands a tick. Drops the previous
   // `inst.price != null` gate that left ALL Tier-2 cards with empty
   // sparklines forever (the gate was a vestige of the hand-typed era).
-  const seededCloses = getCloses(inst.symbol, 40);
+  const seededCloses = getCloses(inst.symbol, SPARKLINE_SEED_LENGTH);
   const closes = getIntradaySparkline(inst.symbol, seededCloses);
   const quote = quoteCache[inst.symbol];
   const hasLive = quote?.pricePaise != null;
@@ -1704,7 +1704,7 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
   if (opts) {
     ({ closes, hasLive, price, change, isWatched, liveBadge } = opts);
   } else {
-    const seededCloses = getCloses(inst.symbol, 40);
+    const seededCloses = getCloses(inst.symbol, SPARKLINE_SEED_LENGTH);
     closes = getIntradaySparkline(inst.symbol, seededCloses);
     const quote = (typeof window !== "undefined" && window.__ssQuoteCache) ? window.__ssQuoteCache[inst.symbol] : null;
     hasLive = quote?.pricePaise != null;
