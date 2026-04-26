@@ -783,17 +783,7 @@ function render(inst, symbol) {
                        data â€” showing a flatline at â‚¹0 would be misleading.
                      </div>
                    </div>`
-                /* Hotfix47c: MFs now use stockChart in candle mode and lineChart
-                   in area mode â€” same toggle as stocks/ETFs. AMFI publishes
-                   only one NAV per day so raw OHLC has o=h=l=c. We synthesize
-                   day-over-day candles where open = previous close, so each
-                   candle's body shows the day's NAV move (green up / red down,
-                   wicks at the same level since there's no intraday data).
-                   Routing through stockChart also unlocks the same hover +
-                   zoom interactions stocks already have. */
-                : (ui.chartMode === "candle"
-                    ? `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(_synthMfDayOverDayOhlc(chartOhlc), { height: 360, mode: "candle", width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`
-                    : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: "area", width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`))
+                : _renderMfChartSafe(chartOhlc, ui, computeChartWidth(), chartXAxisRange))
             : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`}
           ${liveHistory?._fallbackLabel && ui.timeframe === "1D" ? `
             <div class="dim text-xs" style="margin-top: 6px; padding: 4px 8px; background: var(--bg-soft); border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px;">
@@ -1138,10 +1128,18 @@ function attachListeners(main, inst, symbol, curPrice, holding, chartOhlc, sessi
   if (chartOhlc?.length) {
     const host = main.querySelector("#stock-chart-host");
     if (host && host.querySelector(".chart-svg")) {
-      const hoverOhlc = (inst.kind === "MF" && ui.chartMode === "candle")
-        ? _synthMfDayOverDayOhlc(chartOhlc)
-        : chartOhlc;
-      attachStockChartHover(host, hoverOhlc, { mode: ui.chartMode });
+      try {
+        const hoverOhlc = (inst.kind === "MF" && ui.chartMode === "candle")
+          ? _synthMfDayOverDayOhlc(chartOhlc)
+          : chartOhlc;
+        attachStockChartHover(host, hoverOhlc, { mode: ui.chartMode });
+      } catch (e) {
+        // Hotfix50a: don't let a hover-attach failure (most likely from
+        // synthMfOhlc on edge-case data shapes) cascade up into the
+        // router's error boundary. The chart itself is already rendered;
+        // hover is a polish layer, not a hard requirement.
+        console.warn("[mf chart] hover attach failed:", e);
+      }
 
       // Attach zoom + pan gestures ONLY when xAxisRange is active (1D
       // intraday window). Other timeframes use the index-axis fallback
@@ -1845,6 +1843,32 @@ function isTerminatedFund(inst) {
     }
   }
   return { terminated: false, navDate, ageDays: null };
+}
+
+// Hotfix50a: MF chart render with try-catch fallback. Hotfix49a removed
+// the `inst.kind !== 'MF'` gate on attachStockChartHover, and Hotfix47c
+// routed MFs through stockChart with synthesized OHLC. Together those
+// changes broke MF page reload â€” user-reported 'Something broke on this
+// page' on every reload of any MF detail page. Without a clean stack
+// trace from prod we can't pin the exact line, so this wrapper:
+//   1. Tries the candle/area stockChart path first (same as before)
+//   2. On any throw, logs the error to console and falls back to the
+//      pre-Hotfix47c lineChart render. The page then loads degraded
+//      (no candle mode, no zoom) but doesn't blank out.
+// The console.warn surfaces the actual error so the next user report
+// can include a real stack trace.
+function _renderMfChartSafe(chartOhlc, uiState, width, xAxisRange) {
+  try {
+    if (uiState.chartMode === "candle") {
+      const synth = _synthMfDayOverDayOhlc(chartOhlc);
+      return `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(synth, { height: 360, mode: "candle", width, xAxisRange })}</div>`;
+    }
+    return `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: "area", width, xAxisRange })}</div>`;
+  } catch (e) {
+    console.warn("[mf chart] candle/area render failed â€” falling back to lineChart:", e);
+    const closes = (chartOhlc || []).map(k => k?.c).filter(c => Number.isFinite(c));
+    return `<div id="stock-chart-host" style="height: 300px; width: 100%;">${lineChart(closes.map(c => c / 100), { height: 300, color: "var(--brand)", rupees: true })}</div>`;
+  }
 }
 
 // Hotfix49b: custom date-range picker modal. Replaces the prior native
