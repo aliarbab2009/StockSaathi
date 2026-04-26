@@ -585,35 +585,37 @@ function render(inst, symbol) {
   //                 zooms in.
   let chartXAxisRange = null;
   let sessionWindow = null;
-  if (inst.kind !== "MF") {
-    if (ui.timeframe === "1D") {
-      const win = todaysMarketWindowMs();
-      if (win) {
-        const POST_CLOSE_GRACE_MS = 30 * 60 * 1000;
-        const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
-        const isWeekday = !win.isWeekend;
-        if (inWindow && isWeekday) {
-          sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
-        }
+  // Hotfix50c: MF charts now opt into the data-bounded sessionWindow path
+  // (was gated behind 'inst.kind !== "MF"'). Zoom + crosshair use the
+  // first-to-last candle timestamps, identical to non-1D stocks. AMFI has
+  // no intraday so the 1D-time-axis special-case stays equity-only.
+  if (inst.kind !== "MF" && ui.timeframe === "1D") {
+    const win = todaysMarketWindowMs();
+    if (win) {
+      const POST_CLOSE_GRACE_MS = 30 * 60 * 1000;
+      const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
+      const isWeekday = !win.isWeekend;
+      if (inWindow && isWeekday) {
+        sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
       }
-      // 1D fallback to last trading session — sessionWindow comes from the
-      // actual data range so zoom + crosshair still operate against real
-      // candle timestamps. _fallbackLabel is set inside loadHistoryWithFallback.
-      if (!sessionWindow && liveHistory?._fallbackLabel && chartOhlc.length >= 2) {
-        sessionWindow = {
-          fromMs: chartOhlc[0].t,
-          toMs: chartOhlc[chartOhlc.length - 1].t,
-        };
-      }
-    } else if (chartOhlc.length >= 2) {
-      // Data-bounded window for non-1D timeframes. Uses chartOhlc (the
-      // live-injected array) so the window right-edge tracks the live
-      // tip on 1W just like it does on 1D.
+    }
+    // 1D fallback to last trading session — sessionWindow comes from the
+    // actual data range so zoom + crosshair still operate against real
+    // candle timestamps. _fallbackLabel is set inside loadHistoryWithFallback.
+    if (!sessionWindow && liveHistory?._fallbackLabel && chartOhlc.length >= 2) {
       sessionWindow = {
         fromMs: chartOhlc[0].t,
         toMs: chartOhlc[chartOhlc.length - 1].t,
       };
     }
+  } else if (chartOhlc.length >= 2) {
+    // Data-bounded window for non-1D stocks AND for ALL MF timeframes.
+    // chartOhlc is the live-injected array so the window right-edge
+    // tracks the latest candle.
+    sessionWindow = {
+      fromMs: chartOhlc[0].t,
+      toMs: chartOhlc[chartOhlc.length - 1].t,
+    };
   }
 
   // chartXAxisRange — what gets passed to stockChart, controlling the
