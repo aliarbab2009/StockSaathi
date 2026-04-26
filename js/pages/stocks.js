@@ -211,15 +211,45 @@ export function renderStocks(main) {
   // Also re-render once AMFI lands so the count pills + grid update.
   const onMfLoaded = () => {
     if (cancelled) return;
-    // The MF-loaded event re-renders to update the MF count pill in
-    // the filter bar. If the page is already showing hydrated cards
-    // (likely â€” MF universe is fetched in parallel with stocks
-    // universe + cold-start), the render() wipes the grid for what
-    // amounts to a count-pill text update. Skip the wipe; the count
-    // will surface on the next genuine re-render. Same wasReady
-    // guard pattern as 23b/c/d/e.
+    // Hotfix55a: previously this skipped the render when pageReady
+    // was already true (Hotfix23f) â€” to avoid wiping the hydrated
+    // grid for a count-pill update. But that meant the 'Mutual Funds
+    // (10)' pill stayed at the curated placeholder count forever
+    // (until the user happened to click it). User-reported.
+    // Better fix: surgically update JUST the count text on the MF
+    // tab pill + the markets header counts, leaving the grid alone.
+    // Falls through to a full render() only when pageReady is false
+    // (skeleton is still up).
     const wasReady = pageReady();
-    if (!wasReady) render();
+    if (!wasReady) { render(); return; }
+    // Surgical DOM update path. Re-derive the active MF count and
+    // patch the visible label.
+    try {
+      const allInst = getAllInstruments();
+      const equityCt = allInst.filter(i => i.kind === KIND_EQUITY).length;
+      const etfCt    = allInst.filter(i => i.kind === KIND_ETF).length;
+      const mfActive = allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length;
+      const fmt = (n) => n.toLocaleString("en-IN");
+      // Patch the kind-tab MF pill (label + count). Other pills
+      // (Stocks/ETFs/Watchlist) don't move on MF-load so they
+      // stay put.
+      const mfPill = main.querySelector('[data-kind="MF"]');
+      if (mfPill && mfActive) mfPill.textContent = `Mutual Funds (${fmt(mfActive)})`;
+      // Patch the muted h1 subtitle ('2,364 stocks · 322 ETFs · 8,741 mutual funds')
+      const subtitle = main.querySelector("h1 + p.muted");
+      if (subtitle) {
+        const parts = [];
+        if (equityCt) parts.push(`${fmt(equityCt)} stocks`);
+        if (etfCt)    parts.push(`${fmt(etfCt)} ETFs`);
+        if (mfActive) parts.push(`${fmt(mfActive)} mutual funds`);
+        subtitle.textContent = parts.join(" · ");
+      }
+    } catch (e) {
+      // If anything goes wrong with the surgical patch, fall back to
+      // a full render â€” a brief grid blink is better than stale text.
+      console.warn("[onMfLoaded surgical update]", e);
+      render();
+    }
   };
   window.addEventListener("ss:mf-universe-loaded", onMfLoaded);
 
