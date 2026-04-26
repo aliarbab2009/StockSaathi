@@ -699,7 +699,21 @@ async function fetchYahooHistory(symbol, range, interval, opts = {}) {
 }
 
 function synthMFQuote(symbol, inst) {
-  const basePaise = inst.price;
+  // Hotfix51b: was `const basePaise = inst.price` — but MF instances in
+  // the universe have price=null (only nav is populated by mfFull.json).
+  // null * 1.005 → 0 → pricePaise: 0 → stockDetail header rendered
+  // 'â‚¹0' for every MF detail page. Now prefer inst.nav * 100 (rupees
+  // → paise) and fall back to inst.price for the rare path where price
+  // is set but nav isn't.
+  const basePaise = (typeof inst.nav === "number" && inst.nav > 0)
+    ? Math.round(inst.nav * 100)
+    : inst.price;
+  if (!basePaise || basePaise <= 0) {
+    // Truly missing data: return a clearly-undefined quote rather than
+    // a fake â‚¹0. The detail page's formatRupees fallback handles
+    // null gracefully (renders 'â€”').
+    return null;
+  }
   const drift = (Math.sin(Date.now() / 3_600_000) * 0.005) + (Math.random() * 0.002 - 0.001);
   const cur = Math.round(basePaise * (1 + drift));
   return {
