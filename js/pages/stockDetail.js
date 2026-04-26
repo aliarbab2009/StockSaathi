@@ -736,7 +736,18 @@ function render(inst, symbol) {
               <div class="dim text-xs">Loading ${ui.timeframe} chart…</div>
             </div>
           ` : inst.kind === "MF"
-            ? `<div style="height: 300px;">${lineChart(closes.map(c => c / 100), { height: 300, color: "var(--brand)", rupees: true })}</div>`
+            ? (isTerminatedFund(inst).terminated
+                ? `<div style="height: 300px; display: grid; place-items: center; gap: var(--sp-2); padding: var(--sp-4); text-align: center;">
+                     <div style="font-size: 32px; opacity: 0.5;">â³</div>
+                     <h3 style="margin: 0; font-size: var(--text-base);">Scheme wound up</h3>
+                     <div class="dim text-sm" style="max-width: 380px;">
+                       AMFI hasn't published a NAV for this fund since
+                       <strong>${escapeHtml(inst.nav_date || "the maturity date")}</strong>.
+                       The chart isn't shown because there's no recent
+                       data â€” showing a flatline at â‚¹0 would be misleading.
+                     </div>
+                   </div>`
+                : `<div style="height: 300px;">${lineChart(closes.map(c => c / 100), { height: 300, color: "var(--brand)", rupees: true })}</div>`)
             : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`}
           ${liveHistory?._fallbackLabel && ui.timeframe === "1D" ? `
             <div class="dim text-xs" style="margin-top: 6px; padding: 4px 8px; background: var(--bg-soft); border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px;">
@@ -1734,7 +1745,58 @@ function renderFundamentals(inst, live, hi52, lo52) {
 // Phase 1 (this commit): Lump Sum Invest tab + Redeem tab if holding.
 // Phase 2 (follow-up): SIP setup, exit-load warning with held-time math,
 // step-up SIP, STP/SWP.
+// Hotfix46a: detect funds that have been wound up / are zombie schemes.
+// Two signals (any one is sufficient):
+//   - nav < 0.01: AMFI's last-known value collapsed to ~0 (e.g. Kotak
+//     Monthly Interval Plan Series 4: nav 0.0001, nav_date 2019-04-22)
+//   - nav_date older than 365 days: live AMFI publishing for legitimate
+//     schemes runs daily for equity/debt/hybrid and at least quarterly
+//     for FOFs/closed-ended funds. A year of staleness is a strong
+//     termination signal. (5,000+ MFs in mfFull.json fall under this
+//     bucket â€” real graveyard.)
+// Returns { terminated: bool, navDate: ISO string, ageDays: number }
+function isTerminatedFund(inst) {
+  if (!inst || inst.kind !== "MF") return { terminated: false };
+  const nav = typeof inst.nav === "number" ? inst.nav : null;
+  const navDate = inst.nav_date || null;
+  if (nav != null && nav < 0.01) return { terminated: true, navDate, ageDays: null };
+  if (navDate) {
+    const dt = new Date(navDate);
+    if (!isNaN(dt)) {
+      const ageDays = Math.floor((Date.now() - dt.getTime()) / 86400000);
+      if (ageDays > 365) return { terminated: true, navDate, ageDays };
+    }
+  }
+  return { terminated: false, navDate, ageDays: null };
+}
+
 function renderMfInvestBox(inst, symbol, curNavPaise, holding) {
+  // Hotfix46a: short-circuit the entire invest UI for terminated funds.
+  // The 'Invest' button on a wound-up scheme is a footgun â€” user can
+  // click, it'd queue an order, but no AMFI feed will ever process it.
+  // Show a clear status banner instead. If the user already holds the
+  // fund (legacy holding from before termination), let them redeem
+  // â€” redemption against frozen NAV is at least closeable, even if
+  // economically degenerate.
+  const term = isTerminatedFund(inst);
+  if (term.terminated && !holding) {
+    const navDate = term.navDate || "unknown date";
+    const ageNote = term.ageDays != null ? ` (last NAV update â‰ˆ ${term.ageDays} days ago)` : "";
+    return `
+      <div class="trade-head" style="margin-bottom: var(--sp-3);">
+        <h3 style="font-size: var(--text-base); margin-bottom: 4px;">Scheme wound up</h3>
+        <div class="dim text-xs" style="line-height: 1.5;">
+          This fund is no longer active${ageNote}. AMFI's last-known NAV is from
+          <strong>${navDate}</strong>. New investments aren't possible â€” the AMC
+          has stopped processing units for this scheme.
+        </div>
+      </div>
+      <button class="btn btn-block" disabled style="opacity:0.5; cursor:not-allowed; background:var(--bg-soft); color:var(--text-dim);">Wound up</button>
+      <div class="dim text-xs center" style="margin-top: var(--sp-3); line-height: 1.5;">
+        Use Markets &rarr; Mutual Funds to find a similar active scheme from the same AMC.
+      </div>
+    `;
+  }
   // Cutoff: liquid/overnight → 12:00 IST; everything else → 13:30 IST.
   const cat = (inst.category_bucket || inst.category || "").toLowerCase();
   const isLiquidLike = /liquid|overnight|money market/.test(cat);
