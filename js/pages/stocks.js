@@ -403,9 +403,18 @@ export function renderStocks(main) {
       _moodFetched = true;
       fetchMarketMood().then((m) => {
         if (cancelled) return;
+        // Same wasReady guard as the cold-start, preheat, and
+        // onUniverseLoaded callbacks. The 2 s mood fail-open timer
+        // (line ~148) sets _moodReady=true and triggers a render
+        // when the mood fetch is still inflight; if the fetch later
+        // resolves, _moodReady is already true and another render()
+        // would wipe every hydrated card. Skip the wipe in that case
+        // â€” marketMood is now stored in module state and will surface
+        // on the next genuine re-render (filter change, etc.).
+        const wasReady = pageReady();
         marketMood = m;
         _moodReady = true;
-        render();
+        if (!wasReady) render();
       }).catch(() => {});
     }
   }, 10_000);
