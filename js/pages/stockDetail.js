@@ -1757,7 +1757,7 @@ function renderFundamentals(inst, live, hi52, lo52) {
       fundRow(termHtml("Option"), escapeHtml(inst.option_type || "—")),
       fundRow(termHtml("AMC"), escapeHtml(inst.amc || "—")),
       fundRow(termHtml("Benchmark"), escapeHtml(inst.bench || "—")),
-      fundRow(termHtml("AMFI code"), escapeHtml(inst.amfi_code || symbol.replace(/^MF_/, ""))),
+      fundRow(termHtml("AMFI code"), escapeHtml(inst.amfi_code || (inst.symbol || "").replace(/^MF_/, ""))),
       inst.isin_growth ? fundRow(termHtml("ISIN (Growth)"), escapeHtml(inst.isin_growth)) : "",
       fundRow(termHtml("Scheme type"), escapeHtml(inst.scheme_kind ? inst.scheme_kind + " Ended" : "—")),
       fundRow(termHtml("Risk-O-Meter"), `<span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "med").toUpperCase()}</span>`, true),
