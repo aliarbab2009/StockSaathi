@@ -399,6 +399,18 @@ export function renderStocks(main) {
 
   (async () => {
     try {
+      // Hotfix27b: skip the cold-start IIFE entirely when the universe
+      // is already loaded at mount. In that case Hotfix21b's preheat
+      // (kicked synchronously at line ~287 via the `if (_universeLoaded)
+      // kickViewportPreheat()` branch) covers a SUPERSET of what the
+      // cold-start would fetch (top 60 vs top 30, same sort order).
+      // Running both means a redundant network round-trip for 30
+      // overlapping symbols. Saves ~200-500 ms on warm loads (any
+      // visit after the first session-mount of /stocks). Cold loads
+      // (universe not in cache) still need this IIFE because the
+      // preheat blocks on universeFull while cold-start uses the
+      // smaller curated.js fallback â€” cold-start lands first there.
+      if (_universeLoaded) return;
       const seed = symbolsToPoll();
       if (!seed.length) return;
       const q = await getQuoteBatch(seed);
