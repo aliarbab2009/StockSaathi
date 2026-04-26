@@ -4,6 +4,7 @@
 
 import { getState, subscribe, setSetting, switchUser } from "./state.js";
 import { mountNav } from "./components/nav.js";
+import { mountEventMarquee } from "./components/eventMarquee.js";
 import { mountCoachPanel } from "./components/coachPanel.js";
 import { mountRouter } from "./router.js";
 import { currentUser, refreshCurrentUser } from "./auth/accounts.js";
@@ -35,6 +36,7 @@ startServerTimeSync();
 ensureUniverseLoaded();
 
 // Mount components
+mountEventMarquee();   // hides itself when no active events
 mountNav();
 mountCoachPanel();
 mountAiExplainer();

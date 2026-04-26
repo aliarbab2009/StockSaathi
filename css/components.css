@@ -3233,3 +3233,47 @@
 .dropdown-item:hover { background: var(--bg-soft); }
 .dropdown-item.danger { color: var(--negative); }
 .dropdown-divider { height: 1px; background: var(--divider); margin: 4px 0; }
+
+/* =============================================================================
+ * EVENT MARQUEE — Hotfix46d
+ * Slim announcement bar above the main nav, only rendered when there's an
+ * active event (NSE holiday, MF wound up, etc.). Otherwise the wrapper is
+ * display:none and takes zero layout. Single-line scrolling text.
+ * =============================================================================
+ */
+.event-marquee {
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 32px;
+  height: 32px;
+  border-bottom: 1px solid var(--divider);
+}
+.event-marquee--info {
+  background: var(--bg-soft);
+  color: var(--text-muted);
+}
+.event-marquee--warning {
+  background: var(--warning-soft, rgba(217, 119, 6, 0.12));
+  color: var(--warning, #d97706);
+}
+.event-marquee-track {
+  display: inline-block;
+  padding-left: 100%;
+  animation: event-marquee-scroll 38s linear infinite;
+}
+.event-marquee:hover .event-marquee-track {
+  animation-play-state: paused;
+}
+@keyframes event-marquee-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Stop the scrolling animation for accessibility settings users.
+     Show the static text wrapped to the bar's full width instead. */
+  .event-marquee { white-space: normal; height: auto; padding: 6px 12px; }
+  .event-marquee-track { padding-left: 0; animation: none; }
+}
