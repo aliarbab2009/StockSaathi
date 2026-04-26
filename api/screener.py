@@ -115,9 +115,18 @@ def _query_supabase(metric, order, limit):
     # that actually have the data. nullslast is implicit on desc order
     # for PostgREST but we exclude nulls anyway for correctness.
     select_cols = f"symbol,name,sector,{metric}"
+    # For valuation ratios sorted ascending, filter to positive values.
+    # 'lowest PE' / 'lowest PB' should return cheapest stocks by valuation,
+    # not loss-makers with negative PE. Without this filter PAYTM/SWIGGY/
+    # IDEA top the 'lowest PE' list â€” mathematically correct but
+    # semantically wrong for the typical query intent.
+    extra_filters = ""
+    if order == "asc" and metric in ("pe_ratio", "pb_ratio"):
+        extra_filters = f"&{metric}=gt.0"
     url = (f"{SUPA_URL}/rest/v1/fundamentals_cache"
            f"?select={select_cols}"
            f"&{metric}=not.is.null"
+           f"{extra_filters}"
            f"&order={metric}.{order}"
            f"&limit={limit}")
     req = urllib.request.Request(url, headers={
@@ -184,6 +193,11 @@ def _query_static(metric, order, limit):
     stocks = (payload.get("stocks") or {}).values()
     # Filter out rows missing the metric (mirrors not.is.null in PostgREST).
     valid = [s for s in stocks if s.get(metric) is not None]
+    # Mirror the same positive-only filter the Supabase query applies for
+    # valuation ratios sorted ascending (avoids PAYTM/SWIGGY topping
+    # 'lowest PE' on loss-maker negative values).
+    if order == "asc" and metric in ("pe_ratio", "pb_ratio"):
+        valid = [s for s in valid if s.get(metric) > 0]
     valid.sort(key=lambda s: s.get(metric), reverse=(order == "desc"))
     rows = valid[:limit]
     return rows, None
@@ -210,8 +224,17 @@ def _format_value(metric, val):
     return str(val)
 
 
-def _build_rationale(metric, order, rows):
+def _build_rationale(metric, order, rows, source=None):
     if not rows:
+        # Specific guidance for the common gap: debt_to_equity isn't in
+        # the static JSON sidecar (Tickertape's ratios endpoint doesn't
+        # ship it; only Yahoo v10 does). Once the user runs the
+        # fundamentals_cache migration + admin-sync-fundamentals cron,
+        # debt populates and this branch goes quiet.
+        if metric == "debt_to_equity" and source == "static_top200":
+            return ("Debt-to-equity data isn't in the limited universe yet. "
+                    "Will populate once the daily fundamentals cron runs against "
+                    "the full universe.")
         return f"No stocks with {METRIC_LABELS.get(metric, metric)} data in the universe yet."
     label = METRIC_LABELS.get(metric, metric)
     direction = "highest" if order == "desc" else "lowest"
@@ -271,7 +294,7 @@ class handler(BaseHTTPRequestHandler):
                     return
                 source = "static_top200"
             matches = [r["symbol"] for r in (rows or []) if r.get("symbol")]
-            rationale = _build_rationale(metric, order, rows or [])
+            rationale = _build_rationale(metric, order, rows or [], source=source)
             _send_json(self, 200, {
                 "matches": matches,
                 "rationale": rationale,
