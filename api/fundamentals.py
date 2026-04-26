@@ -114,6 +114,7 @@ def read_cache(symbol):
             "dividend_yield":     _to_float(row.get("dividend_yield")),
             "eps":                _to_float(row.get("eps")),
             "roe":                _to_float(row.get("roe")),
+            "debt_to_equity":     _to_float(row.get("debt_to_equity")),
             "fifty_two_week_high": _to_float(row.get("fifty_two_week_high")),
             "fifty_two_week_low":  _to_float(row.get("fifty_two_week_low")),
             "fifty_day_average":  _to_float(row.get("fifty_day_avg")),
@@ -145,6 +146,7 @@ def write_cache(symbol, data):
         "dividend_yield":       _to_float(data.get("dividend_yield")),
         "eps":                  _to_float(data.get("eps")),
         "roe":                  _to_float(data.get("roe")),
+        "debt_to_equity":       _to_float(data.get("debt_to_equity")),
         "fifty_two_week_high":  _to_float(data.get("fifty_two_week_high")),
         "fifty_two_week_low":   _to_float(data.get("fifty_two_week_low")),
         "fifty_day_avg":        _to_float(data.get("fifty_day_average")),
@@ -279,6 +281,13 @@ def fetch_v10(ticker):
         # _normalize_dividend_yield to reconcile fraction vs percent).
         "dividend_rate": _raw(sd, "trailingAnnualDividendRate") or _raw(sd, "dividendRate"),
         "eps": _raw(ks, "trailingEps") or _raw(fd, "currentPrice"),
+        # ROE comes from financialData on Yahoo v10 (NOT defaultKeyStatistics
+        # which has it under returnOnEquity but often null for non-US tickers).
+        "roe": _raw(fd, "returnOnEquity"),
+        # Debt-to-equity ratio. Yahoo's v10 financialData ships this for
+        # most NSE-listed companies. Used by /api/screener to answer
+        # "highest debt" / "lowest debt" / "leverage" queries.
+        "debt_to_equity": _raw(fd, "debtToEquity"),
         "fifty_two_week_high": _raw(sd, "fiftyTwoWeekHigh"),
         "fifty_two_week_low": _raw(sd, "fiftyTwoWeekLow"),
         "fifty_day_average": _raw(sd, "fiftyDayAverage"),
