@@ -1349,6 +1349,16 @@ function detectScreenerQuery(query) {
     [/\bassets[\s-]?under[\s-]?management\b|\baum\b/,                                                          "aum"],
     [/\bexpense[\s-]?ratio\b|\bfees?\b|\bcheap(est)?[\s-]?etf/,                                                 "expense_ratio"],
     [/\btracking[\s-]?error\b/,                                                                                  "tracking_error"],
+    // Hotfix43b: 'highest price', 'priciest', 'most expensive stock' etc.
+    // Maps to fifty_two_week_high as a proxy for current per-share price
+    // (fundamentals_full.json doesn't yet ship last_price; the 52w high
+    // tracks current price closely for stocks near their peak â€” MRF,
+    // Page Industries, etc. all show â‚¹50k+ regardless of which we use).
+    // Will switch to last_price after the next fundamentals refresh
+    // includes that field. Keep this AFTER the pe/pb/yield patterns so
+    // 'price-to-earnings' / 'price-to-book' don't accidentally match
+    // here. The negative lookahead guards 'price-to-' compounds.
+    [/\b(price|priciest|costliest|most[\s-]?expensive|stock[\s-]?price|share[\s-]?price)\b(?![\s-]?(?:to|tag))/, "fifty_two_week_high"],
   ];
   // Optional kind filter â€” query mentions 'etf' or 'mutual fund' or
   // 'stock' to restrict the universe.
@@ -1388,6 +1398,18 @@ async function runAiSearch(query, render) {
   if (aiSearchAbort) { try { aiSearchAbort.abort(); } catch {} }
   aiSearchAbort = new AbortController();
   const signal = aiSearchAbort.signal;
+
+  // Hotfix43a: hard timeout. Without this the fetch can hang indefinitely
+  // (Vercel function silent-stall, Cloudflare middlebox holding the
+  // connection, slow upstream LLM, etc.) and aiSearchLoading stays true
+  // forever â€” the Ask Saathi button is stuck in the 'â€¦' state, the user
+  // can never search again. User-reported: 'sometimes the ask saathi
+  // search button goes like this' (screenshot of stuck loading state).
+  // 12 s gives the slow LLM path a fair shot while still recovering
+  // a stuck UI within a sensible window.
+  const timeoutId = setTimeout(() => {
+    try { aiSearchAbort?.abort(); } catch {}
+  }, 12_000);
 
   aiSearchLoading = true;
   aiSearchQuery = query;
@@ -1479,9 +1501,18 @@ async function runAiSearch(query, render) {
       aiSearch = { matches: [], rationale };
     }
   } catch (e) {
-    if (signal.aborted || e.name === "AbortError") return;
+    if (signal.aborted || e.name === "AbortError") {
+      // If the abort came from our 12 s timeout, surface a clear
+      // rationale so the user knows to try again rather than seeing
+      // a silent empty state.
+      if (signal.aborted && !aiSearch) {
+        aiSearch = { matches: [], rationale: "Saathi took too long â€” try again with a shorter query." };
+      }
+      return;
+    }
     aiSearch = { matches: [], rationale: "Saathi couldn't search just now. Try again in a moment." };
   } finally {
+    clearTimeout(timeoutId);
     if (aiSearchAbort && aiSearchAbort.signal === signal) aiSearchAbort = null;
     aiSearchLoading = false;
     render();
