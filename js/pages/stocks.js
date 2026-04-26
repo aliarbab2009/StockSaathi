@@ -862,8 +862,20 @@ export function renderStocks(main) {
       try { searchEl.setSelectionRange(restore.start, restore.end); } catch {}
     }
     searchEl.addEventListener("input", e => {
-      filter.q = e.target.value;
+      const newQ = e.target.value;
+      filter.q = newQ;
       visibleCount = PAGE_SIZE;   // reset pagination on new query
+      // Hotfix46b: when the user clicks the input's built-in X (or
+      // hits Backspace down to empty), also clear the AI search
+      // result that may have been set from a prior 'Ask Saathi'
+      // query. Without this clear, aiSearch overrides the keyword
+      // filter inside applyFilters â€” user clears the box but the
+      // AI-picked results stay on screen, only the explicit 'Clear'
+      // button next to the rationale banner closes them. Confusing.
+      if (newQ === "" && aiSearch) {
+        aiSearch = null;
+        aiSearchQuery = "";
+      }
       // Hotfix43e: was render() which wipes main.innerHTML (header,
       // filter pills, sort dropdown, sector pills, AND grid) on every
       // keystroke. On mobile this caused user-reported 'typing lags
