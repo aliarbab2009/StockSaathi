@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS public.fundamentals_cache (
     dividend_yield         double precision,
     eps                    double precision,
     roe                    double precision,
+    debt_to_equity         double precision,
     fifty_two_week_high    double precision,
     fifty_two_week_low     double precision,
     fifty_day_avg          double precision,
@@ -59,6 +60,8 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_roe
     ON public.fundamentals_cache (roe DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_fundamentals_eps
     ON public.fundamentals_cache (eps DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_debt_to_equity
+    ON public.fundamentals_cache (debt_to_equity DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_fundamentals_52w_high
     ON public.fundamentals_cache (fifty_two_week_high DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_fundamentals_52w_low
