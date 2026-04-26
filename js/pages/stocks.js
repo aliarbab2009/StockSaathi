@@ -1435,6 +1435,16 @@ async function runAiSearch(query, render) {
     if (signal.aborted) return;
     if (d?.matches?.length) {
       aiSearch = { matches: d.matches, rationale: d.rationale || "" };
+      // Auto-switch the kind tab so the matches actually display. The
+      // applyFilters AI-search branch ALSO applies the active kind
+      // filter on top, so an MF-kind result on the Stocks tab gets
+      // filtered to empty â€” user sees '12 matches' in the banner +
+      // 'No matches' in the grid. Implicit-tab-switch fixes this:
+      // typing 'highest NAV mutual fund' implies the user wants the
+      // MF tab, even if they were on Stocks.
+      if (screen?.kind && filter.kind !== screen.kind) {
+        filter.kind = screen.kind;
+      }
     } else {
       // Heuristic detection of "asked about a metric we don't have" so the
       // user gets a useful explanation rather than a generic 'try again'.
