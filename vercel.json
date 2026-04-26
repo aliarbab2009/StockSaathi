@@ -15,7 +15,8 @@
     { "path": "/api/admin-sync-fundamentals?offset=1000&limit=500",  "schedule": "30 13 * * *" },
     { "path": "/api/admin-sync-fundamentals?offset=1500&limit=500",  "schedule": "35 13 * * *" },
     { "path": "/api/admin-sync-fundamentals?offset=2000&limit=500",  "schedule": "40 13 * * *" },
-    { "path": "/api/admin-sync-mf",                                  "schedule": "0 17 * * *" }
+    { "path": "/api/admin-sync-mf",                                  "schedule": "0 17 * * *" },
+    { "path": "/api/admin-refresh-fundamentals",                      "schedule": "0 14 * * *" }
   ],
   "rewrites": [
     {
