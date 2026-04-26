@@ -1403,10 +1403,37 @@
   border-radius: var(--r-sm);
   background: var(--bg-soft);
   color: var(--text-muted);
+  /* Hotfix43f: pin so the pill never gets squeezed off the right edge of
+     the card on narrow viewports. The parent uses flex justify-between
+     with the price/change column on the left â€” without flex-shrink:0
+     here, a wide price+change text was eating all the row width and
+     pushing the pill outside the card's padding. */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .risk-pill.low { background: var(--positive-soft); color: var(--positive); }
 .risk-pill.med { background: var(--warning-soft); color: var(--warning); }
 .risk-pill.high { background: var(--negative-soft); color: var(--negative); }
+
+/* Hotfix43f companion: constrain the price/change column inside a stock
+   card's price-row so it can shrink/clip when content (e.g. 'â‚¹1,63,600
+   +5.59% today DELAYED') is too wide for the viewport, instead of
+   pushing the risk-pill off-screen. The flex container needs gap +
+   min-width:0 on the child so flex-shrink can actually take effect. */
+.stock-card > .flex.items-center.justify-between {
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.stock-card > .flex.items-center.justify-between > div:first-child {
+  min-width: 0;
+  overflow: hidden;
+}
+.stock-card .stock-change {
+  /* Long change-line text ('-2.53% today DELAYED 18m old') wraps now
+     instead of forcing horizontal overflow. */
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
 
 .data-badge {
   display: inline-flex;

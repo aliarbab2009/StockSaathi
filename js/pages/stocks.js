@@ -864,10 +864,23 @@ export function renderStocks(main) {
     searchEl.addEventListener("input", e => {
       filter.q = e.target.value;
       visibleCount = PAGE_SIZE;   // reset pagination on new query
-      // Debounce: full re-renders every keystroke get expensive at 2700
-      // cards even with virtualization. 120ms feels responsive.
+      // Hotfix43e: was render() which wipes main.innerHTML (header,
+      // filter pills, sort dropdown, sector pills, AND grid) on every
+      // keystroke. On mobile this caused user-reported 'typing lags
+      // and duplicates, every character shakes the entire page, the
+      // top-by-size list on the left shakes'. Switching to renderList()
+      // touches ONLY the #stocks-grid-host innerHTML â€” surrounding
+      // chrome (incl. the search input itself) is untouched, so:
+      //   - input keeps focus + IME composition cleanly
+      //   - filter/sort pills don't reflow
+      //   - the search bar's own DOM node isn't being recreated under
+      //     the user's cursor mid-keystroke (which was eating fast
+      //     keystrokes and duplicating slow ones)
+      // Bumped debounce 120 -> 180 ms to give renderList room on
+      // 2,700-card universes; still under the 200 ms perceived-instant
+      // threshold.
       if (_debounceTimer) clearTimeout(_debounceTimer);
-      _debounceTimer = setTimeout(() => { if (!cancelled) render(); }, 120);
+      _debounceTimer = setTimeout(() => { if (!cancelled) renderList(); }, 180);
     });
     import("../components/themedSelect.js").then(({ mountThemedSelect }) => {
       mountThemedSelect(main.querySelector("#stocks-sort"), {
