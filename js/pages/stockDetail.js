@@ -723,7 +723,7 @@ function render(inst, symbol) {
           ${ui.zoom.scale > 1 ? `
             <button class="btn btn-ghost btn-sm" id="zoom-reset-btn" title="Reset chart zoom" style="font-size: 11px; padding: 4px 10px;">↻ Reset zoom (${ui.zoom.scale.toFixed(1)}×${ui.interval ? ` · ${ui.interval}` : ""})</button>
           ` : ""}
-          ${inst.kind !== "MF" ? `
+          ${!isTerminatedFund(inst).terminated ? `
             <div class="chart-mode-toggle" style="margin-left:auto; display:flex; gap:2px; background:var(--bg-soft); border:1px solid var(--border); border-radius:var(--r-sm); padding:2px;">
               <button class="chart-mode-btn ${ui.chartMode === "candle" ? "active" : ""}" data-mode="candle" aria-label="Candlestick" title="Candlestick view" style="border:0; background:${ui.chartMode === "candle" ? "var(--surface)" : "transparent"}; color:${ui.chartMode === "candle" ? "var(--text-strong)" : "var(--text-muted)"}; padding:4px 10px; border-radius:calc(var(--r-sm) - 2px); cursor:pointer; font-size:var(--text-xs); display:flex; align-items:center; gap:4px;">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="3" y="3" width="2" height="8" fill="currentColor" opacity="0.9"/><line x1="4" y1="1" x2="4" y2="13" stroke="currentColor" stroke-width="1"/><rect x="9" y="5" width="2" height="5" fill="currentColor" opacity="0.9"/><line x1="10" y1="3" x2="10" y2="12" stroke="currentColor" stroke-width="1"/></svg>
@@ -755,7 +755,17 @@ function render(inst, symbol) {
                        data â€” showing a flatline at â‚¹0 would be misleading.
                      </div>
                    </div>`
-                : `<div style="height: 300px;">${lineChart(closes.map(c => c / 100), { height: 300, color: "var(--brand)", rupees: true })}</div>`)
+                /* Hotfix47c: MFs now use stockChart in candle mode and lineChart
+                   in area mode â€” same toggle as stocks/ETFs. AMFI publishes
+                   only one NAV per day so raw OHLC has o=h=l=c. We synthesize
+                   day-over-day candles where open = previous close, so each
+                   candle's body shows the day's NAV move (green up / red down,
+                   wicks at the same level since there's no intraday data).
+                   Routing through stockChart also unlocks the same hover +
+                   zoom interactions stocks already have. */
+                : (ui.chartMode === "candle"
+                    ? `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(_synthMfDayOverDayOhlc(chartOhlc), { height: 360, mode: "candle", width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`
+                    : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: "area", width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`))
             : `<div id="stock-chart-host" style="height: clamp(260px, 44vh, 360px); width: 100%;">${stockChart(chartOhlc, { height: 360, mode: ui.chartMode, width: computeChartWidth(), xAxisRange: chartXAxisRange })}</div>`}
           ${liveHistory?._fallbackLabel && ui.timeframe === "1D" ? `
             <div class="dim text-xs" style="margin-top: 6px; padding: 4px 8px; background: var(--bg-soft); border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px;">
@@ -1776,6 +1786,38 @@ function isTerminatedFund(inst) {
     }
   }
   return { terminated: false, navDate, ageDays: null };
+}
+
+// Hotfix47c: AMFI publishes one NAV per scheme per day, so the raw MF
+// OHLC array has o=h=l=c=NAV on every entry â€” candles render as flat
+// dots, useless. Synthesize meaningful day-over-day candles where:
+//   open  = previous day's close
+//   close = today's NAV
+//   high  = max(prev close, today's NAV)
+//   low   = min(prev close, today's NAV)
+//   volume = 0 (always; no volume concept for MF NAV)
+// First day in the series stays as o=h=l=c since there's no prior close
+// to anchor against. Result: candle body height encodes the day's NAV
+// move; up days are green, down days red. Same look as a stock candle
+// chart but without intraday wicks (which AMFI doesn't publish).
+function _synthMfDayOverDayOhlc(rawOhlc) {
+  if (!Array.isArray(rawOhlc) || rawOhlc.length < 2) return rawOhlc || [];
+  const out = [{ ...rawOhlc[0] }];
+  for (let i = 1; i < rawOhlc.length; i++) {
+    const prev = rawOhlc[i - 1];
+    const cur  = rawOhlc[i];
+    const o = prev.c;
+    const c = cur.c;
+    out.push({
+      t: cur.t,
+      o,
+      c,
+      h: Math.max(o, c),
+      l: Math.min(o, c),
+      v: 0,
+    });
+  }
+  return out;
 }
 
 function renderMfInvestBox(inst, symbol, curNavPaise, holding) {
