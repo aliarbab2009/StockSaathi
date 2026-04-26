@@ -1337,9 +1337,23 @@ function detectScreenerQuery(query) {
   // Optional kind filter â€” query mentions 'etf' or 'mutual fund' or
   // 'stock' to restrict the universe.
   const kindMatch =
+    /\bmutual[\s-]?funds?\b|\bmfs?\b|\bsips?\b|\belss\b/.test(q) ? "MF" :
     /\b(etfs?|exchange[\s-]?traded[\s-]?fund)\b/.test(q) ? "ETF" :
     /\b(stocks?|equit(y|ies)|share[s]?)\b/.test(q) ? "STOCK" :
     null;
+  // MF queries support a different metric set (NAV is the main one;
+  // AUM and expense ratio aren't in mfFull.json). If the query
+  // targets MFs but didn't match a stock/ETF metric pattern, default
+  // to NAV.
+  const mfMetricPatterns = [
+    [/\bnav\b|\bnet[\s-]?asset[\s-]?value\b|\bprice\b/, "nav"],
+  ];
+  let mfMetric = null;
+  if (kindMatch === "MF") {
+    for (const [re, col] of mfMetricPatterns) { if (re.test(q)) { mfMetric = col; break; } }
+    if (!mfMetric && metric) mfMetric = "nav";  // fallback to NAV when stock metric named
+    if (mfMetric) metric = mfMetric;
+  }
   let metric = null;
   for (const [re, col] of metricPatterns) { if (re.test(q)) { metric = col; break; } }
   if (!metric) return null;
@@ -1371,11 +1385,33 @@ async function runAiSearch(query, render) {
     const screen = detectScreenerQuery(query);
     let d;
     if (screen) {
-      const kindParam = screen.kind ? `&kind=${encodeURIComponent(screen.kind)}` : "";
-      const url = `/api/screener?metric=${encodeURIComponent(screen.metric)}&order=${encodeURIComponent(screen.order)}&limit=12${kindParam}`;
-      const res = await fetch(url, { signal });
-      if (!res.ok) throw new Error("http_" + res.status);
-      d = await res.json();
+      // MF queries: screen client-side from the loaded INSTRUMENTS
+      // (mfFull.json is already fetched at page load via
+      // ensureMfUniverseLoaded). Avoids a wasted API round-trip and
+      // keeps MF universe (~14k rows) off the server.
+      if (screen.kind === "MF" && screen.metric === "nav") {
+        await ensureMfUniverseLoaded();
+        if (signal.aborted) return;
+        const all = getAllInstruments();
+        const mfs = all.filter(i => i.kind === "MF" && typeof i.nav === "number" && i.nav > 0);
+        mfs.sort((a, b) => screen.order === "desc" ? b.nav - a.nav : a.nav - b.nav);
+        const top = mfs.slice(0, 12);
+        const direction = screen.order === "desc" ? "highest" : "lowest";
+        const sample = top.slice(0, 3).map(m => `${m.symbol} (â‚¹${m.nav.toFixed(2)})`).join(", ");
+        d = {
+          matches: top.map(m => m.symbol),
+          rationale: top.length
+            ? `Top ${top.length} mutual funds by ${direction} NAV: ${sample}`
+            : "No mutual funds with NAV data loaded yet.",
+          source: "client_mf",
+        };
+      } else {
+        const kindParam = screen.kind ? `&kind=${encodeURIComponent(screen.kind)}` : "";
+        const url = `/api/screener?metric=${encodeURIComponent(screen.metric)}&order=${encodeURIComponent(screen.order)}&limit=12${kindParam}`;
+        const res = await fetch(url, { signal });
+        if (!res.ok) throw new Error("http_" + res.status);
+        d = await res.json();
+      }
     } else {
       // Free-text query that needs LLM interpretation.
       const candidates = buildAiSearchCandidates(query);
