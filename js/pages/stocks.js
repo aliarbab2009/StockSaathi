@@ -309,7 +309,17 @@ export function renderStocks(main) {
     if (_viewportPreheatDone || cancelled) return;
     const state = getState();
     const top = applyFilters(source(), filter, state, quoteCache).slice(0, VIEWPORT_PREHEAT_SIZE);
-    const seed = top.filter(i => i.kind !== KIND_MF).map(i => i.symbol);
+    // Hotfix27c: filter seed to MISSES from quoteCache. Mirror of
+    // Hotfix22a's same-shape fix on the warm-up-from-observer batch.
+    // Pre-fix the preheat always fired a getQuoteBatch round-trip even
+    // when every visible-viewport symbol was already in cache (typical
+    // on a warm visit â€” getFreshCachedQuotes at line ~196 fills the
+    // cache synchronously from localStorage). After this commit warm
+    // loads with full cache coverage send seed=[] and short-circuit
+    // straight to _viewportPreheatDone=true + render() within ~10 ms
+    // of mount. pageReady flips on the same tick. Visible cards paint
+    // before the next frame.
+    const seed = top.filter(i => i.kind !== KIND_MF && !quoteCache[i.symbol]?.pricePaise).map(i => i.symbol);
     if (seed.length === 0) {
       _viewportPreheatDone = true;
       render();
