@@ -282,7 +282,12 @@ export function stockChart(ohlc, {
   const allLows  = visibleOhlc.map(k => k.l ?? k.c);
   const dataMax = Math.max(...allHighs);
   const dataMin = Math.min(...allLows);
-  const pad = (dataMax - dataMin) * 0.08 || dataMax * 0.01;
+  // Hotfix44c: tightened from 0.08 -> 0.03 (same fix as 44a/b on
+  // dualLineChart + lineChart). Used by every stock detail page
+  // candlestick. The fallback `dataMax * 0.01` (1% of max) only kicks
+  // in when the visible candles are perfectly flat (range = 0) â€”
+  // unchanged.
+  const pad = (dataMax - dataMin) * 0.03 || dataMax * 0.01;
   const min = minArg != null ? minArg : dataMin - pad;
   const max = maxArg != null ? maxArg : dataMax + pad;
 
