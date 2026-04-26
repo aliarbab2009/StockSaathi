@@ -1109,8 +1109,20 @@ export function renderStocks(main) {
       // First-paint nudge: as soon as the initial entries fire, kick a quote
       // batch for whatever's actually on screen so the user sees real prices
       // within ~200ms instead of waiting for the 10s poll cycle.
-      if (changed && _visibleSymbols.size > 0 && !_warmedFromObserver) {
-        _warmedFromObserver = true;
+      // Pre-Hotfix25 the gate was `&& !_warmedFromObserver` (one-shot).
+      // That worked when the seed was unconditionally every visible
+      // symbol, but Hotfix22a changed the seed to filter to misses-only,
+      // which already short-circuits redundant fetches on scroll back
+      // to cached regions. The one-shot flag became harmful: scrolling
+      // into a new region with no cached quotes (e.g., far down into
+      // the 'R*' alphabetical block) couldn't trigger another warm-up
+      // batch because the flag was already set â€” cards stayed as
+      // skeleton forever. User-reported: 'scrolling randomly to a
+      // location the skeleton just keeps loading forever'.
+      // Drop the flag from the gate. seed.length === 0 below already
+      // skips the actual fetch when nothing's missing.
+      if (changed && _visibleSymbols.size > 0) {
+        _warmedFromObserver = true;  // kept for the attachCardObserver reset semantics
         // Only fetch symbols MISSING from quoteCache. Pre-fix the warm-up
         // batch always re-fetched every visible symbol, which after the
         // Hotfix21b viewport preheat meant a redundant round-trip for
