@@ -52,6 +52,23 @@ const MOOD_FAIL_OPEN_MS = 2000;
 const KIND_MF = "MF";
 const KIND_EQUITY = "EQUITY";
 const KIND_ETF = "ETF";
+
+// Hotfix46c: terminated-MF detector. Same logic as stockDetail.js's
+// isTerminatedFund() â€” mirrored here so applyFilters can filter the
+// default MF universe without importing across modules. nav < 0.01
+// catches AMFI's floor-rounded post-maturity 0.0001 values (e.g.
+// Kotak Monthly Interval Plan Series 4); nav_date > 365 days catches
+// the long tail of zombie schemes that simply stopped publishing.
+function _isMfTerminated(inst) {
+  if (!inst || inst.kind !== "MF") return false;
+  const nav = typeof inst.nav === "number" ? inst.nav : null;
+  if (nav != null && nav < 0.01) return true;
+  if (inst.nav_date) {
+    const dt = new Date(inst.nav_date);
+    if (!isNaN(dt) && (Date.now() - dt.getTime()) / 86400000 > 365) return true;
+  }
+  return false;
+}
 // Seeded sparkline window: how many close-prices to feed into sparkline().
 // 40 ticks at ~5 min intervals ~= 200 min ~= a full trading session of
 // the post-Hotfix9 5-minute resampled series. Lifted to a const so all
@@ -782,7 +799,10 @@ export function renderStocks(main) {
     // filtered list. Shows "..." until Tier-2 lands.
     const equityCount = universeReady ? allInst.filter(i => i.kind === KIND_EQUITY).length : null;
     const etfCount    = universeReady ? allInst.filter(i => i.kind === KIND_ETF).length : null;
-    const mfCount     = universeReady ? allInst.filter(i => i.kind === KIND_MF).length : null;
+    // Hotfix46c: show ACTIVE MF count, not the raw 13,969 figure that
+    // includes ~5,000 zombie schemes. The headline number now
+    // reflects what the user actually sees in the grid below.
+    const mfCount     = universeReady ? allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length : null;
     // Preserve focus + caret on the search input across the re-render — every
     // keystroke triggers this render and the 10s live-quote poll does too, so
     // without this the user can't type more than one character at a time.
@@ -1454,7 +1474,10 @@ async function runAiSearch(query, render) {
         await ensureMfUniverseLoaded();
         if (signal.aborted) return;
         const all = getAllInstruments();
-        const mfs = all.filter(i => i.kind === "MF" && typeof i.nav === "number" && i.nav > 0);
+        // Hotfix46c: also skip terminated/wound-up funds so 'highest NAV
+        // mutual fund' doesn't return zombie schemes whose final pre-
+        // maturity NAV happened to be high.
+        const mfs = all.filter(i => i.kind === "MF" && typeof i.nav === "number" && i.nav > 0 && !_isMfTerminated(i));
         mfs.sort((a, b) => screen.order === "desc" ? b.nav - a.nav : a.nav - b.nav);
         const top = mfs.slice(0, 12);
         const direction = screen.order === "desc" ? "highest" : "lowest";
@@ -1761,6 +1784,13 @@ function applyFilters(all, f, state, quoteCache) {
   else if (f.kind === KIND_ETF) list = list.filter(i => i.kind === KIND_ETF);
   else if (f.kind === KIND_MF) {
     list = list.filter(i => i.kind === KIND_MF);
+    // Hotfix46c: filter out wound-up / zombie schemes by default. ~5,000
+    // of the ~14,000 MFs in mfFull.json have nav_date >3 years old (e.g.
+    // Kotak Monthly Interval Plan Series 4 last published 2019-04-22)
+    // â€” showing them in the default screener clutters the user's view
+    // with un-investable funds. Same isTerminatedFund logic as the
+    // detail-page banner: nav < 0.01 OR nav_date > 365 days old.
+    list = list.filter(i => !_isMfTerminated(i));
     // MF-specific facets: category bucket (Equity/Debt/Hybrid/Index/etc.)
     // and plan type (Direct/Regular). Both default to "all".
     if (f.mfBucket && f.mfBucket !== "all") {
