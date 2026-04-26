@@ -1341,21 +1341,19 @@ function detectScreenerQuery(query) {
     /\b(etfs?|exchange[\s-]?traded[\s-]?fund)\b/.test(q) ? "ETF" :
     /\b(stocks?|equit(y|ies)|share[s]?)\b/.test(q) ? "STOCK" :
     null;
-  // MF queries support a different metric set (NAV is the main one;
-  // AUM and expense ratio aren't in mfFull.json). If the query
-  // targets MFs but didn't match a stock/ETF metric pattern, default
-  // to NAV.
-  const mfMetricPatterns = [
-    [/\bnav\b|\bnet[\s-]?asset[\s-]?value\b|\bprice\b/, "nav"],
-  ];
-  let mfMetric = null;
-  if (kindMatch === "MF") {
-    for (const [re, col] of mfMetricPatterns) { if (re.test(q)) { mfMetric = col; break; } }
-    if (!mfMetric && metric) mfMetric = "nav";  // fallback to NAV when stock metric named
-    if (mfMetric) metric = mfMetric;
-  }
+  // Detect stock/ETF metric. metric stays null if no pattern matched
+  // (e.g., a pure MF query like "highest NAV mutual fund" doesn't
+  // mention any stock metric word).
   let metric = null;
   for (const [re, col] of metricPatterns) { if (re.test(q)) { metric = col; break; } }
+  // MF override: NAV is the only sortable metric we have for the MF
+  // universe (mfFull.json doesn't ship AUM or expense ratio). If the
+  // query targets MFs, force metric=nav â€” regardless of whether a
+  // stock metric matched above. Even "highest market cap mutual fund"
+  // semantically means "biggest MF" which we approximate via NAV.
+  if (kindMatch === "MF") {
+    metric = "nav";
+  }
   if (!metric) return null;
   let order = null;
   if (desc.test(q)) order = "desc";
