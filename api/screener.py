@@ -48,7 +48,12 @@ ALLOWED_METRICS = {
     "market_cap", "pe_ratio", "pb_ratio",
     "dividend_yield", "beta", "roe", "eps",
     "debt_to_equity",
+    # ETF-specific (Hotfix33b). Stocks have these as null.
+    "aum", "expense_ratio", "tracking_error",
 }
+# Optional kind filter for "biggest ETF" / "most expensive stock" type queries.
+# When omitted, screener pulls top-N across STOCK + ETF combined.
+ALLOWED_KINDS = {"STOCK", "ETF"}
 ALLOWED_ORDER = {"asc", "desc"}
 DEFAULT_LIMIT = 12
 MAX_LIMIT = 50
@@ -65,6 +70,9 @@ METRIC_LABELS = {
     "roe":                 "return on equity",
     "eps":                 "earnings per share",
     "debt_to_equity":      "debt-to-equity ratio",
+    "aum":                 "assets under management",
+    "expense_ratio":       "expense ratio",
+    "tracking_error":      "tracking error",
 }
 
 
@@ -190,20 +198,24 @@ def _load_static_fundamentals():
     return None
 
 
-def _query_static(metric, order, limit):
+def _query_static(metric, order, limit, kind=None):
     """Sort the in-memory static JSON by the requested metric. Mirrors
     the shape that _query_supabase returns so the handler can swap
-    between sources transparently."""
+    between sources transparently. Optional kind filter restricts to
+    'STOCK' or 'ETF' rows; absence means all instrument kinds."""
     payload = _load_static_fundamentals()
     if not payload:
         return None, _STATIC_FUNDAMENTALS_LOAD_ERR or "static_unavailable"
     stocks = (payload.get("stocks") or {}).values()
     # Filter out rows missing the metric (mirrors not.is.null in PostgREST).
     valid = [s for s in stocks if s.get(metric) is not None]
+    # Optional kind filter ('biggest ETF AUM' query → kind=ETF).
+    if kind:
+        valid = [s for s in valid if (s.get("kind") or "STOCK").upper() == kind.upper()]
     # Mirror the same positive-only filter the Supabase query applies for
     # valuation ratios sorted ascending (avoids PAYTM/SWIGGY topping
     # 'lowest PE' on loss-maker negative values).
-    if order == "asc" and metric in ("pe_ratio", "pb_ratio"):
+    if order == "asc" and metric in ("pe_ratio", "pb_ratio", "expense_ratio"):
         valid = [s for s in valid if s.get(metric) > 0]
     valid.sort(key=lambda s: s.get(metric), reverse=(order == "desc"))
     rows = valid[:limit]
@@ -216,14 +228,18 @@ def _format_value(metric, val):
         return ""
     if metric in ("fifty_two_week_high", "fifty_two_week_low"):
         return f"â‚¹{val:,.0f}"
-    if metric == "market_cap":
-        # market_cap is in INR. Render as crores (1 crore = 10M INR).
+    if metric in ("market_cap", "aum"):
+        # Both rendered as crores. AUM is fund-side market cap for ETFs.
         crore = val / 1e7
         if crore >= 100000:
             return f"â‚¹{crore/100000:.1f}L cr"
         return f"â‚¹{crore:,.0f} cr"
     if metric == "dividend_yield":
         return f"{val*100:.2f}%"
+    if metric == "expense_ratio":
+        return f"{val:.2f}%"
+    if metric == "tracking_error":
+        return f"{val:.3f}%"
     if metric in ("pe_ratio", "pb_ratio", "beta", "eps", "debt_to_equity"):
         return f"{val:.2f}"
     if metric == "roe":
@@ -268,6 +284,7 @@ class handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             metric = (qs.get("metric", [""])[0] or "").strip().lower()
             order = (qs.get("order", ["desc"])[0] or "desc").strip().lower()
+            kind = (qs.get("kind", [""])[0] or "").strip().upper() or None
             try:
                 limit = int(qs.get("limit", [str(DEFAULT_LIMIT)])[0])
             except (TypeError, ValueError):
@@ -283,6 +300,9 @@ class handler(BaseHTTPRequestHandler):
             if order not in ALLOWED_ORDER:
                 _send_json(self, 400, {"error": "bad_order"}, origin)
                 return
+            if kind and kind not in ALLOWED_KINDS:
+                _send_json(self, 400, {"error": "bad_kind", "allowed": sorted(list(ALLOWED_KINDS))}, origin)
+                return
 
             # Try Supabase first; if the table is missing/empty/unreachable
             # OR returns zero rows, fall back to the static fundamentals
@@ -290,9 +310,12 @@ class handler(BaseHTTPRequestHandler):
             # sources return the same row shape, so the rest of the handler
             # is source-agnostic.
             source = "supabase"
-            rows, err = _query_supabase(metric, order, limit)
+            # Supabase path doesn't support kind filter yet (the table
+            # only stores stocks, not ETFs). When a kind filter is
+            # present, skip Supabase and go straight to the static path.
+            rows, err = (None, "kind_filter_no_supabase") if kind else _query_supabase(metric, order, limit)
             if err or not rows:
-                rows, static_err = _query_static(metric, order, limit)
+                rows, static_err = _query_static(metric, order, limit, kind=kind)
                 if static_err and not rows:
                     _send_json(self, 502, {
                         "error": err or static_err,

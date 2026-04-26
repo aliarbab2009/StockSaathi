@@ -1327,7 +1327,19 @@ function detectScreenerQuery(query) {
     [/\broe\b|\breturn[\s-]?on[\s-]?equity\b/,                                                                "roe"],
     [/\beps\b|\bearnings[\s-]?per[\s-]?share\b/,                                                              "eps"],
     [/\bdebt[\s-]?to[\s-]?equity\b|\bd\/?e\b|\bdebt\b|\bleverage\b|\bleveraged\b/,                            "debt_to_equity"],
+    // ETF-specific. AUM (assets under management) is the fund-side
+    // equivalent of market cap. Expense ratio is a fee. Tracking
+    // error is how closely the ETF mirrors its index.
+    [/\bassets[\s-]?under[\s-]?management\b|\baum\b/,                                                          "aum"],
+    [/\bexpense[\s-]?ratio\b|\bfees?\b|\bcheap(est)?[\s-]?etf/,                                                 "expense_ratio"],
+    [/\btracking[\s-]?error\b/,                                                                                  "tracking_error"],
   ];
+  // Optional kind filter â€” query mentions 'etf' or 'mutual fund' or
+  // 'stock' to restrict the universe.
+  const kindMatch =
+    /\b(etfs?|exchange[\s-]?traded[\s-]?fund)\b/.test(q) ? "ETF" :
+    /\b(stocks?|equit(y|ies)|share[s]?)\b/.test(q) ? "STOCK" :
+    null;
   let metric = null;
   for (const [re, col] of metricPatterns) { if (re.test(q)) { metric = col; break; } }
   if (!metric) return null;
@@ -1338,7 +1350,7 @@ function detectScreenerQuery(query) {
   // descending ("the 52-week high" implies the biggest). Default to
   // desc if a direction word is absent.
   if (!order) order = "desc";
-  return { metric, order };
+  return { metric, order, kind: kindMatch };
 }
 
 async function runAiSearch(query, render) {
@@ -1359,7 +1371,8 @@ async function runAiSearch(query, render) {
     const screen = detectScreenerQuery(query);
     let d;
     if (screen) {
-      const url = `/api/screener?metric=${encodeURIComponent(screen.metric)}&order=${encodeURIComponent(screen.order)}&limit=12`;
+      const kindParam = screen.kind ? `&kind=${encodeURIComponent(screen.kind)}` : "";
+      const url = `/api/screener?metric=${encodeURIComponent(screen.metric)}&order=${encodeURIComponent(screen.order)}&limit=12${kindParam}`;
       const res = await fetch(url, { signal });
       if (!res.ok) throw new Error("http_" + res.status);
       d = await res.json();
