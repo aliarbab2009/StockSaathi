@@ -486,16 +486,27 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
 
 const MF_HISTORY_TTL_MS = 60 * 60_000;
 const _mfHistoryCache = new Map();
-// Hotfix47b: extended to remap the new YTD/5Y/MAX timeframes to MF API
-// values. The MF API (api/mf-history.py) accepts {1M, 3M, 6M, 1Y, 3Y,
-// 5Y, ALL}. Frontend uses YTD/MAX names â€” remap here.
+// Hotfix47b/51c: timeframe remap for the MF API. mfapi.in accepts {1M,
+// 3M, 6M, 1Y, 3Y, 5Y, ALL}. Frontend names map as below.
 //   1D, 1W   â†’ 1M (MF NAV is daily; sub-day not meaningful)
-//   YTD      â†’ 1Y (we fetch 1Y and the chart caller may slice client-
-//                  side; for now showing 'last 12 months' is close
-//                  enough to YTD for the typical MF user)
+//   YTD      â†’ 5Y (fetch a wider window then slice from Jan 1 client-
+//                  side â€” see _sliceYtd in getMfHistory). 5Y is enough
+//                  to cover any realistic YTD even for funds launched
+//                  in the past 12 months.
 //   MAX      â†’ ALL (full AMFI history for the scheme)
 //   5Y, 1M, 3M, 6M, 1Y pass through unchanged
-const _MF_TF_REMAP = { "1D": "1M", "1W": "1M", "YTD": "1Y", "MAX": "ALL" };
+const _MF_TF_REMAP = { "1D": "1M", "1W": "1M", "YTD": "5Y", "MAX": "ALL" };
+
+// Slice an OHLC array to entries from Jan 1 of the current year onward.
+// Used by getMfHistory's YTD path so the chart shows actual year-to-date
+// instead of the past 12 months. Stock equivalent: /api/history's native
+// `range=ytd` already does this server-side; mfapi.in doesn't support
+// YTD so we slice client-side from a wider series.
+function _sliceYtd(ohlc) {
+  if (!Array.isArray(ohlc) || ohlc.length === 0) return ohlc;
+  const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
+  return ohlc.filter(k => k && typeof k.t === "number" && k.t >= yearStart);
+}
 
 export async function getMfHistory(symbol, tf = "1Y") {
   const mappedTf = _MF_TF_REMAP[tf] || tf;
@@ -531,6 +542,12 @@ export async function getMfHistory(symbol, tf = "1Y") {
   }
 
   if (!result) result = { ohlc: [], source: "none" };
+  // Hotfix51c: client-side YTD slice. The cached result keeps the wider
+  // 5Y data so other timeframes that share the cache don't re-fetch,
+  // but the YTD-specific cache key gets a sliced ohlc array.
+  if (tf === "YTD" && result.ohlc?.length) {
+    result = { ...result, ohlc: _sliceYtd(result.ohlc) };
+  }
   _mfHistoryCache.set(key, { data: result, ts: Date.now() });
   return result;
 }

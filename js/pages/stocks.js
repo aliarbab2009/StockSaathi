@@ -815,7 +815,24 @@ export function renderStocks(main) {
       <div class="flex items-start justify-between wrap gap-3" style="margin-bottom: var(--sp-4);">
         <div>
           <h1>Markets</h1>
-          <p class="muted">${allInst.length} instruments · ${STOCKS.length} featured · ${allInst.length - INSTRUMENTS.length > 0 ? `${allInst.length - INSTRUMENTS.length} more NSE listings` : `${MUTUAL_FUNDS.length} mutual funds`}</p>
+          <p class="muted">${(() => {
+            // Hotfix51d: render an honest breakdown by kind instead of a
+            // misleading 16k total that includes 5k+ wound-up zombie MFs.
+            // Counts ACTIVE instruments only:
+            //   - all EQUITY (Yahoo-tracked)
+            //   - all ETF (Yahoo-tracked)
+            //   - non-terminated MFs (mfapi/AMFI; nav>=0.01 AND nav_date
+            //     less than 365d old, mirrors _isMfTerminated/isTerminatedFund)
+            const equityCt = allInst.filter(i => i.kind === KIND_EQUITY).length;
+            const etfCt    = allInst.filter(i => i.kind === KIND_ETF).length;
+            const mfActive = allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length;
+            const fmt = (n) => n.toLocaleString("en-IN");
+            const parts = [];
+            if (equityCt) parts.push(`${fmt(equityCt)} stocks`);
+            if (etfCt)    parts.push(`${fmt(etfCt)} ETFs`);
+            if (mfActive) parts.push(`${fmt(mfActive)} mutual funds`);
+            return parts.join(" Â· ");
+          })()}</p>
         </div>
         <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
       </div>
