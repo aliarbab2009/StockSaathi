@@ -52,6 +52,27 @@ const MOOD_FAIL_OPEN_MS = 2000;
 const KIND_MF = "MF";
 const KIND_EQUITY = "EQUITY";
 const KIND_ETF = "ETF";
+// Seeded sparkline window: how many close-prices to feed into sparkline().
+// 40 ticks at ~5 min intervals ~= 200 min ~= a full trading session of
+// the post-Hotfix9 5-minute resampled series. Lifted to a const so all
+// 5 callsites share one source of truth.
+const SPARKLINE_SEED_LENGTH = 40;
+// Cold-start seed cap (top-N by sort order). 30 is a tighter slice than
+// VIEWPORT_PREHEAT_SIZE (60) â€” the cold-start IIFE just needs enough
+// to fill the visible viewport, not the scroll buffer too.
+const COLD_START_SEED = 30;
+// Threshold on quoteCache size before the page asks Gemini for a market
+// mood narrative. <30 means "not enough signal yet"; the LLM banner
+// would just see noise.
+const MOOD_FETCH_QUOTE_THRESHOLD = 30;
+// Threshold for considering the fresh-cache "good enough" to skip the
+// cold-start gate. >=5 ensures we don't accidentally count an empty
+// cache as ready (which would briefly show skeleton-priced cards).
+const FRESH_CACHE_READY_THRESHOLD = 5;
+// Live-quote subscription cadence. 10 s matches Yahoo Finance's
+// effective tick rate during market hours; faster polling adds load
+// without giving us new prices.
+const QUOTE_POLL_INTERVAL_MS = 10_000;
 let _debounceTimer = null;
 
 // Visible-symbols set + observer for viewport-only polling. Populated as
