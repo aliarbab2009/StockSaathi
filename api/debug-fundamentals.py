@@ -142,8 +142,17 @@ def _diag(symbol):
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Temporarily public for debugging — no secrets leaked, just bool
-        # statuses + small JSON-safe samples. Re-add auth once diagnosed.
+        # Hotfix40a: re-enabled the auth check that was commented out
+        # for live debugging. The 'no secrets leaked' comment was wrong:
+        # the response leaked the first 8 chars of Yahoo's authenticated
+        # crumb token, internal tier latencies (timing oracle for
+        # cache-vs-upstream fingerprinting), and the full per-tier
+        # architecture (cache â†’ yahoo v7 â†’ v10 â†’ tickertape â†’ v8) â€”
+        # all useful for an attacker mapping the stack.
+        authz = self.headers.get("Authorization", "") or self.headers.get("authorization", "")
+        if not _auth_ok(authz):
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
         q = parse_qs(urlparse(self.path).query)
         symbol = (q.get("symbol") or ["RELIANCE"])[0].strip().upper()
         try:
