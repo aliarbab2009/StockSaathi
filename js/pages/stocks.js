@@ -1395,7 +1395,17 @@ async function runAiSearch(query, render) {
         mfs.sort((a, b) => screen.order === "desc" ? b.nav - a.nav : a.nav - b.nav);
         const top = mfs.slice(0, 12);
         const direction = screen.order === "desc" ? "highest" : "lowest";
-        const sample = top.slice(0, 3).map(m => `${m.symbol} (â‚¹${m.nav.toFixed(2)})`).join(", ");
+        // Use ₹ (₹) as a JS escape to dodge any UTF-8 mojibake â€”
+        // a previous attempt embedded the literal char and the file
+        // ended up double-encoded by an editor + Bash combination.
+        const RUPEE = "₹";
+        // Show fund names in the rationale, not AMFI scheme codes
+        // (e.g. 'MF_148398' is meaningless to the user). Truncate
+        // long names to keep the rationale readable.
+        const sample = top.slice(0, 3).map(m => {
+          const nm = (m.name || m.symbol).replace(/ - (Direct|Regular) Plan.*$/i, "").slice(0, 40);
+          return `${nm} (${RUPEE}${m.nav.toFixed(2)})`;
+        }).join("; ");
         d = {
           matches: top.map(m => m.symbol),
           rationale: top.length
