@@ -1375,7 +1375,25 @@ async function runAiSearch(query, render) {
       d = await res.json();
     }
     if (signal.aborted) return;
-    aiSearch = d?.matches?.length ? { matches: d.matches, rationale: d.rationale || "" } : { matches: [], rationale: d?.rationale || "No matches in the current universe." };
+    if (d?.matches?.length) {
+      aiSearch = { matches: d.matches, rationale: d.rationale || "" };
+    } else {
+      // Heuristic detection of "asked about a metric we don't have" so the
+      // user gets a useful explanation rather than a generic 'try again'.
+      // Today only 'debt' is in this bucket â€” fundamentals_cache doesn't
+      // store debt-to-equity or absolute debt yet (pending Phase 2 of
+      // Hotfix28). Saying that out loud is friendlier than "0 matches".
+      const ql = query.toLowerCase();
+      let rationale = d?.rationale || "No matches in the current universe.";
+      if (/\b(debt|borrow|leverage|liability|liabilit)\b/.test(ql)) {
+        rationale = "Saathi doesn't have debt data in the universe yet. Try queries about price, P/E, dividend yield, market cap, 52-week high/low, beta, ROE, or sectors.";
+      } else if (/\b(volume|liquidity|turnover|float)\b/.test(ql)) {
+        rationale = "Saathi doesn't track trading volume in the universe yet. Try queries about price, P/E, dividend yield, market cap, 52-week high/low, beta, ROE, or sectors.";
+      } else if (/\b(promoter|insider|shareholding|fii|dii)\b/.test(ql)) {
+        rationale = "Saathi doesn't have shareholding-pattern data yet. Try queries about price, P/E, dividend yield, market cap, 52-week high/low, beta, ROE, or sectors.";
+      }
+      aiSearch = { matches: [], rationale };
+    }
   } catch (e) {
     if (signal.aborted || e.name === "AbortError") return;
     aiSearch = { matches: [], rationale: "Saathi couldn't search just now. Try again in a moment." };
