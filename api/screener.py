@@ -163,7 +163,14 @@ def _load_static_fundamentals():
     # Vercel deploys api/ + js/ as siblings under the project root. From
     # api/screener.py, the static JSON is at ../js/data/fundamentals_top200.json
     # â€” but the relative path depends on the runtime cwd. Try a few.
+    # Try the full-universe file first (2,363 stocks, every active EQUITY
+    # symbol from universeFull.json) and fall back to the smaller top-200
+    # file if the full one is missing or corrupted. The full file is
+    # ~800 KB raw / ~140 KB brotli â€” cheap enough to ship in the bundle.
     candidates = [
+        os.path.join(os.path.dirname(__file__), "..", "js", "data", "fundamentals_full.json"),
+        os.path.join(os.getcwd(), "js", "data", "fundamentals_full.json"),
+        os.path.join("/var/task", "js", "data", "fundamentals_full.json"),
         os.path.join(os.path.dirname(__file__), "..", "js", "data", "fundamentals_top200.json"),
         os.path.join(os.getcwd(), "js", "data", "fundamentals_top200.json"),
         os.path.join("/var/task", "js", "data", "fundamentals_top200.json"),
@@ -231,10 +238,11 @@ def _build_rationale(metric, order, rows, source=None):
         # ship it; only Yahoo v10 does). Once the user runs the
         # fundamentals_cache migration + admin-sync-fundamentals cron,
         # debt populates and this branch goes quiet.
-        if metric == "debt_to_equity" and source == "static_top200":
-            return ("Debt-to-equity data isn't in the limited universe yet. "
-                    "Will populate once the daily fundamentals cron runs against "
-                    "the full universe.")
+        if metric == "debt_to_equity" and source in ("static_top200", "static_full"):
+            return ("Debt-to-equity data isn't in the static fallback "
+                    "(Tickertape's ratios endpoint doesn't ship it). Will "
+                    "populate once the Supabase fundamentals_cache table is "
+                    "populated by the daily Yahoo-v10 cron.")
         return f"No stocks with {METRIC_LABELS.get(metric, metric)} data in the universe yet."
     label = METRIC_LABELS.get(metric, metric)
     direction = "highest" if order == "desc" else "lowest"
@@ -292,7 +300,10 @@ class handler(BaseHTTPRequestHandler):
                         "static_err": static_err,
                     }, origin)
                     return
-                source = "static_top200"
+                # Determine which static file backed the result so the
+                # rationale can mention coverage limits accurately.
+                payload = _STATIC_FUNDAMENTALS or {}
+                source = "static_full" if len(payload.get("stocks") or {}) > 1000 else "static_top200"
             matches = [r["symbol"] for r in (rows or []) if r.get("symbol")]
             rationale = _build_rationale(metric, order, rows or [], source=source)
             _send_json(self, 200, {
