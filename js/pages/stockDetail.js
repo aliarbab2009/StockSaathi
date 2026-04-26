@@ -2008,8 +2008,14 @@ function renderMfInvestBox(inst, symbol, curNavPaise, holding) {
     const cutoffMin = isLiquidLike ? (12 * 60) : (13 * 60 + 30);
     beforeCutoff = totalMin < cutoffMin;
   } catch (_) {}
+  // Hotfix51e: corrected NAV declaration timing. SEBI mandates AMCs
+  // publish daily NAVs by 11 PM IST on every business day. In practice
+  // most equity NAVs land 9-10 PM, debt 10-11 PM, but the regulatory
+  // deadline (and the messaging that's accurate for ALL scheme types)
+  // is 11 PM. Previous text said '~9 PM' which understated the window
+  // and confused users seeing late updates.
   const navNote = beforeCutoff
-    ? `Order before <strong>${cutoffLabel}</strong> today gets <strong>today's NAV</strong> (declared ~9 PM IST).`
+    ? `Order before <strong>${cutoffLabel}</strong> today gets <strong>today's NAV</strong> (declared by 11 PM IST per SEBI).`
     : `After <strong>${cutoffLabel}</strong> cutoff — order will get <strong>tomorrow's NAV</strong>.`;
 
   // Initial amount default: ₹5000 first investment, ₹1000 if user already holds
