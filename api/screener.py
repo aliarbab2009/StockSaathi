@@ -28,6 +28,7 @@ Rejects unknown metrics with 400. No LLM calls. Sub-100 ms typical.
 
 import json
 import os
+import sys
 import time
 import urllib.request
 import urllib.error
@@ -132,6 +133,60 @@ def _query_supabase(metric, order, limit):
         return None, f"supabase_err_{type(e).__name__}"
 
 
+# Module-level cache for the static fundamentals JSON. Loaded lazily on
+# first fallback miss; subsequent fallbacks reuse the parsed dict.
+_STATIC_FUNDAMENTALS = None
+_STATIC_FUNDAMENTALS_LOAD_ERR = None
+
+
+def _load_static_fundamentals():
+    """Read js/data/fundamentals_top200.json from the deployed bundle.
+    Used as a fallback when fundamentals_cache table is missing or
+    empty (which is the current state â€” user hasn't run the migration
+    yet)."""
+    global _STATIC_FUNDAMENTALS, _STATIC_FUNDAMENTALS_LOAD_ERR
+    if _STATIC_FUNDAMENTALS is not None:
+        return _STATIC_FUNDAMENTALS
+    if _STATIC_FUNDAMENTALS_LOAD_ERR is not None:
+        return None
+    # Vercel deploys api/ + js/ as siblings under the project root. From
+    # api/screener.py, the static JSON is at ../js/data/fundamentals_top200.json
+    # â€” but the relative path depends on the runtime cwd. Try a few.
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "..", "js", "data", "fundamentals_top200.json"),
+        os.path.join(os.getcwd(), "js", "data", "fundamentals_top200.json"),
+        os.path.join("/var/task", "js", "data", "fundamentals_top200.json"),
+    ]
+    for p in candidates:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            _STATIC_FUNDAMENTALS = payload
+            return payload
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            _STATIC_FUNDAMENTALS_LOAD_ERR = str(e)[:80]
+            return None
+    _STATIC_FUNDAMENTALS_LOAD_ERR = "static_json_not_found"
+    return None
+
+
+def _query_static(metric, order, limit):
+    """Sort the in-memory static JSON by the requested metric. Mirrors
+    the shape that _query_supabase returns so the handler can swap
+    between sources transparently."""
+    payload = _load_static_fundamentals()
+    if not payload:
+        return None, _STATIC_FUNDAMENTALS_LOAD_ERR or "static_unavailable"
+    stocks = (payload.get("stocks") or {}).values()
+    # Filter out rows missing the metric (mirrors not.is.null in PostgREST).
+    valid = [s for s in stocks if s.get(metric) is not None]
+    valid.sort(key=lambda s: s.get(metric), reverse=(order == "desc"))
+    rows = valid[:limit]
+    return rows, None
+
+
 def _format_value(metric, val):
     """Human-readable rendering of a metric value for the rationale string."""
     if val is None:
@@ -196,10 +251,23 @@ class handler(BaseHTTPRequestHandler):
                 _send_json(self, 400, {"error": "bad_order"}, origin)
                 return
 
+            # Try Supabase first; if the table is missing/empty/unreachable
+            # OR returns zero rows, fall back to the static fundamentals
+            # sidecar shipped at js/data/fundamentals_top200.json. Both
+            # sources return the same row shape, so the rest of the handler
+            # is source-agnostic.
+            source = "supabase"
             rows, err = _query_supabase(metric, order, limit)
-            if err:
-                _send_json(self, 502, {"error": err}, origin)
-                return
+            if err or not rows:
+                rows, static_err = _query_static(metric, order, limit)
+                if static_err and not rows:
+                    _send_json(self, 502, {
+                        "error": err or static_err,
+                        "supabase_err": err,
+                        "static_err": static_err,
+                    }, origin)
+                    return
+                source = "static_top200"
             matches = [r["symbol"] for r in (rows or []) if r.get("symbol")]
             rationale = _build_rationale(metric, order, rows or [])
             _send_json(self, 200, {
@@ -207,7 +275,7 @@ class handler(BaseHTTPRequestHandler):
                 "rationale": rationale,
                 "metric": metric,
                 "order": order,
-                "source": "screener",
+                "source": source,
             }, origin)
         except Exception as e:
             _send_json(self, 500, {"error": "handler_err", "detail": str(e)[:120]}, origin)
