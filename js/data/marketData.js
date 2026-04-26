@@ -716,29 +716,52 @@ async function fetchYahooHistory(symbol, range, interval, opts = {}) {
 }
 
 function synthMFQuote(symbol, inst) {
-  // Hotfix51b: was `const basePaise = inst.price` — but MF instances in
-  // the universe have price=null (only nav is populated by mfFull.json).
-  // null * 1.005 → 0 → pricePaise: 0 → stockDetail header rendered
-  // 'â‚¹0' for every MF detail page. Now prefer inst.nav * 100 (rupees
-  // → paise) and fall back to inst.price for the rare path where price
-  // is set but nav isn't.
+  // Hotfix54: Hotfix51b correctly switched basePaise from inst.price to
+  // inst.nav*100, but kept the random drift formula from when this
+  // function was used as a poor man's intraday simulator. That drift
+  // had no business being applied to MF NAVs â€” AMFI publishes one
+  // NAV per scheme per day, end-of-session, period. The 12-second
+  // poll then bounced the header price by Â±0.2% every tick (user-
+  // reported screenshots showed Rs.11.17 -> Rs.11.18 -> Rs.11.19 in
+  // 4 seconds on a static fund), producing fake change% numbers.
+  // Now: return the actual NAV. Day-over-day change comes from the
+  // mfHistory cache when available (last two closes), else 0%.
   const basePaise = (typeof inst.nav === "number" && inst.nav > 0)
     ? Math.round(inst.nav * 100)
     : inst.price;
-  if (!basePaise || basePaise <= 0) {
-    // Truly missing data: return a clearly-undefined quote rather than
-    // a fake â‚¹0. The detail page's formatRupees fallback handles
-    // null gracefully (renders 'â€”').
-    return null;
+  if (!basePaise || basePaise <= 0) return null;
+  // Best-effort prev-close lookup from the warm mfHistory cache. Any
+  // recent timeframe will do (1M / 1Y / etc.) since they all share the
+  // same series prefix â€” we just want the second-to-last entry's close.
+  // No fetch here; if the cache is cold (first load before chart fires)
+  // we report 0% change and the next render after the chart loads will
+  // pick up the real change% via the cache hit.
+  let prevPaise = basePaise;
+  let changePct = 0;
+  for (const [key, entry] of _mfHistoryCache) {
+    if (!key.startsWith(symbol + "|")) continue;
+    const ohlc = entry?.data?.ohlc;
+    if (Array.isArray(ohlc) && ohlc.length >= 2) {
+      const prev = ohlc[ohlc.length - 2];
+      if (prev && typeof prev.c === "number" && prev.c > 0) {
+        prevPaise = prev.c;
+        changePct = (basePaise - prevPaise) / prevPaise;
+        break;
+      }
+    }
   }
-  const drift = (Math.sin(Date.now() / 3_600_000) * 0.005) + (Math.random() * 0.002 - 0.001);
-  const cur = Math.round(basePaise * (1 + drift));
   return {
-    symbol, pricePaise: cur, prevClosePaise: basePaise,
-    changePct: (cur - basePaise) / basePaise,
-    high: cur, low: cur, volume: 0,
-    currency: "INR", ts: Date.now(),
-    stale: false, source: "mf-static",
+    symbol,
+    pricePaise: basePaise,
+    prevClosePaise: prevPaise,
+    changePct,
+    high: basePaise,
+    low: basePaise,
+    volume: 0,
+    currency: "INR",
+    ts: Date.now(),
+    stale: false,
+    source: "mf-static",
   };
 }
 
