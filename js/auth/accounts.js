@@ -291,6 +291,19 @@ export async function logoutAccount() {
 let _cachedUser = null;
 let _cachedAt = 0;
 
+// Hotfix41: setter so completeOnboarding (in state.js) can patch the
+// cached user object the moment local state flips. Without this, the
+// router's getState() reads _cachedUser.onboarded=false (still the
+// pre-completion DB value, since updateProfile is async and hasn't
+// resolved) and bounces the just-onboarded user back to /onboarding.
+// patchCachedUser does NOT trigger a refresh â€” it just edits the
+// cached fields in place. The async DB write still flows through
+// updateProfile().
+export function patchCachedUser(patch) {
+  if (!_cachedUser || !patch) return;
+  _cachedUser = { ..._cachedUser, ...patch };
+}
+
 export function currentUser() {
   // Fast path: async refreshCurrentUser already filled the cache.
   if (_cachedUser) return _cachedUser;

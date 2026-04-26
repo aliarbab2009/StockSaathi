@@ -177,7 +177,14 @@ export function getState() {
       school: user?.school ?? us.profile.school,
       classCode: user?.classCode ?? us.profile.classCode,
       riskProfile: user?.riskProfile ?? us.profile.riskProfile,
-      onboarded: user?.onboarded ?? us.profile.onboarded,
+      // Hotfix41: was `user?.onboarded ?? us.profile.onboarded`. The `??`
+      // operator only falls through on null/undefined â€” so if the auth
+      // layer's cached user has onboarded=false (DB write hadn't yet
+      // resolved), that false beat local state's `true` and the router
+      // bounced the just-onboarded user back to /onboarding. Onboarding
+      // is a one-way flag (no legitimate "un-onboard"), so a true from
+      // EITHER source means the user is onboarded.
+      onboarded: !!(user?.onboarded) || !!(us.profile.onboarded),
       createdAt: user?.createdAt || null,
     },
     portfolio: us.portfolio,
@@ -259,7 +266,7 @@ export function switchUser() {
 }
 
 // ---- profile mutations (DB-backed via auth/accounts.js:updateProfile) ----
-import { updateProfile } from "./auth/accounts.js";
+import { updateProfile, patchCachedUser } from "./auth/accounts.js";
 
 export function completeOnboarding({ age, school, classCode, riskProfile }) {
   // Update local state IMMEDIATELY so any route that checks `onboarded`
@@ -270,6 +277,13 @@ export function completeOnboarding({ age, school, classCode, riskProfile }) {
     ...s,
     user: { ...s.user, age, school, classCode, riskProfile, onboarded: true },
   }));
+  // Hotfix41: ALSO patch the auth-layer's _cachedUser. Without this,
+  // getState() at line ~180 does `user?.onboarded ?? us.profile.onboarded`
+  // — and `??` returns the auth layer's stale `false` over the local
+  // truth. Router then bounces to /onboarding even though local state
+  // says onboarded=true. The setter mutates _cachedUser in place so the
+  // very next currentUser() returns onboarded=true.
+  patchCachedUser({ age, school, classCode, riskProfile, onboarded: true });
   // Fire the DB write in the background. Errors get logged but never block
   // the UI. On next login the server row is fetched fresh, so a transient
   // failure here just means the write retries naturally next session.
