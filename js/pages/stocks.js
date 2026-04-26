@@ -686,7 +686,7 @@ export function renderStocks(main) {
     // Tab counts — derived from the full universe (all kinds), not the
     // filtered list. Shows "..." until Tier-2 lands.
     const equityCount = universeReady ? allInst.filter(i => i.kind === KIND_EQUITY).length : null;
-    const etfCount    = universeReady ? allInst.filter(i => i.kind === "ETF").length : null;
+    const etfCount    = universeReady ? allInst.filter(i => i.kind === KIND_ETF).length : null;
     const mfCount     = universeReady ? allInst.filter(i => i.kind === "MF").length : null;
     // Preserve focus + caret on the search input across the re-render — every
     // keystroke triggers this render and the 10s live-quote poll does too, so
@@ -1450,7 +1450,7 @@ function applyFilters(all, f, state, quoteCache) {
     const orderMap = new Map(aiSearch.matches.map((s, i) => [s, i]));
     let list = all.filter(i => orderMap.has(i.symbol));
     if (f.kind === "EQUITY") list = list.filter(i => i.kind === KIND_EQUITY);
-    else if (f.kind === "ETF") list = list.filter(i => i.kind === "ETF");
+    else if (f.kind === "ETF") list = list.filter(i => i.kind === KIND_ETF);
     else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
     else if (f.kind === "watchlist") {
       const wl = new Set(state.watchlist);
@@ -1462,7 +1462,7 @@ function applyFilters(all, f, state, quoteCache) {
   }
   let list = all.slice();
   if (f.kind === "EQUITY") list = list.filter(i => i.kind === KIND_EQUITY);
-  else if (f.kind === "ETF") list = list.filter(i => i.kind === "ETF");
+  else if (f.kind === "ETF") list = list.filter(i => i.kind === KIND_ETF);
   else if (f.kind === "MF") {
     list = list.filter(i => i.kind === "MF");
     // MF-specific facets: category bucket (Equity/Debt/Hybrid/Index/etc.)
