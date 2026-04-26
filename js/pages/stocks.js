@@ -260,7 +260,16 @@ export function renderStocks(main) {
   // different page) is ignored — render() doesn't fire.
   let _lastWlSig = getState().watchlist.join(",");
   let _lastUserSig = getState().user?.id || "";
-  let _lastHoldingsSig = JSON.stringify(getState().holdings || {});
+  // CRITICAL: init format MUST match the comparison format below
+  // (line 271: Object.keys(...).sort().join(",")). Pre-fix this was
+  // JSON.stringify(holdings) â€” which always differs from the
+  // sorted-keys join, so the first state emit (which fires shortly
+  // after mount when state.js does its Supabase session resume +
+  // cross-tab storage sync) always saw a fake "holdings changed"
+  // signal and triggered render() â€” wiping the hydrated grid for
+  // a no-op state change. User-reported residual blink after
+  // Hotfix22+23 ('cards still blink once before stabilizing').
+  let _lastHoldingsSig = Object.keys(getState().holdings || {}).sort().join(",");
   const unsub = subscribe((state) => {
     if (cancelled) return;
     const wlSig = state.watchlist.join(",");
