@@ -480,7 +480,19 @@ export function renderStocks(main) {
     if (!host) return;
     const ms = marketStatus();
     for (const sym of Object.keys(quotes)) {
-      const sel = `.stock-card[data-sym="${CSS.escape(sym)}"][data-rendered="1"]`;
+      // Find ANY card for this symbol (stub OR hydrated). Pre-Hotfix26
+      // the selector filtered to [data-rendered="1"], which skipped
+      // stubs entirely â€” so when the warm-up batch returned quotes
+      // for stub cards (typical after Hotfix21c made stubs stay
+      // stubs until quotes arrive), patchHydratedCards silently
+      // dropped them at the querySelector and the cards stayed
+      // skeleton forever. User-reported: 'been staring for two
+      // minutes' on R-prefixed stocks deep in the alphabetical scroll.
+      // The skeleton-state guard at line ~510 (if !priceEl â†’
+      // rehydrateCardsInPlace) is what actually transforms a stub
+      // â†’ hydrated â€” we just had to STOP filtering it out before
+      // reaching the guard.
+      const sel = `.stock-card[data-sym="${CSS.escape(sym)}"]`;
       const card = host.querySelector(sel);
       if (!card) continue;
       const q = quotes[sym];
