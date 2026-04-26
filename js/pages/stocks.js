@@ -233,7 +233,7 @@ export function renderStocks(main) {
   // user is about to see are already in cache. Threshold 5 is below the
   // cold-start seed of 30 (line ~200) so we don't accidentally count an
   // empty cache as ready.
-  if (Object.keys(quoteCache).length >= 5) _initialQuotesLoaded = true;
+  if (Object.keys(quoteCache).length >= FRESH_CACHE_READY_THRESHOLD) _initialQuotesLoaded = true;
 
   render();
   // Subscribe with a state-slice diff so we only re-render when something
@@ -374,7 +374,7 @@ export function renderStocks(main) {
     }
     // Cold-start seed: top-30 by index prominence in the current source view.
     const state = getState();
-    const list = applyFilters(source(), filter, state, quoteCache).slice(0, 30);
+    const list = applyFilters(source(), filter, state, quoteCache).slice(0, COLD_START_SEED);
     return list.filter(i => i.kind !== KIND_MF).map(i => i.symbol);
   }
 
@@ -431,7 +431,7 @@ export function renderStocks(main) {
     if (filter.sort === "gainers" || filter.sort === "losers") {
       renderList();
     }
-    if (!marketMood && !_moodFetched && Object.keys(quoteCache).length > 30) {
+    if (!marketMood && !_moodFetched && Object.keys(quoteCache).length > MOOD_FETCH_QUOTE_THRESHOLD) {
       _moodFetched = true;
       fetchMarketMood().then((m) => {
         if (cancelled) return;
@@ -449,7 +449,7 @@ export function renderStocks(main) {
         if (!wasReady) render();
       }).catch(() => {});
     }
-  }, 10_000);
+  }, QUOTE_POLL_INTERVAL_MS);
 
   // Patch the price/change/sparkline of hydrated cards in place. Stub cards
   // (not yet scrolled into view) skip — they'll pick up the fresh quote when
