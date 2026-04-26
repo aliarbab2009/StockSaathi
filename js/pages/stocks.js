@@ -687,7 +687,7 @@ export function renderStocks(main) {
     // filtered list. Shows "..." until Tier-2 lands.
     const equityCount = universeReady ? allInst.filter(i => i.kind === KIND_EQUITY).length : null;
     const etfCount    = universeReady ? allInst.filter(i => i.kind === KIND_ETF).length : null;
-    const mfCount     = universeReady ? allInst.filter(i => i.kind === "MF").length : null;
+    const mfCount     = universeReady ? allInst.filter(i => i.kind === KIND_MF).length : null;
     // Preserve focus + caret on the search input across the re-render — every
     // keystroke triggers this render and the 10s live-quote poll does too, so
     // without this the user can't type more than one character at a time.
@@ -736,12 +736,12 @@ export function renderStocks(main) {
       </div>
 
       <div class="filter-pills" style="margin-bottom: var(--sp-3);">
-        <button class="filter-pill ${filter.kind === "EQUITY" ? "active" : ""}" data-kind="EQUITY">Stocks${equityCount ? ` (${equityCount})` : ""}</button>
-        <button class="filter-pill ${filter.kind === "ETF" ? "active" : ""}" data-kind="ETF">ETFs${etfCount ? ` (${etfCount})` : ""}</button>
-        <button class="filter-pill ${filter.kind === "MF" ? "active" : ""}" data-kind="MF">Mutual Funds${mfCount ? ` (${mfCount})` : ""}</button>
+        <button class="filter-pill ${filter.kind === KIND_EQUITY ? "active" : ""}" data-kind="EQUITY">Stocks${equityCount ? ` (${equityCount})` : ""}</button>
+        <button class="filter-pill ${filter.kind === KIND_ETF ? "active" : ""}" data-kind="ETF">ETFs${etfCount ? ` (${etfCount})` : ""}</button>
+        <button class="filter-pill ${filter.kind === KIND_MF ? "active" : ""}" data-kind="MF">Mutual Funds${mfCount ? ` (${mfCount})` : ""}</button>
         <button class="filter-pill ${filter.kind === "watchlist" ? "active" : ""}" data-kind="watchlist">★ Watchlist (${state.watchlist.length})</button>
       </div>
-      ${filter.kind === "MF" ? `
+      ${filter.kind === KIND_MF ? `
         <div class="filter-pills" style="margin-bottom: var(--sp-3); max-height: 88px; overflow-y: auto;">
           <button class="filter-pill ${filter.mfBucket === "all" ? "active" : ""}" data-mfbucket="all">All categories</button>
           ${getMfCategoryBuckets().map(b => `<button class="filter-pill ${filter.mfBucket === b ? "active" : ""}" data-mfbucket="${escapeAttr(b)}">${escapeHtml(b)}</button>`).join("")}
@@ -751,7 +751,7 @@ export function renderStocks(main) {
           <button class="filter-pill ${filter.mfPlan === "Direct" ? "active" : ""}" data-mfplan="Direct" title="Direct plans have a lower expense ratio because no distributor commission is built in">Direct</button>
           <button class="filter-pill ${filter.mfPlan === "Regular" ? "active" : ""}" data-mfplan="Regular" title="Regular plans pay a distributor commission embedded in the expense ratio">Regular</button>
         </div>
-      ` : filter.kind === "ETF" ? `
+      ` : filter.kind === KIND_ETF ? `
         <!-- ETF tab: equity-sector pills are useless here (every ETF row has
              sector="ETF", so any "Banking"/"Pharma"/etc. pill click yields 0
              results). Hide entirely. ETF category pills (Equity Index / Gold /
@@ -804,7 +804,7 @@ export function renderStocks(main) {
       // First click on Mutual Funds — kick the AMFI catalog fetch so the
       // grid populates with all ~14k schemes. Subsequent clicks are no-op
       // because ensureMfUniverseLoaded de-dupes via _mfLoadPromise.
-      if (filter.kind === "MF") ensureMfUniverseLoaded();
+      if (filter.kind === KIND_MF) ensureMfUniverseLoaded();
       render();
     }));
     // Show more / Show all rebuild only the grid (renderList) — no need to
@@ -1449,9 +1449,9 @@ function applyFilters(all, f, state, quoteCache) {
   if (aiSearch && aiSearch.matches && aiSearch.matches.length) {
     const orderMap = new Map(aiSearch.matches.map((s, i) => [s, i]));
     let list = all.filter(i => orderMap.has(i.symbol));
-    if (f.kind === "EQUITY") list = list.filter(i => i.kind === KIND_EQUITY);
-    else if (f.kind === "ETF") list = list.filter(i => i.kind === KIND_ETF);
-    else if (f.kind === "MF") list = list.filter(i => i.kind === "MF");
+    if (f.kind === KIND_EQUITY) list = list.filter(i => i.kind === KIND_EQUITY);
+    else if (f.kind === KIND_ETF) list = list.filter(i => i.kind === KIND_ETF);
+    else if (f.kind === KIND_MF) list = list.filter(i => i.kind === KIND_MF);
     else if (f.kind === "watchlist") {
       const wl = new Set(state.watchlist);
       list = list.filter(i => wl.has(i.symbol));
@@ -1461,10 +1461,10 @@ function applyFilters(all, f, state, quoteCache) {
     return list;
   }
   let list = all.slice();
-  if (f.kind === "EQUITY") list = list.filter(i => i.kind === KIND_EQUITY);
-  else if (f.kind === "ETF") list = list.filter(i => i.kind === KIND_ETF);
-  else if (f.kind === "MF") {
-    list = list.filter(i => i.kind === "MF");
+  if (f.kind === KIND_EQUITY) list = list.filter(i => i.kind === KIND_EQUITY);
+  else if (f.kind === KIND_ETF) list = list.filter(i => i.kind === KIND_ETF);
+  else if (f.kind === KIND_MF) {
+    list = list.filter(i => i.kind === KIND_MF);
     // MF-specific facets: category bucket (Equity/Debt/Hybrid/Index/etc.)
     // and plan type (Direct/Regular). Both default to "all".
     if (f.mfBucket && f.mfBucket !== "all") {
