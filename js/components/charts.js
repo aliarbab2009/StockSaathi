@@ -144,8 +144,16 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
   const all = [...held, ...panic];
   const { min: dataMin, max: dataMax } = minMax(all);
   const range = dataMax - dataMin;
-  const min = dataMin - range * 0.08;
-  const max = dataMax + range * 0.08;
+  // Hotfix44a: was 0.08 (8%) on each side. User-reported on the YES Bank
+  // Moratorium replay: y-axis MAX label said â‚¹1.74L while the actual
+  // peak value was â‚¹1.64L (held portfolio at the Mar 17, 2020 short-
+  // squeeze). 8% padding of a â‚¹1.2L range = â‚¹9.6k headroom, so the
+  // peak line touched only ~93% up the y-axis â€” misleadingly low.
+  // 3% feels right: enough breathing room to keep the peak/trough lines
+  // off the chart edge for visual clarity, tight enough that the y-axis
+  // labels reflect actual data magnitudes within ~5%.
+  const min = dataMin - range * 0.03;
+  const max = dataMax + range * 0.03;
   const paddingLeft = 60, paddingRight = 20, paddingTop = 20, paddingBottom = 28;
   const plotW = width - paddingLeft - paddingRight;
   const plotH = height - paddingTop - paddingBottom;
