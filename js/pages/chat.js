@@ -14,6 +14,45 @@ import {
   formatRelative, SESSIONS_KEY,
 } from "../features/chatSessions.js";
 
+// Defense-in-depth: strip any prompt-scaffolding patterns the model
+// might leak into its visible reply. The system prompt was rewritten
+// in Hotfix38a / 39a to remove the labeled-example format that was
+// triggering this leak, but we keep this strip layer as belt-and-
+// suspenders so future prompt edits can't reintroduce the bug.
+//
+// Patterns stripped (case-insensitive, multiline):
+//   "You hear: ..."          one whole line
+//   "You say: "              prefix
+//   "Reply: "                prefix
+//   "Assistant: "            prefix
+//   "[internal: ...]"        bracketed annotations
+//   "(NO tool call ...)"     parenthetical labels
+//   "(call get_X(...))"      tool-call narration
+//   "CALL get_X(...)"        explicit tool-call writeout
+//   "<user query>" / "<...>" placeholder echoes
+function stripScaffolding(text) {
+  if (!text || typeof text !== "string") return text;
+  let s = text;
+  // Whole-line patterns first (drop the entire line + newline).
+  s = s.replace(/^[ \t]*You hear:[^\n]*\n?/gmi, "");
+  s = s.replace(/^[ \t]*\[internal:[^\]]*\][ \t]*\n?/gmi, "");
+  s = s.replace(/^[ \t]*\(NO tool call[^)]*\)[ \t]*\n?/gmi, "");
+  s = s.replace(/^[ \t]*\(call [a-z_]+[^)]*\)[ \t]*\n?/gmi, "");
+  s = s.replace(/^[ \t]*CALL\s+[a-z_]+[ \t]*\([^)]*\)[ \t]*\n?/gmi, "");
+  // Prefix patterns next (strip the prefix, keep the rest of the line).
+  s = s.replace(/^[ \t]*You say:[ \t]*/gmi, "");
+  s = s.replace(/^[ \t]*Reply:[ \t]*/gmi, "");
+  s = s.replace(/^[ \t]*Assistant:[ \t]*/gmi, "");
+  // Empty placeholder echoes (rare but seen in the user's test).
+  s = s.replace(/<user query>/gi, "");
+  s = s.replace(/<literal reply prose>/gi, "");
+  // Collapse leading whitespace and any double-newlines created by the
+  // line-drop patterns above.
+  s = s.replace(/^\s+/, "");
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s;
+}
+
 // sessionsData is the persistent envelope { activeId, sessions: [...] }.
 // chatLog is ALWAYS a live reference to the active session's messages array
 // so existing push/pop/splice logic throughout this file keeps working —
@@ -468,7 +507,8 @@ async function sendAndReply(userText) {
     m_abortController = null;
     // Write into the OWNER session's messages directly so a mid-stream
     // session switch doesn't land the reply in the wrong chat.
-    const finalText = (replyText && replyText.trim()) ? replyText : (errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
+    const cleanedReply = stripScaffolding(replyText);
+    const finalText = (cleanedReply && cleanedReply.trim()) ? cleanedReply : (errorText || "Saathi couldn't answer that. Try rephrasing or asking again.");
     ownerMessages.push({ role: "assistant", text: finalText, ts: Date.now() });
     // Title/timestamp refresh on the owner session
     ownerSession.updatedAt = Date.now();
@@ -594,6 +634,12 @@ async function sendAndReply(userText) {
   const entry = ownerMessages[placeholderIdx];
   if (entry) {
     entry.streaming = false;
+    // Strip any leaked scaffolding from the streamed result. Done AFTER
+    // the typewriter drained so the user-visible drip looks natural;
+    // doing it mid-stream would cause text to disappear as it typed
+    // (jarring). At this point the stream is finished so the in-place
+    // mutation is invisible.
+    if (entry.text) entry.text = stripScaffolding(entry.text);
     if (result?.aborted) {
       // User clicked Stop — keep whatever streamed so far and add a warm
       // sign-off rather than the clinical "[stopped]".
