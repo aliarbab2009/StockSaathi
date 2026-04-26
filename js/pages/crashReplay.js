@@ -12,6 +12,27 @@ import { recordCoachMessage, setState, getState } from "../state.js";
 import { navigate } from "../router.js";
 import { generateCustomCrash } from "../features/customCrash.js";
 
+// Hotfix45b: post-process narration text to fix common LLM mis-phrasings.
+// Today's known issue: the LLM sometimes writes 'opens at â‚¹X' when the
+// startIndex/troughIndex/endIndex values are CLOSING prices (closes[0]
+// from Yahoo's daily series). For after-hours news events (RBI moratorium,
+// regulatory bans, results announcements) the day-0 price is the LAST CLOSE
+// before the news â€” not an open. Fix by rewriting these patterns at
+// display time so already-cached scenarios get the correct wording without
+// regenerating (LLM tokens, latency).
+function sanitizeNarration(text) {
+  if (!text || typeof text !== "string") return text;
+  return text
+    // 'opens at â‚¹X' / 'opens at Rs X' / 'opens at 36.80'  -> 'closes at â‚¹X'
+    .replace(/\bopens\s+at\b/gi, "closes at")
+    .replace(/\bopened\s+at\b/gi, "closed at")
+    .replace(/\bopening\s+(price|level)\s+(of\s+)?/gi, "closing $1 $2")
+    // 'opens to â‚¹X' (less common but appears) -> 'closes at â‚¹X'
+    .replace(/\bopens\s+to\b/gi, "closes at")
+    // 'on the open' / 'at the open' -> 'on the close' / 'at the close'
+    .replace(/\b(at|on)\s+the\s+open\b/gi, "$1 the close");
+}
+
 export function renderCrashReplay(main, params) {
   const scenarioId = params?.scenario;
 
@@ -212,7 +233,7 @@ function renderReplay(main, scenario) {
       <div style="height: 340px; margin: var(--sp-4) 0 0;" id="replay-chart"></div>
 
       <div class="replay-narration" id="narration">
-        ${escapeHtml(scenario.narrations[frames[0].n] || "Move the slider or click a date marker to begin.")}
+        ${escapeHtml(sanitizeNarration(scenario.narrations[frames[0].n]) || "Move the slider or click a date marker to begin.")}
       </div>
 
       <div id="dynamic-callout"></div>
@@ -320,7 +341,7 @@ function renderReplay(main, scenario) {
     if (activeNarKey !== lastNarrationKey) {
       narration.classList.add("fading");
       setTimeout(() => {
-        narration.textContent = scenario.narrations[activeNarKey] || "";
+        narration.textContent = sanitizeNarration(scenario.narrations[activeNarKey]) || "";
         narration.classList.remove("fading");
       }, 150);
       lastNarrationKey = activeNarKey;
@@ -559,7 +580,7 @@ function renderKeyMomentsTimeline(scenario) {
     .filter(f => f.n && scenario.narrations?.[f.n])
     .map(f => ({
       day: f.day,
-      narration: scenario.narrations[f.n],
+      narration: sanitizeNarration(scenario.narrations[f.n]),
       heldDelta: (f.held - frames[0].held) / frames[0].held,
     }));
   if (!moments.length) return "";

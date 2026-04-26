@@ -101,6 +101,7 @@ Rules:
 - totalDays = number of trading days in the provided data (== data.length).
 - Include 4 to 7 keyMoments whose "day" values map to actual indices in the provided data array (not fake dates).
 - keyMoment narrations reference the REAL price on that day where useful.
+- IMPORTANT: every price you cite is a CLOSING price (these come from daily close-price arrays). Phrase as "stock closed at â‚¹X", "closes at â‚¹X", "the close was â‚¹X". NEVER write "opens at", "opening price", "opens to" â€” you do not have intraday open prices, and writing as if you do is factually wrong. For after-hours news events (RBI moratorium, regulatory bans, results announcements) the day-0 narration must say "closes at â‚¹X" because the news broke AFTER the market close â€” the â‚¹X figure is the last clean price before the news, not an opening price.
 - REFUSE ONLY if the real data clearly shows an UP move or the query is non-market (sports/recipes).`;
 
 const MAX_DAYS = 140;
