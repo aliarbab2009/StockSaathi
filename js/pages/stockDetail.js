@@ -3,7 +3,7 @@
 // for buy/sell. Panic-sell intervention before SELL executes.
 // =============================================================================
 
-import { getInstrument } from "../data/universe.js";
+import { getInstrument, ensureMfUniverseLoaded } from "../data/universe.js";
 import { getQuote, getHistory, getMfHistory, subscribeToQuotes, quoteAge, getFundamentals, getFreshCachedQuote } from "../data/marketData.js";
 import { placeLimitOrder } from "../features/limitOrders.js";
 import { buildOrderBook, buildRecentTrades } from "../data/orderBook.js";
@@ -161,6 +161,24 @@ export function renderStockDetail(main, params) {
   _cancelToken.cancelled = true;
   _cancelToken = { cancelled: false };
   const myToken = _cancelToken;
+
+  // Hotfix52a: on hard-reload of an MF detail URL, the mfFull.json
+  // bundle may not be loaded yet â€” getInstrument returns a bare stub
+  // with no nav, no name, no AMC. The header price would fall through
+  // to the synthetic walk-anchor (Rs.4,286 for MF_100033 etc.) and the
+  // title would show the raw 'MF_100033' code. Kick the MF universe
+  // load and re-render with the real instrument data when it resolves.
+  if (symbol.startsWith("MF_") && (!inst.name || inst.name === symbol || typeof inst.nav !== "number")) {
+    ensureMfUniverseLoaded().then(() => {
+      if (myToken.cancelled) return;
+      const fresh = getInstrument(symbol);
+      if (fresh && fresh.name && fresh.name !== symbol) {
+        // Replace inst in this closure scope is fine â€” render() reads
+        // the new inst by call-arg, not by lexical reference.
+        render(fresh, symbol);
+      }
+    }).catch(() => {});
+  }
 
   ui = {
     side: "BUY",
