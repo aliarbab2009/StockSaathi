@@ -1326,6 +1326,7 @@ function detectScreenerQuery(query) {
     [/\bbeta\b/,                                                                                              "beta"],
     [/\broe\b|\breturn[\s-]?on[\s-]?equity\b/,                                                                "roe"],
     [/\beps\b|\bearnings[\s-]?per[\s-]?share\b/,                                                              "eps"],
+    [/\bdebt[\s-]?to[\s-]?equity\b|\bd\/?e\b|\bdebt\b|\bleverage\b|\bleveraged\b/,                            "debt_to_equity"],
   ];
   let metric = null;
   for (const [re, col] of metricPatterns) { if (re.test(q)) { metric = col; break; } }
@@ -1385,8 +1386,8 @@ async function runAiSearch(query, render) {
       // Hotfix28). Saying that out loud is friendlier than "0 matches".
       const ql = query.toLowerCase();
       let rationale = d?.rationale || "No matches in the current universe.";
-      if (/\b(debt|borrow|leverage|liability|liabilit)\b/.test(ql)) {
-        rationale = "Saathi doesn't have debt data in the universe yet. Try queries about price, P/E, dividend yield, market cap, 52-week high/low, beta, ROE, or sectors.";
+      if (/\b(borrow|liability|liabilit)\b/.test(ql) && !/\bdebt\b/.test(ql)) {
+        rationale = "Saathi doesn't track absolute borrowings yet. Try 'highest debt-to-equity' (a leverage ratio) or other queries about price, P/E, dividend yield, market cap, 52-week high/low, beta, ROE.";
       } else if (/\b(volume|liquidity|turnover|float)\b/.test(ql)) {
         rationale = "Saathi doesn't track trading volume in the universe yet. Try queries about price, P/E, dividend yield, market cap, 52-week high/low, beta, ROE, or sectors.";
       } else if (/\b(promoter|insider|shareholding|fii|dii)\b/.test(ql)) {

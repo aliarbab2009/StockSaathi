@@ -47,6 +47,7 @@ ALLOWED_METRICS = {
     "fifty_two_week_high", "fifty_two_week_low",
     "market_cap", "pe_ratio", "pb_ratio",
     "dividend_yield", "beta", "roe", "eps",
+    "debt_to_equity",
 }
 ALLOWED_ORDER = {"asc", "desc"}
 DEFAULT_LIMIT = 12
@@ -63,6 +64,7 @@ METRIC_LABELS = {
     "beta":                "beta",
     "roe":                 "return on equity",
     "eps":                 "earnings per share",
+    "debt_to_equity":      "debt-to-equity ratio",
 }
 
 
@@ -201,7 +203,7 @@ def _format_value(metric, val):
         return f"â‚¹{crore:,.0f} cr"
     if metric == "dividend_yield":
         return f"{val*100:.2f}%"
-    if metric in ("pe_ratio", "pb_ratio", "beta", "eps"):
+    if metric in ("pe_ratio", "pb_ratio", "beta", "eps", "debt_to_equity"):
         return f"{val:.2f}"
     if metric == "roe":
         return f"{val*100:.1f}%" if abs(val) < 1 else f"{val:.1f}%"
