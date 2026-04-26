@@ -166,12 +166,11 @@ export function renderStocks(main) {
   // → cards-with-prices. This flag (wired into the gate by 21b.3) holds
   // the skeleton until quotes for the actual visible viewport are loaded.
   let _viewportPreheatDone = false;
-  setTimeout(() => {
-    if (!cancelled && !_moodReady) {
-      _moodReady = true;
-      render();
-    }
-  }, MOOD_FAIL_OPEN_MS);
+  // Hotfix27a removed the 2-second mood fail-open timer. _moodReady is
+  // no longer in pageReady() so there's nothing to fail open against â€”
+  // mood resolves whenever the LLM call finishes, and the surgical DOM
+  // update fills the #market-mood-slot. Saves 1.5 s on cold loads where
+  // mood was the slowest gate to flip.
 
   // Reset transient state on every (re-)entry so a stale in-flight AI
   // fetch or broken loading flag from the previous session doesn't leak
@@ -455,18 +454,16 @@ export function renderStocks(main) {
       _moodFetched = true;
       fetchMarketMood().then((m) => {
         if (cancelled) return;
-        // Same wasReady guard as the cold-start, preheat, and
-        // onUniverseLoaded callbacks. The 2 s mood fail-open timer
-        // (line ~148) sets _moodReady=true and triggers a render
-        // when the mood fetch is still inflight; if the fetch later
-        // resolves, _moodReady is already true and another render()
-        // would wipe every hydrated card. Skip the wipe in that case
-        // â€” marketMood is now stored in module state and will surface
-        // on the next genuine re-render (filter change, etc.).
-        const wasReady = pageReady();
         marketMood = m;
         _moodReady = true;
-        if (!wasReady) render();
+        // Hotfix27a: surgical DOM update of the mood slot instead of
+        // render(). Mood is no longer a pageReady gate, so the page is
+        // typically already showing hydrated cards by the time this
+        // resolves â€” a render() here would wipe them. Find the slot
+        // div emitted at line ~761 and replace its innerHTML with
+        // the mood card markup.
+        const slot = main.querySelector("#market-mood-slot");
+        if (slot) slot.innerHTML = renderMoodHtml(m);
       }).catch(() => {});
     }
   }, QUOTE_POLL_INTERVAL_MS);
@@ -698,7 +695,14 @@ export function renderStocks(main) {
   // late-resolving callback that calls render() to decide whether
   // to skip a redundant render that would wipe hydrated cards.
   function pageReady() {
-    return _universeLoaded && _initialQuotesLoaded && _viewportPreheatDone && _moodReady;
+    // _moodReady removed from the gate as of Hotfix27a. The mood banner
+    // is decorative â€” there's no reason to hold the entire grid behind a
+    // 2-second LLM call. The banner now renders into a slot div with
+    // empty initial content; when the mood fetch resolves it surgically
+    // replaces the slot's innerHTML without firing render(). Net cold-
+    // load improvement: ~1.5 s in the typical case where mood is the
+    // slowest gate to flip.
+    return _universeLoaded && _initialQuotesLoaded && _viewportPreheatDone;
   }
 
   function render() {
@@ -758,15 +762,7 @@ export function renderStocks(main) {
         <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
       </div>
 
-      ${marketMood ? `
-        <div class="market-mood-card mood-${escapeAttr(marketMood.temperature)}">
-          <div class="mood-head">
-            <span class="pf-digest-label">Today's mood</span>
-            <span class="mood-pill mood-${escapeAttr(marketMood.temperature)}">${escapeHtml(marketMood.temperature)}</span>
-          </div>
-          <div class="mood-body">${escapeHtml(marketMood.narrative)}</div>
-        </div>
-      ` : ""}
+      <div id="market-mood-slot">${renderMoodHtml(marketMood)}</div>
 
       ${aiSearch ? `
         <div class="ai-search-result-card">
@@ -1814,6 +1810,21 @@ function computeChangeFp(changePct, source, stale, msState) {
     ? `closed:${msState}`
     : (source && source !== "mf-static" && source !== "synthetic" ? `live:${stale ? "1" : "0"}` : "syncing");
   return `${(changePct ?? 0).toFixed(4)}|${badgeKey}|${newClass}`;
+}
+
+// Mood banner inner-HTML emitter. Lives at module scope so the
+// surgical mood-fetch resolution path (Hotfix27a) can call it
+// without re-deriving the template inline. Empty string when mood
+// is null â€” the slot div stays empty until the LLM call resolves.
+function renderMoodHtml(mood) {
+  if (!mood) return "";
+  return `<div class="market-mood-card mood-${escapeAttr(mood.temperature)}">
+    <div class="mood-head">
+      <span class="pf-digest-label">Today's mood</span>
+      <span class="mood-pill mood-${escapeAttr(mood.temperature)}">${escapeHtml(mood.temperature)}</span>
+    </div>
+    <div class="mood-body">${escapeHtml(mood.narrative)}</div>
+  </div>`;
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
