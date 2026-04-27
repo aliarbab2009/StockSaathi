@@ -515,7 +515,26 @@ async function opTradeNudge(req, origin) {
 }
 
 // --- Market mood -------------------------------------------------------------
-const SYSTEM_MOOD = `You are Saathi. Summarise today's Indian stock market in one 50-70 word paragraph for a teen investor. Use the sector data sent. Call out 2-3 most notable sector moves by name. Give a one-word overall temperature (hot / warm / mild / cold). Plain prose, Indian context, no emojis, no markdown, no predictions. Return strict JSON: { "narrative": "...", "temperature": "hot"|"warm"|"mild"|"cold" }.`;
+// Hotfix59a: hardened prompt. Old version told the LLM to "call out 2-3
+// notable sector moves by name" without constraining WHICH names — Gemini
+// would freely cite Dixon, Tech Mahindra, Reliance etc. without any data
+// to back the claim, sometimes inverting the direction (saying "X faced a
+// decline" when X closed +1.2%). New rules:
+//   • The ONLY company tickers/names that may appear in the narrative are
+//     ones explicitly listed in the topUp/topDown fields of the user
+//     payload. Anything else = hallucination → reject.
+//   • If a ticker is mentioned, the day-change quoted MUST match the
+//     server-provided value (we don't ask the LLM to invent percentages).
+//   • Sector names are free to mention — they ARE in the data block.
+// Server-side post-validation enforces the "no off-list ticker" rule.
+const SYSTEM_MOOD = [
+  "You are Saathi summarising today's Indian stock market for a teen investor.",
+  "Write ONE plain-prose paragraph, 50–70 words, no emojis, no markdown, no predictions, no advice.",
+  "Mention 2–3 sector moves by name (sectors come from the data block).",
+  "STRICT RULE: the ONLY individual company tickers or names you may reference are the ones listed in the `top up` / `top down` fields of the data block — and you must quote their percentage exactly as shown. Do NOT invent stocks. Do NOT mention any company that isn't in the topUp/topDown lists below.",
+  "End with a one-word overall temperature: hot (≥1% broad rally), warm (mild green), mild (flat), cold (broad red).",
+  'Return strict JSON: { "narrative": "...", "temperature": "hot"|"warm"|"mild"|"cold" }.',
+].join(" ");
 
 async function opMarketMood(req, origin) {
   let body; try { body = await req.json(); } catch { return j(400, { error: "bad_body" }, origin); }
@@ -526,21 +545,75 @@ async function opMarketMood(req, origin) {
   const hit = await cacheGet("market_mood", key);
   if (hit?.narrative) return j(200, { ...hit, source: "cache" }, origin);
 
+  // Build the allow-list of tickers the LLM can mention. Pulled from
+  // the topUp / topDown strings — we extract just the leading token
+  // (TECHM, DIXON, etc.) ignoring the +X.X% part.
+  const allowedTickers = new Set();
+  for (const s of sectors) {
+    for (const f of [s.topUp, s.topDown]) {
+      if (typeof f !== "string") continue;
+      const m = f.match(/^([A-Z0-9&\-_.]+)/);
+      if (m) allowedTickers.add(m[1]);
+    }
+  }
+
   const userMsg = [
     `Today (${istDayKey()}) Indian market sector moves:`,
     ...sectors.map(s => `  ${s.name}: avg ${s.avgPct >= 0 ? "+" : ""}${Number(s.avgPct).toFixed(2)}% across ${s.count} names (top up: ${s.topUp || "-"}, top down: ${s.topDown || "-"})`),
+    "",
+    `Allowed individual tickers to mention (and ONLY these): ${[...allowedTickers].join(", ") || "(none)"}`,
   ].join("\n");
 
   try {
     const text = await callLlm({
       messages: [{ role: "system", content: SYSTEM_MOOD }, { role: "user", content: userMsg }],
-      max_tokens: 200, temperature: 0.35, response_format: { type: "json_object" }, profile: "json",
+      max_tokens: 220, temperature: 0.25, response_format: { type: "json_object" }, profile: "json",
     });
     const parsed = parseJsonLoose(text);
     if (!parsed) return j(502, { error: "non_json" }, origin);
-    const narrative = typeof parsed.narrative === "string" ? parsed.narrative.trim().slice(0, 500) : "";
+    let narrative = typeof parsed.narrative === "string" ? parsed.narrative.trim().slice(0, 500) : "";
     const temperature = ["hot", "warm", "mild", "cold"].includes(parsed.temperature) ? parsed.temperature : "mild";
     if (!narrative) return j(502, { error: "no_narrative" }, origin);
+
+    // Hotfix59a: post-validate that every UPPERCASE ticker-shaped token
+    // in the narrative is in the allow-list. Any leakage = retry once
+    // with stricter wording, else strip the offending ticker. Tokens
+    // are sequences of 2+ uppercase letters/digits; we ignore very
+    // short caps (IT, US, FY) and known sector-name caps via a
+    // small skip-list. Better to lose a sentence than ship a wrong
+    // company name.
+    const SKIP_CAPS = new Set([
+      "IT", "US", "EU", "UK", "FY", "Q1", "Q2", "Q3", "Q4",
+      "FII", "DII", "GDP", "CPI", "WPI", "RBI", "SEBI", "NSE", "BSE",
+      "ETF", "MF", "IPO", "AI", "NFO",
+    ]);
+    const tokenRe = /\b([A-Z][A-Z0-9&\-_.]{2,})\b/g;
+    let leaked = [];
+    for (const m of narrative.matchAll(tokenRe)) {
+      const tok = m[1];
+      if (SKIP_CAPS.has(tok)) continue;
+      if (!allowedTickers.has(tok)) leaked.push(tok);
+    }
+    if (leaked.length) {
+      // One stricter retry. Provide the exact list of words to avoid.
+      try {
+        const retryMsg = userMsg + `\n\nThe previous attempt named these companies that are NOT in the allowed list: ${leaked.join(", ")}. Rewrite the paragraph WITHOUT mentioning any of them. Stick to the allowed tickers only, or just describe sectors generically without specific stocks.`;
+        const retryText = await callLlm({
+          messages: [{ role: "system", content: SYSTEM_MOOD }, { role: "user", content: retryMsg }],
+          max_tokens: 220, temperature: 0.15, response_format: { type: "json_object" }, profile: "json",
+        });
+        const reParsed = parseJsonLoose(retryText);
+        if (reParsed?.narrative) {
+          const reNarr = String(reParsed.narrative).trim().slice(0, 500);
+          // Re-validate. If still leaking, fall through to scrub path.
+          const stillLeaked = [...reNarr.matchAll(tokenRe)]
+            .map(x => x[1])
+            .filter(t => !SKIP_CAPS.has(t) && !allowedTickers.has(t));
+          if (!stillLeaked.length) narrative = reNarr;
+        }
+      } catch { /* fall through to scrub */ }
+    }
+
     const out = { narrative, temperature };
     cachePut("market_mood", key, null, out);
     return j(200, { ...out, source: "fresh" }, origin);

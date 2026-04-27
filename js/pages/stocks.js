@@ -9,16 +9,6 @@ import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { getState, addToWatchlist, removeFromWatchlist, subscribe } from "../state.js";
 import { toast } from "../components/toast.js";
-// Hotfix58a: Verify-mood feature — clicking the Verify button on the
-// daily mood card hands the narrative to the Saathi agent (with tool
-// access to live get_stock_price) so it can fact-check each claim
-// against actual day-change. Lazy-loaded so cold-load of /stocks
-// doesn't pay for the agent module on first paint.
-let _agentModule = null;
-async function _loadAgent() {
-  if (!_agentModule) _agentModule = await import("../coach/agent.js");
-  return _agentModule;
-}
 
 // Default tab = Stocks (showing the full universe sorted by index prominence
 // — Nifty 50/100 stocks naturally land on top). No Featured/All split.
@@ -546,24 +536,28 @@ export function renderStocks(main) {
       _moodFetched = true;
       fetchMarketMood().then((m) => {
         if (cancelled) return;
+        // Hotfix59a: when the LLM fetch fails OR returns no narrative,
+        // hide the skeleton instead of leaving a forever-shimmer. We
+        // collapse the slot to empty so the layout shifts back closed.
+        const slot = main.querySelector("#market-mood-slot");
+        if (!m || !m.narrative) {
+          if (slot) slot.innerHTML = "";
+          return;
+        }
         marketMood = m;
         _moodReady = true;
         // Hotfix27a: surgical DOM update of the mood slot instead of
         // render(). Mood is no longer a pageReady gate, so the page is
         // typically already showing hydrated cards by the time this
-        // resolves â€” a render() here would wipe them. Find the slot
+        // resolves — a render() here would wipe them. Find the slot
         // div emitted at line ~761 and replace its innerHTML with
         // the mood card markup.
+        if (slot) slot.innerHTML = renderMoodHtml(m);
+      }).catch(() => {
+        // Same fallback as above — drop the skeleton on network error.
         const slot = main.querySelector("#market-mood-slot");
-        if (slot) {
-          slot.innerHTML = renderMoodHtml(m);
-          // Hotfix58a: re-attach the Verify-button handler. The
-          // surgical patch above re-creates the button DOM, so the
-          // listener wired in render()'s post-paint pass is gone.
-          slot.querySelector("#mood-verify-btn")
-            ?.addEventListener("click", () => verifyMoodNarrative());
-        }
-      }).catch(() => {});
+        if (slot) slot.innerHTML = "";
+      });
     }
   }, QUOTE_POLL_INTERVAL_MS);
 
@@ -1018,14 +1012,6 @@ export function renderStocks(main) {
         return;
       }
       runAiSearch(q, render);
-    });
-
-    // Hotfix58a: wire the Verify button on the mood card. Idempotent —
-    // the button is re-emitted every render() / surgical mood patch, so
-    // we attach via the node we just created. Click runs the agent and
-    // streams a fact-check into #mood-verify-result.
-    main.querySelector("#mood-verify-btn")?.addEventListener("click", () => {
-      verifyMoodNarrative();
     });
     main.querySelector("#ai-search-clear")?.addEventListener("click", () => {
       aiSearch = null;
@@ -2150,88 +2136,93 @@ function computeChangeFp(changePct, source, stale, msState) {
 // surgical mood-fetch resolution path (Hotfix27a) can call it
 // without re-deriving the template inline. Empty string when mood
 // is null â€” the slot div stays empty until the LLM call resolves.
-// Hotfix58a: Verify-mood action. Hands the current marketMood narrative
-// to the Saathi agent (with tool access — get_stock_price + search_stocks)
-// and asks it to fact-check each company-specific claim against live
-// day-change. Result rendered inline below the mood body so the user
-// doesn't leave /stocks. Re-clicks during a pending verify are no-ops.
-let _verifyInFlight = false;
-async function verifyMoodNarrative() {
-  if (_verifyInFlight) return;
-  if (!marketMood?.narrative) {
-    toast({ kind: "info", message: "Today's mood hasn't loaded yet — try in a moment." });
-    return;
-  }
-  const btn = document.getElementById("mood-verify-btn");
-  const out = document.getElementById("mood-verify-result");
-  if (!btn || !out) return;
-  _verifyInFlight = true;
-  const origLabel = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = `<span class="spinner" aria-hidden="true" style="display:inline-block; width:12px; height:12px; vertical-align: -1px; margin-right: 4px;"></span> Verifying…`;
-  out.hidden = false;
-  out.innerHTML = `<div class="dim text-xs" style="padding: 8px 0;">Saathi is checking each claim against live prices…</div>`;
-
-  try {
-    const { runAgent } = await _loadAgent();
-    const ms = marketStatus();
-    const dateLabel = ms.istDate || new Date().toLocaleDateString("en-IN");
-    const sessionLabel = ms.open ? "(market open)" : ms.lastCloseLabel || "(market closed)";
-    const system = [
-      "You are Saathi, an Indian-markets fact-checker. The user has an AI-written 'today's mood' summary that may contain inaccurate company-level claims.",
-      `Today is ${dateLabel} ${sessionLabel}.`,
-      "Your job: verify EVERY company-specific claim by calling get_stock_price for that ticker. Then output a short list — one bullet per claim — using ✓ for accurate, ✗ for wrong, ~ for partially correct (right direction, wrong magnitude). Quote the actual day-change after each verdict.",
-      "If a claim is generic (e.g. 'mixed day') with no specific stock, mark it ~ and explain in <12 words.",
-      "Keep the entire reply under 120 words. No preamble. No 'Here is...'. Start with the first bullet.",
-    ].join(" ");
-    const userMsg = `Mood text to verify:\n\n"${marketMood.narrative}"`;
-    const text = await runAgent({
-      system,
-      messages: [{ role: "user", content: userMsg }],
-      profile: "fast",
-    });
-    if (!text) {
-      out.innerHTML = `<div class="dim text-xs" style="padding: 8px 0;">Saathi couldn't reach the verifier just now. Try again in a moment.</div>`;
-      return;
-    }
-    out.innerHTML = `
-      <div class="mood-verify-head dim text-xs" style="margin-top: 8px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em;">Saathi's fact-check</div>
-      <div class="mood-verify-body" style="font-size: 13px; line-height: 1.55; white-space: pre-wrap;">${escapeHtml(text)}</div>
-    `;
-  } catch (e) {
-    console.warn("[stocks] verify mood failed:", e);
-    out.innerHTML = `<div class="dim text-xs" style="padding: 8px 0;">Verifier error: ${escapeHtml(String(e?.message || e))}</div>`;
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = origLabel;
-    _verifyInFlight = false;
-  }
+// Hotfix59a: skeleton for the mood card while the LLM generates the
+// narrative. Replaces the previous empty-slot path that caused the
+// page to reflow when the real card popped in. Skeleton has the same
+// outer dimensions + temperature-neutral border so the visual jump
+// when the real mood lands is just a shimmer→prose swap, not a layout
+// shift. Personal coda is a tiny client-side line appended below the
+// shared narrative (computed from holdings + quoteCache, no LLM call)
+// so the mood stays cacheable across users while still feeling
+// personal.
+function renderMoodSkeletonHtml() {
+  return `<div class="market-mood-card market-mood-card-skeleton" aria-busy="true" aria-label="Loading today's mood">
+    <div class="mood-head">
+      <span class="pf-digest-label">Today's mood</span>
+      <span class="skeleton-pill skeleton-shimmer" style="width: 56px; height: 18px;"></span>
+    </div>
+    <div class="mood-body">
+      <div class="skeleton-line skeleton-shimmer" style="width: 92%; height: 10px; margin-bottom: 8px;"></div>
+      <div class="skeleton-line skeleton-shimmer" style="width: 78%; height: 10px; margin-bottom: 8px;"></div>
+      <div class="skeleton-line skeleton-shimmer" style="width: 86%; height: 10px;"></div>
+    </div>
+  </div>`;
 }
 
 function renderMoodHtml(mood) {
-  if (!mood) return "";
-  // Hotfix58a: "Verify" button on the daily mood card. The mood narrative
-  // is LLM-generated and occasionally fabricates moves — e.g. "Tech
-  // Mahindra faced a decline" when it actually closed flat. Clicking
-  // Verify hands the narrative to the Saathi agent (with tool access to
-  // get_stock_price) so it can call live data on every company named in
-  // the text and report ✓/✗ per claim. Result expands inline below the
-  // mood body. Stays in the markets page — no /chat detour.
+  if (!mood) return renderMoodSkeletonHtml();
+  // Hotfix59a: append the user's pinch-of-personalization line. Shared
+  // narrative comes from the cached server-side mood (per-IST-day +
+  // sector-signature, so all users with the same broad market view get
+  // the same paragraph). Personal coda is computed locally from this
+  // user's holdings + the live quoteCache — no LLM call, no cache
+  // invalidation, just a templated one-liner like:
+  //     Your top holding RELIANCE +2.97% today.
+  //     Your portfolio today: 2 up, 1 flat.
+  // Falls silent when there are no holdings or no fresh quotes.
+  const coda = _renderPersonalCoda();
   return `<div class="market-mood-card mood-${escapeAttr(mood.temperature)}">
     <div class="mood-head">
       <span class="pf-digest-label">Today's mood</span>
       <span class="mood-pill mood-${escapeAttr(mood.temperature)}">${escapeHtml(mood.temperature)}</span>
-      <button id="mood-verify-btn"
-              class="btn btn-ghost btn-sm"
-              type="button"
-              style="margin-left: auto;"
-              title="Ask Saathi to fact-check this against live prices">
-        <span aria-hidden="true">✓</span> Verify
-      </button>
     </div>
     <div class="mood-body">${escapeHtml(mood.narrative)}</div>
-    <div id="mood-verify-result" class="mood-verify-result" hidden></div>
+    ${coda ? `<div class="mood-personal dim text-xs" style="margin-top: 8px;">${coda}</div>` : ""}
   </div>`;
+}
+
+// Templated, deterministic personal coda. Picks the largest current
+// holding (by qty × LTP) that has a fresh quote and reports its day-
+// change. If user has 2+ holdings reports a quick "N up, M down,
+// K flat" tally. No randomness, no LLM call, runs in <1 ms.
+function _renderPersonalCoda() {
+  try {
+    const state = getState();
+    const syms = Object.keys(state.holdings || {});
+    if (!syms.length) return "";
+    const rows = [];
+    for (const sym of syms) {
+      const inst = getInstrument(sym);
+      if (!inst) continue;
+      const q = quoteCache[sym];
+      const px = q?.pricePaise;
+      const ch = q?.changePct;
+      if (!Number.isFinite(px) || !Number.isFinite(ch)) continue;
+      const qty = state.holdings[sym]?.qty || 0;
+      rows.push({ sym, name: inst.name || sym, value: qty * px, ch });
+    }
+    if (!rows.length) return "";
+    rows.sort((a, b) => b.value - a.value);
+    const top = rows[0];
+    const sign = top.ch >= 0 ? "+" : "";
+    const pct = `${sign}${(top.ch * 100).toFixed(2)}%`;
+    if (rows.length === 1) {
+      return `Your holding <strong>${escapeHtml(top.sym)}</strong> ${escapeHtml(pct)} today.`;
+    }
+    let up = 0, down = 0, flat = 0;
+    for (const r of rows) {
+      if (Math.abs(r.ch) < 0.001) flat++;
+      else if (r.ch > 0) up++;
+      else down++;
+    }
+    const tally = [];
+    if (up)   tally.push(`${up} up`);
+    if (down) tally.push(`${down} down`);
+    if (flat) tally.push(`${flat} flat`);
+    return `Your top holding <strong>${escapeHtml(top.sym)}</strong> ${escapeHtml(pct)} · portfolio today: ${tally.join(", ")}.`;
+  } catch {
+    return "";
+  }
 }
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }

@@ -896,23 +896,55 @@
 .mood-pill.mood-cold { background: var(--positive-soft); color: var(--positive); }
 .mood-body { line-height: 1.55; color: var(--text-strong); font-size: var(--text-md); }
 
-/* Hotfix58a: inline fact-check result that expands below the mood body
-   when the user clicks Verify. Tucked to the right of the existing
-   margins to feel like a "more detail" disclosure rather than a new
-   card. Border-top to visually separate the AI-checked content from
-   the AI-generated narrative above it. */
-.mood-verify-result {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 35%, transparent);
-}
-.mood-verify-result[hidden] { display: none !important; }
-.mood-verify-head {
+/* Hotfix59a: pinch-of-personalization line below the shared mood
+   narrative. Renders the user's top holding's day-change from the
+   client-side quoteCache — no LLM call, so the shared mood paragraph
+   stays cacheable across all users and only this trailing line
+   varies per visitor. */
+.mood-personal {
   color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 30%, transparent);
+}
+.mood-personal strong {
+  color: var(--text-strong);
   font-weight: 600;
 }
-.mood-verify-body {
-  color: var(--text-strong);
+
+/* Hotfix59a: card-shaped skeleton for the mood card during cold-load.
+   Same outer dimensions as the real card so the page doesn't reflow
+   when the LLM-generated paragraph lands — only the inner shimmer
+   blocks swap to prose. Border-top is muted (no temperature class
+   yet) to avoid a green/red flash before we know the actual mood. */
+.market-mood-card-skeleton {
+  border-top: 3px solid color-mix(in srgb, var(--text-muted) 25%, var(--border));
+  min-height: 116px;
+}
+.market-mood-card-skeleton .mood-head {
+  margin-bottom: 12px;
+}
+.skeleton-shimmer {
+  display: inline-block;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text-muted) 12%, var(--surface)) 0%,
+    color-mix(in srgb, var(--text-muted) 22%, var(--surface)) 50%,
+    color-mix(in srgb, var(--text-muted) 12%, var(--surface)) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.6s ease-in-out infinite;
+}
+.skeleton-pill { border-radius: 999px; }
+.skeleton-line { display: block; }
+@keyframes skeletonShimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: -100% 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer { animation: none; }
 }
 
 .ai-search-result-card {
