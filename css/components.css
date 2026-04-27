@@ -896,6 +896,25 @@
 .mood-pill.mood-cold { background: var(--positive-soft); color: var(--positive); }
 .mood-body { line-height: 1.55; color: var(--text-strong); font-size: var(--text-md); }
 
+/* Hotfix58a: inline fact-check result that expands below the mood body
+   when the user clicks Verify. Tucked to the right of the existing
+   margins to feel like a "more detail" disclosure rather than a new
+   card. Border-top to visually separate the AI-checked content from
+   the AI-generated narrative above it. */
+.mood-verify-result {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 35%, transparent);
+}
+.mood-verify-result[hidden] { display: none !important; }
+.mood-verify-head {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.mood-verify-body {
+  color: var(--text-strong);
+}
+
 .ai-search-result-card {
   padding: var(--sp-3) var(--sp-4);
   border-radius: var(--r);
