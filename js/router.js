@@ -99,16 +99,44 @@ function render404(main) {
 }
 
 // Loading shell shown while we wait for refreshCurrentUser to resolve. Plain
-// spinner + a safety-net "log in" link for the rare case where the persisted
-// session is actually corrupt and refresh will never fire.
-function showLoadingShell() {
+// spinner with copy that's appropriate for the current route.
+//
+// Hotfix60a: per-route copy. Old copy ("Getting your portfolio ready…")
+// was wrong on every page that wasn't /portfolio — onboarding, settings,
+// report-card, friends — and the "Stuck? Log in manually" link was
+// shown even when we were merely waiting for an existing session to
+// rehydrate (i.e. the user IS logged in, the link just makes them
+// re-enter credentials needlessly). Caller passes the route name so we
+// can pick a tighter line, and the bottom link is omitted unless the
+// session is actually missing.
+function showLoadingShell(routeName) {
   const main = document.getElementById("main");
   if (!main) return;
+  // Per-route loading line. Keep them short — this is a flash, not copy.
+  const COPY = {
+    portfolio:    "Loading your portfolio…",
+    "report-card": "Loading your report card…",
+    friends:      "Loading your friends…",
+    onboarding:   "Setting up onboarding…",
+    settings:     "Loading settings…",
+  };
+  const line = COPY[routeName] || "One moment…";
+  // Only surface the manual-login escape hatch when we have NO persisted
+  // session at all (i.e. the user truly needs to log in to proceed).
+  // When a session token IS present we're just waiting for refresh —
+  // showing "Log in manually" there is misleading because the user is
+  // already logged in.
+  const hasSession = (() => {
+    try { return !!localStorage.getItem("ss.sb.session.v1"); } catch { return false; }
+  })();
+  const escapeHatch = hasSession
+    ? ""
+    : `<a href="#/login" class="dim text-xs" style="margin-top: var(--sp-4); display:inline-block;">Log in to continue</a>`;
   main.innerHTML = `
     <div class="empty-state" style="padding-top: var(--sp-12);">
       <div class="spinner" aria-hidden="true" style="margin: 0 auto var(--sp-4);"></div>
-      <p class="dim" style="font-size: var(--text-sm);">Getting your portfolio ready…</p>
-      <a href="#/login" class="dim text-xs" style="margin-top: var(--sp-4); display:inline-block;">Stuck? Log in manually</a>
+      <p class="dim" style="font-size: var(--text-sm);">${line}</p>
+      ${escapeHatch}
     </div>
   `;
 }
@@ -150,7 +178,7 @@ export function mountRouter() {
     // to /login when we're sure they have no session at all.
     if (r.needsAuth && !user) {
       if (hasPersistedSession()) {
-        showLoadingShell();
+        showLoadingShell(r.name);
         const unsub = subscribe(() => {
           if (currentUser()) {
             cleanup();
