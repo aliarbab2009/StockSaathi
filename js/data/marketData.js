@@ -14,7 +14,14 @@
 
 import { getSeries as synthSeries, getPriceAt as synthPriceAt } from "./prices.js";
 import { getInstrument } from "./universe.js";
-import { getState } from "../state.js";
+// Hotfix57a: dropped `import { getState } from "../state.js"` — it was
+// unused (search showed only one false-positive in a comment) and was
+// the only thing blocking state.js from importing from this module.
+// state.js now imports getFreshCachedQuote here so getHoldingsValue +
+// getPortfolioValue + getHoldingPLPaise + getHoldingPLPct all read live
+// /api/live-quote prices first instead of falling through to the
+// seeded stub-walk for any Tier-2 equity (inst.price=null) — fixing
+// hero/invested-tile mismatches site-wide (report card, coach, admin).
 
 const QUOTE_TTL_MS = 8_000;
 const HISTORY_TTL_MS = 10 * 60_000;

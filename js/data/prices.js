@@ -197,10 +197,25 @@ export function getCloses(symbol, lastNDays = null) {
  * even before /api/mf-history populates a real series.
  */
 export function getPriceAt(symbol, daysBack = 0) {
-  if (daysBack === 0 && symbol && symbol.startsWith("MF_")) {
+  if (symbol && symbol.startsWith("MF_")) {
+    // Hotfix57a: MFs must NEVER fall through to the seeded stub walk
+    // when AMFI hasn't loaded yet. The walk produces deterministic-but-
+    // wrong values (e.g. ₹3,328 for MF_151908, whose real NAV is
+    // ₹1,000), which were silently flowing into portfolio LTP, hero
+    // value, P&L %, and trade-confirmation totals — visible to users
+    // as "+232% gain" on a fund that hadn't moved a paisa. AMFI ships
+    // one NAV per scheme per day; there's nothing to simulate. If we
+    // don't have inst.nav yet, return null so callers can render "—"
+    // instead of a fabricated number.
     const inst = _resolveInstrument(symbol);
-    if (inst && inst.kind === "MF" && typeof inst.nav === "number" && inst.nav > 0) {
-      return Math.round(inst.nav * 100);
+    if (inst && inst.kind === "MF") {
+      if (daysBack === 0 && typeof inst.nav === "number" && inst.nav > 0) {
+        return Math.round(inst.nav * 100);
+      }
+      // Yesterday's close (or further back) for an MF is provided by
+      // /api/mf-history, not generateSeries. Returning null tells
+      // getTodayChange & friends to bail rather than cite a fake number.
+      return null;
     }
   }
   const s = getSeries(symbol);
@@ -217,8 +232,16 @@ export function pctChange(from, to) {
 
 /**
  * Get day-over-day change for sparkline color/sign.
+ *
+ * Hotfix57a: MFs short-circuit. The seeded walk for MFs is a lie (AMFI
+ * publishes one NAV per day; there is no intraday motion). Any caller
+ * that needs an MF day-change should rely on the /api/mf-history cache
+ * via synthMFQuote. Returning 0 here keeps sparklines flat-line for MFs
+ * that haven't populated mfHistoryCache yet, instead of showing a
+ * fictional ±0.6% drift.
  */
 export function getTodayChange(symbol) {
+  if (symbol && symbol.startsWith("MF_")) return 0;
   const s = getSeries(symbol);
   if (s.length < 2) return 0;
   const today = s[s.length - 1].c;

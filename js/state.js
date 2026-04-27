@@ -425,11 +425,38 @@ function applyLocalTradeEffect(txn) {
 
 // --- Derived selectors ----------------------------------------------------
 import { getPriceAt } from "./data/prices.js";
+// Hotfix57a: pull live /api/live-quote prices from the marketData cache
+// FIRST, then fall back to getPriceAt. Without this, every caller of
+// getHoldingsValue (report card "your portfolio is worth ₹X" displays,
+// admin dashboard, coach payload) was reading the seeded stub-walk
+// instead of the real Yahoo price for any Tier-2 equity (Tier-2 rows
+// leave inst.price=null because the real price comes from /api/live-
+// quote into _quoteCache). State derived stays stub-walk for the
+// (rare) case where the quote cache hasn't seen the symbol yet, which
+// is still better than 0 — and for MFs getPriceAt now correctly uses
+// inst.nav directly per the same hotfix.
+import { getCachedQuotes } from "./data/marketData.js";
+
+// Best-known current price in paise. Order of preference:
+//   1. _quoteCache via getCachedQuotes — populated by /api/live-quote
+//      polling on portfolio / stocks / stock detail pages, lasts up to
+//      PERSIST_MAX_AGE_MS in localStorage too.
+//   2. getPriceAt(sym, 0) — for MFs returns inst.nav*100 directly; for
+//      equities/ETFs falls through to the seeded stub-walk only when
+//      no live quote has been observed yet (genuine cold first paint).
+function _bestKnownPxPaise(sym) {
+  const cached = getCachedQuotes([sym])[sym];
+  if (cached && Number.isFinite(cached.pricePaise) && cached.pricePaise > 0) {
+    return cached.pricePaise;
+  }
+  const px = getPriceAt(sym, 0);
+  return Number.isFinite(px) ? px : null;
+}
 
 export function getHoldingsValue(state = getState()) {
   let total = 0;
   for (const [sym, h] of Object.entries(state.holdings)) {
-    const px = getPriceAt(sym, 0);
+    const px = _bestKnownPxPaise(sym);
     // Number.isFinite catches NaN (which `!= null` does not). A Tier-2
     // holding with no price source must contribute 0, not NaN-poison the
     // entire portfolio total — that would break the hero card with "₹NaN".
@@ -448,7 +475,7 @@ export function getPortfolioReturnPct(state = getState()) {
 export function getHoldingPLPaise(symbol, state = getState()) {
   const h = state.holdings[symbol];
   if (!h) return 0;
-  const curPx = getPriceAt(symbol, 0);
+  const curPx = _bestKnownPxPaise(symbol);
   // Guard against NaN/undefined from Tier-2 stubs with no price source —
   // otherwise this would propagate NaN into portfolio totals via callers.
   if (!Number.isFinite(curPx)) return 0;
@@ -457,7 +484,7 @@ export function getHoldingPLPaise(symbol, state = getState()) {
 export function getHoldingPLPct(symbol, state = getState()) {
   const h = state.holdings[symbol];
   if (!h) return 0;
-  const curPx = getPriceAt(symbol, 0);
+  const curPx = _bestKnownPxPaise(symbol);
   // Guard against (a) missing current price, (b) zero avg cost (free grants).
   // Capping at +999% / -100% keeps UI sort stable; pure Infinity was
   // breaking sorts and rendering "Infinity%".

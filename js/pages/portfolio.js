@@ -2,12 +2,25 @@
 // PORTFOLIO — Dashboard. Clean state, news column, live refresh.
 // =============================================================================
 
-import {
-  getState, subscribe, getPortfolioValue, getHoldingsValue, getPortfolioReturnPct,
-  getHoldingPLPaise, getHoldingPLPct,
-} from "../state.js";
+// Hotfix57a: dropped getPortfolioValue / getHoldingsValue / getPortfolio-
+// ReturnPct / getHoldingPLPaise / getHoldingPLPct from this import — they
+// all flow through getPriceAt() which returns the seeded stub-walk for
+// Tier-2 equities (inst.price=null) and bare-stub MFs (inst.nav=undefined),
+// producing hero values that disagreed with the holdings-table sum. We now
+// derive these locally from the same quoteCache-first holdings array the
+// table displays, so the two views AGREE.
+import { getState, subscribe } from "../state.js";
 import { formatRupees, formatPct, deltaClass, formatQty } from "../money.js";
 import { getInstrument } from "../data/universe.js";
+// Hotfix57a: portfolio holdings of MFs were rendering bare-stub names
+// ("MF_151908 ·") with synthetic walk-anchor LTPs (₹3,328.47 for a fund
+// whose real NAV is ₹1,000.00). Root cause: getInstrument() returns a
+// stub before mfFull.json loads, and getPriceAt/synthMFQuote both fall
+// through to the seeded walk anchor (5000 + seedFromString(symbol) %
+// 500000) when inst.nav is missing. Fix: kick off the universe loaders
+// on portfolio mount and re-render on the loaded events. Same pattern
+// stockDetail.js uses (Hotfix52a) so MF detail and portfolio agree.
+import { ensureUniverseLoaded, ensureMfUniverseLoaded } from "../data/universeLoader.js";
 import { getPriceAt, getTodayChange, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes } from "../data/marketData.js";
 import { listPendingOrders, cancelOrder } from "../features/limitOrders.js";
@@ -33,6 +46,30 @@ export function renderPortfolio(main) {
   // loading skeleton on reload.
   const state0 = getState();
   aiDigest = cachedDigest(state0.user?.id || "anon");
+
+  // Hotfix57a: kick the universe loaders BEFORE first render so the
+  // holdings table doesn't paint with bare-stub names + walk-anchor
+  // LTPs and then snap to real values a moment later. We still call
+  // render() immediately for fast first-paint of cash / digest / news,
+  // but the holdings-row helpers use the loaded?-aware logic below to
+  // show "—" for MF LTPs that haven't resolved yet rather than the
+  // misleading synthetic anchor (~₹3,328 for a real-NAV ₹1,000 fund).
+  const holdingSyms0 = Object.keys(state0.holdings || {});
+  const hasMfHolding = holdingSyms0.some(s => s.startsWith("MF_"));
+  const hasEquityHolding = holdingSyms0.some(s => !s.startsWith("MF_"));
+  if (hasEquityHolding) {
+    ensureUniverseLoaded().then(() => { if (!cancelled) render(); }).catch(() => {});
+  }
+  if (hasMfHolding) {
+    ensureMfUniverseLoaded().then(() => { if (!cancelled) render(); }).catch(() => {});
+  }
+  // Defensive belt-and-braces: also re-render on the global events the
+  // loaders dispatch (someone else might trigger the load first; we still
+  // want the portfolio to refresh as soon as it lands).
+  const onUniLoaded = () => { if (!cancelled) render(); };
+  const onMfLoaded  = () => { if (!cancelled) render(); };
+  window.addEventListener("ss:universe-loaded", onUniLoaded);
+  window.addEventListener("ss:mf-universe-loaded", onMfLoaded);
 
   render();
   const unsub = subscribe(() => { if (!cancelled) render(); });
@@ -92,6 +129,12 @@ export function renderPortfolio(main) {
     unsub?.();
     pollUnsub?.();
     clearInterval(pendingPoll);
+    // Hotfix57a: detach the universe-loaded listeners so navigating away
+    // from /portfolio doesn't leave them firing render() against a stale
+    // closure (which would either throw or silently rebuild a DOM that's
+    // no longer mounted).
+    window.removeEventListener("ss:universe-loaded", onUniLoaded);
+    window.removeEventListener("ss:mf-universe-loaded", onMfLoaded);
   };
   window.addEventListener("hashchange", onLeave, { once: true });
 
@@ -128,11 +171,26 @@ export function renderPortfolio(main) {
     if (aiDigestLoading) return;
     const state = getState();
     const userId = state.user?.id || "anon";
-    const pf = getPortfolioValue(state);
     const holdings = Object.entries(state.holdings).map(([sym, h]) => {
       const inst = getInstrument(sym);
       const quote = quoteCache[sym];
-      const curPx = quote?.pricePaise ?? getPriceAt(sym, 0);
+      // Hotfix57a: same priceReady gate as the holdings table — don't
+      // poison the AI digest with null/0/−100% P&L for bare-stub MFs
+      // before AMFI loads. Skip pending MFs from the digest entirely;
+      // the prompt asks for "your portfolio's holdings" which is fine
+      // to be partial — the AI will simply describe what we know.
+      let curPx = quote?.pricePaise;
+      if (curPx == null) {
+        if (sym.startsWith("MF_")) {
+          if (inst && typeof inst.nav === "number" && inst.nav > 0) {
+            curPx = Math.round(inst.nav * 100);
+          }
+        } else {
+          const px = getPriceAt(sym, 0);
+          if (typeof px === "number" && px > 0) curPx = px;
+        }
+      }
+      if (curPx == null) return null;
       return {
         symbol: sym,
         name: inst?.name || sym,
@@ -140,13 +198,25 @@ export function renderPortfolio(main) {
         qty: h.qty,
         avgRupees: h.avgCostPaise / 100,
         curRupees: curPx / 100,
-        dayPct: (quote?.changePct ?? getTodayChange(sym)) * 100,
-        plPct: (curPx - h.avgCostPaise) / h.avgCostPaise,
+        dayPct: ((quote?.changePct) ?? (sym.startsWith("MF_") ? 0 : getTodayChange(sym))) * 100,
+        plPct: h.avgCostPaise > 0 ? (curPx - h.avgCostPaise) / h.avgCostPaise : 0,
       };
-    });
+    }).filter(Boolean);
+    // Hotfix57a: derive total + deltaPct from the same quoteCache-aware
+    // holdings array we just built. Same reason the hero uses local
+    // computation — getPortfolioValue/getPortfolioReturnPct route through
+    // getPriceAt() which serves the seeded stub-walk for Tier-2 stocks
+    // (inst.price=null), making the AI digest narrate fake numbers.
+    let holdingsRupees = 0;
+    for (const h of holdings) holdingsRupees += h.qty * h.curRupees;
+    const totalRupees = state.portfolio.cashPaise / 100 + holdingsRupees;
+    const startRupees = state.portfolio.startingCashPaise / 100;
+    const deltaPct = startRupees > 0
+      ? ((totalRupees - startRupees) / startRupees) * 100
+      : 0;
     const payload = {
-      totalRupees: pf / 100,
-      deltaPct: getPortfolioReturnPct(state) * 100,
+      totalRupees,
+      deltaPct,
       cashRupees: state.portfolio.cashPaise / 100,
       holdings,
     };
@@ -167,26 +237,88 @@ export function renderPortfolio(main) {
 
   function render() {
     const state = getState();
-    const pfValue = getPortfolioValue(state);
-    const holdValue = getHoldingsValue(state);
-    const returnPct = getPortfolioReturnPct(state);
     const cash = state.portfolio.cashPaise;
-    const deltaPaise = pfValue - state.portfolio.startingCashPaise;
 
     const holdings = Object.entries(state.holdings)
       .map(([sym, h]) => {
         const inst = getInstrument(sym);
         if (!inst) return null;
         const quote = quoteCache[sym];
-        const curPx = quote?.pricePaise ?? getPriceAt(sym, 0);
-        const value = Math.round(h.qty * curPx);
-        const pl = Math.round((curPx - h.avgCostPaise) * h.qty);
-        const plPct = (curPx - h.avgCostPaise) / h.avgCostPaise;
-        const dayChange = quote?.changePct ?? getTodayChange(sym);
-        return { sym, inst, h, curPx, value, pl, plPct, dayChange, source: quote?.source };
+
+        // Hotfix57a: separate "have a real price" from "fall through to
+        // the seeded walk anchor". For MFs, the synthetic walk produces
+        // values like ₹3,328.47 for a fund whose real NAV is ₹1,000.00
+        // (seedFromString("MF_151908") % 500000 happens to land there),
+        // which then drives a fake +232% P&L and a misleading "value"
+        // tile. We refuse to render those numbers — show "—" until either
+        // a real quote arrives or AMFI universe loads inst.nav.
+        const isMf = inst.kind === "MF" || sym.startsWith("MF_");
+        const isBareStub = inst._stub === true;
+
+        let curPx = quote?.pricePaise ?? null;
+        let priceReady = curPx != null;
+        if (!priceReady) {
+          if (isMf) {
+            // Only trust inst.nav when AMFI universe has loaded
+            // (the bare-stub path leaves nav undefined). Synthetic walk
+            // for MFs is never acceptable here.
+            if (!isBareStub && typeof inst.nav === "number" && inst.nav > 0) {
+              curPx = Math.round(inst.nav * 100);
+              priceReady = true;
+            }
+          } else {
+            // Equity / ETF: getPriceAt is fine — the seeded walk for
+            // these IS a believable price line until /api/live-quote
+            // lands, and Tier-2 stubs still produce a coherent walk.
+            const px = getPriceAt(sym, 0);
+            if (typeof px === "number" && px > 0) {
+              curPx = px;
+              priceReady = true;
+            }
+          }
+        }
+
+        const value = priceReady ? Math.round(h.qty * curPx) : null;
+        const pl = priceReady ? Math.round((curPx - h.avgCostPaise) * h.qty) : null;
+        const plPct = priceReady && h.avgCostPaise > 0
+          ? (curPx - h.avgCostPaise) / h.avgCostPaise
+          : null;
+        const dayChange = quote?.changePct ?? (priceReady ? getTodayChange(sym) : null);
+
+        return {
+          sym, inst, h, curPx, value, pl, plPct, dayChange,
+          source: quote?.source,
+          priceReady, isMf, isBareStub,
+        };
       })
       .filter(Boolean)
-      .sort((a, b) => b.value - a.value);
+      // priceReady rows sorted by value desc; pending rows pinned at the
+      // bottom with a stable order so they don't flicker positions while
+      // the universe is loading.
+      .sort((a, b) => {
+        if (a.priceReady !== b.priceReady) return a.priceReady ? -1 : 1;
+        if (a.priceReady) return b.value - a.value;
+        return a.sym.localeCompare(b.sym);
+      });
+
+    // Hotfix57a: derive hero/invested-tile values from the `holdings`
+    // array we just built — they use the same quoteCache-first logic as
+    // the holdings table, so the two displays AGREE. Previously we called
+    // getHoldingsValue(state) which goes back through getPriceAt() and
+    // ends up reading the seeded stub-walk for any Tier-2 equity whose
+    // inst.price is null (i.e. nearly all of them — Tier-2 rows leave
+    // price=null and live values come from /api/live-quote into
+    // _quoteCache). Result: hero invested said ₹6,857 while the holdings
+    // table summed to ₹7,733 — a ~₹876 discrepancy on a 2-position
+    // portfolio. Fixed by deriving locally.
+    let holdValue = 0;
+    for (const h of holdings) {
+      if (h.priceReady && Number.isFinite(h.value)) holdValue += h.value;
+    }
+    const pfValue = cash + holdValue;
+    const start = state.portfolio.startingCashPaise;
+    const deltaPaise = pfValue - start;
+    const returnPct = start ? deltaPaise / start : 0;
 
     const src = getDataSource();
     const hasRealHistory = state.portfolioHistory && state.portfolioHistory.length > 1;
@@ -396,25 +528,49 @@ function renderHoldingsTable(holdings) {
           </tr>
         </thead>
         <tbody>
-          ${holdings.map(h => `
+          ${holdings.map(h => {
+            // Hotfix57a: stub-aware row rendering. Bare-stub rows are
+            // common during cold-load before the AMFI catalog finishes
+            // streaming in (especially MF holdings — equities have
+            // featured-symbol stubs that look reasonable). Don't show
+            // "MF_151908 · " with a synthetic walk-anchor LTP; show the
+            // ticker + a "Loading…" hint and "—" in the price cells.
+            const displayName = h.isBareStub
+              ? (h.isMf ? "Loading fund details…" : escapeHtml(h.inst.name || h.sym))
+              : escapeHtml(h.inst.name || h.sym);
+            const sectorPart = h.inst.sector && h.inst.sector !== "Unknown"
+              ? " · " + escapeHtml(h.inst.sector)
+              : "";
+            const ltpCell = h.priceReady
+              ? formatRupees(h.curPx)
+              : `<span class="dim">—</span>`;
+            const todayCell = h.priceReady
+              ? `<span class="${deltaClass(h.dayChange)}">${formatPct(h.dayChange, { sign: true })}</span>`
+              : `<span class="dim">—</span>`;
+            const valueCell = h.priceReady
+              ? formatRupees(h.value, { compact: true })
+              : `<span class="dim">—</span>`;
+            const plCell = h.priceReady
+              ? `<div class="${deltaClass(h.pl)}">${formatRupees(h.pl, { sign: true, compact: true })}</div>
+                 <div class="${deltaClass(h.pl)}" style="font-size: 11px;">${formatPct(h.plPct, { sign: true })}</div>`
+              : `<span class="dim">—</span>`;
+            return `
             <tr class="clickable" data-sym="${h.sym}">
               <td><div class="stock-avatar" style="width: 32px; height: 32px; font-size: 10px;">${escapeHtml(h.inst.logo || h.sym.slice(0, 3))}</div></td>
               <td>
-                <div class="font-semi" style="color: var(--text-strong);">${escapeHtml(h.inst.name)}</div>
-                <div class="dim text-xs">${h.sym} · ${escapeHtml(h.inst.sector || "")}</div>
+                <div class="font-semi" style="color: var(--text-strong);">${displayName}</div>
+                <div class="dim text-xs">${escapeHtml(h.sym)}${sectorPart}</div>
               </td>
               <td class="num">${formatQty(h.h.qty, h.inst.kind)}</td>
               <td class="num">${formatRupees(h.h.avgCostPaise)}</td>
-              <td class="num">${formatRupees(h.curPx)}</td>
-              <td class="num ${deltaClass(h.dayChange)}">${formatPct(h.dayChange, { sign: true })}</td>
-              <td class="num">${formatRupees(h.value, { compact: true })}</td>
-              <td class="num ${deltaClass(h.pl)}">
-                <div>${formatRupees(h.pl, { sign: true, compact: true })}</div>
-                <div style="font-size: 11px;">${formatPct(h.plPct, { sign: true })}</div>
-              </td>
+              <td class="num">${ltpCell}</td>
+              <td class="num">${todayCell}</td>
+              <td class="num">${valueCell}</td>
+              <td class="num">${plCell}</td>
               <td><a class="btn btn-ghost btn-sm" href="#/stocks/${h.sym}">Trade</a></td>
             </tr>
-          `).join("")}
+          `;
+          }).join("")}
         </tbody>
       </table>
     </div>
