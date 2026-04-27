@@ -226,10 +226,15 @@ export function renderStocks(main) {
     // patch the visible label.
     try {
       const allInst = getAllInstruments();
-      const total    = allInst.length;
       const equityCt = allInst.filter(i => i.kind === KIND_EQUITY).length;
       const etfCt    = allInst.filter(i => i.kind === KIND_ETF).length;
       const mfActive = allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length;
+      // Hotfix61a: total = sum of the VISIBLE breakdown, not allInst.length.
+      // Raw rows include 5,000+ wound-up zombie MF schemes that we hide
+      // from the grid via _isMfTerminated, so a "16,665 instruments"
+      // headline followed by "8,741 mutual funds" didn't add up. Total
+      // now equals what the user can actually browse below.
+      const total    = equityCt + etfCt + mfActive;
       const fmt = (n) => n.toLocaleString("en-IN");
       const mfPill = main.querySelector('[data-kind="MF"]');
       if (mfPill && mfActive) mfPill.textContent = `Mutual Funds (${fmt(mfActive)})`;
@@ -854,16 +859,16 @@ export function renderStocks(main) {
         <div>
           <h1>Markets</h1>
           <p class="muted">${(() => {
-            // Hotfix56a: include the full instrument total up front
-            // (user pushback 'whyd u reduce it from 16665?'). The
-            // breakdown that follows shows active subtotals so the
-            // investable counts are still visible. Total = every
-            // universe row (live + zombie); active MFs = non-terminated
-            // subset only.
-            const total    = allInst.length;
+            // Hotfix61a: total = sum of the visible breakdown counts,
+            // not allInst.length. Raw rows include 5,000+ wound-up
+            // zombie MFs we hide via _isMfTerminated, so the prior
+            // "16,665 instruments · ... · 8,741 mutual funds" headline
+            // didn't add up. Now total = stocks + ETFs + active MFs,
+            // matching what the user can actually browse below.
             const equityCt = allInst.filter(i => i.kind === KIND_EQUITY).length;
             const etfCt    = allInst.filter(i => i.kind === KIND_ETF).length;
             const mfActive = allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length;
+            const total    = equityCt + etfCt + mfActive;
             const fmt = (n) => n.toLocaleString("en-IN");
             const parts = [`${fmt(total)} instruments`];
             if (equityCt) parts.push(`${fmt(equityCt)} stocks`);
@@ -2182,22 +2187,45 @@ function renderMoodHtml(mood) {
 }
 
 // Templated, deterministic personal coda. Picks the largest current
-// holding (by qty × LTP) that has a fresh quote and reports its day-
-// change. If user has 2+ holdings reports a quick "N up, M down,
-// K flat" tally. No randomness, no LLM call, runs in <1 ms.
+// holding (by qty × LTP) and reports its day-change. If user has 2+
+// holdings reports a quick "N up, M down, K flat" tally. No randomness,
+// no LLM call, runs in <1 ms.
+//
+// Hotfix61a: hardened to actually fire on first paint. Was silently
+// returning "" because the user's holdings weren't yet in the
+// module-scoped quoteCache (which fills as cards hydrate). Now falls
+// back through three sources in order:
+//   1. quoteCache (live ticks from subscribeToQuotes)
+//   2. getCachedQuotes (persisted localStorage from any prior session)
+//   3. inst.nav for MFs / inst.price for stubs (worst-case)
+// This lets the coda render immediately on cold-load with yesterday's
+// persisted close — accurate enough for "your holding X +Y%" and far
+// better than a missing line entirely.
 function _renderPersonalCoda() {
   try {
     const state = getState();
     const syms = Object.keys(state.holdings || {});
     if (!syms.length) return "";
+    // Pull the persisted (localStorage-backed) quote cache as a
+    // fallback for any holding the live cache hasn't observed yet.
+    const persisted = getCachedQuotes(syms);
     const rows = [];
     for (const sym of syms) {
       const inst = getInstrument(sym);
       if (!inst) continue;
-      const q = quoteCache[sym];
-      const px = q?.pricePaise;
-      const ch = q?.changePct;
-      if (!Number.isFinite(px) || !Number.isFinite(ch)) continue;
+      const q = quoteCache[sym] || persisted[sym] || null;
+      let px = q && Number.isFinite(q.pricePaise) ? q.pricePaise : null;
+      let ch = q && Number.isFinite(q.changePct) ? q.changePct : null;
+      // MF defensive: AMFI publishes one NAV per day, no intraday
+      // motion. If we don't have a live quote, use inst.nav directly
+      // so the coda still gets a price; ch defaults to 0.
+      if (sym.startsWith("MF_") && (px == null || px <= 0)) {
+        if (typeof inst.nav === "number" && inst.nav > 0) {
+          px = Math.round(inst.nav * 100);
+          if (ch == null) ch = 0;
+        }
+      }
+      if (px == null || px <= 0 || ch == null) continue;
       const qty = state.holdings[sym]?.qty || 0;
       rows.push({ sym, name: inst.name || sym, value: qty * px, ch });
     }
