@@ -226,23 +226,20 @@ export function renderStocks(main) {
     // patch the visible label.
     try {
       const allInst = getAllInstruments();
+      const total    = allInst.length;
       const equityCt = allInst.filter(i => i.kind === KIND_EQUITY).length;
       const etfCt    = allInst.filter(i => i.kind === KIND_ETF).length;
       const mfActive = allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length;
       const fmt = (n) => n.toLocaleString("en-IN");
-      // Patch the kind-tab MF pill (label + count). Other pills
-      // (Stocks/ETFs/Watchlist) don't move on MF-load so they
-      // stay put.
       const mfPill = main.querySelector('[data-kind="MF"]');
       if (mfPill && mfActive) mfPill.textContent = `Mutual Funds (${fmt(mfActive)})`;
-      // Patch the muted h1 subtitle ('2,364 stocks · 322 ETFs · 8,741 mutual funds')
       const subtitle = main.querySelector("h1 + p.muted");
       if (subtitle) {
-        const parts = [];
+        const parts = [`${fmt(total)} instruments`];
         if (equityCt) parts.push(`${fmt(equityCt)} stocks`);
         if (etfCt)    parts.push(`${fmt(etfCt)} ETFs`);
         if (mfActive) parts.push(`${fmt(mfActive)} mutual funds`);
-        subtitle.textContent = parts.join(" · ");
+        subtitle.textContent = parts.join(" · ");   // U+00B7
       }
     } catch (e) {
       // If anything goes wrong with the surgical patch, fall back to
@@ -846,22 +843,22 @@ export function renderStocks(main) {
         <div>
           <h1>Markets</h1>
           <p class="muted">${(() => {
-            // Hotfix51d: render an honest breakdown by kind instead of a
-            // misleading 16k total that includes 5k+ wound-up zombie MFs.
-            // Counts ACTIVE instruments only:
-            //   - all EQUITY (Yahoo-tracked)
-            //   - all ETF (Yahoo-tracked)
-            //   - non-terminated MFs (mfapi/AMFI; nav>=0.01 AND nav_date
-            //     less than 365d old, mirrors _isMfTerminated/isTerminatedFund)
+            // Hotfix56a: include the full instrument total up front
+            // (user pushback 'whyd u reduce it from 16665?'). The
+            // breakdown that follows shows active subtotals so the
+            // investable counts are still visible. Total = every
+            // universe row (live + zombie); active MFs = non-terminated
+            // subset only.
+            const total    = allInst.length;
             const equityCt = allInst.filter(i => i.kind === KIND_EQUITY).length;
             const etfCt    = allInst.filter(i => i.kind === KIND_ETF).length;
             const mfActive = allInst.filter(i => i.kind === KIND_MF && !_isMfTerminated(i)).length;
             const fmt = (n) => n.toLocaleString("en-IN");
-            const parts = [];
+            const parts = [`${fmt(total)} instruments`];
             if (equityCt) parts.push(`${fmt(equityCt)} stocks`);
             if (etfCt)    parts.push(`${fmt(etfCt)} ETFs`);
             if (mfActive) parts.push(`${fmt(mfActive)} mutual funds`);
-            return parts.join(" · ");   // Hotfix53a: JS-escape the middle dot to avoid mojibake (was '·' double-encoded UTF-8)
+            return parts.join(" · ");   // U+00B7 middle dot (clean UTF-8)
           })()}</p>
         </div>
         <span class="data-badge"><span class="dot"></span> ${escapeHtml(src.name)}</span>
