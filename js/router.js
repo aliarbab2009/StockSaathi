@@ -147,11 +147,23 @@ export function mountRouter() {
         });
         // Safety net: if refresh silently fails, fall through to /login
         // after 6s so users aren't stuck on a forever-spinner.
+        // Hotfix56b: when the timer fires AND user still null, the
+        // persisted session token is broken (expired, corrupted, or
+        // pointing at a deleted account). Without explicitly clearing
+        // it, the next route() re-entry sees hasPersistedSession()
+        // still true and shows the loading shell AGAIN â€” infinite
+        // loop. User-reported: 'Getting your portfolio ready...'
+        // stuck after MF buy + reload. Now we wipe the stale token
+        // before redirecting so /login is the unambiguous next state.
         const timer = setTimeout(() => {
           cleanup();
-          if (!currentUser()) navigate("/login");
-          else route();
-        }, 6000);
+          if (!currentUser()) {
+            try { localStorage.removeItem("ss.sb.session.v1"); } catch {}
+            navigate("/login");
+          } else {
+            route();
+          }
+        }, 3000);   // Hotfix56b: was 6000ms; 3s is enough for any healthy refresh
         function cleanup() {
           unsub?.();
           clearTimeout(timer);
