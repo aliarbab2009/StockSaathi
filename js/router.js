@@ -41,8 +41,20 @@ const ROUTES = [
   // pending-orders card rather than 404 them. Using location.replace
   // (not assign) so the bad URL doesn't pollute history.
   { name: "orders-redirect", match: /^\/orders\/?$/,                        render: () => { location.replace("#/portfolio"); setTimeout(() => { document.querySelector("#order-list")?.scrollIntoView({ behavior: "smooth" }); }, 300); }, public: true },
-  { name: "stocks",        match: /^\/stocks\/?$/,                         render: renderStocks, needsAuth: true, needsOnboarded: true },
-  { name: "stock-detail",  match: /^\/stocks\/([A-Za-z0-9&\-_.]+)\/?$/,    render: renderStockDetail, param: "symbol", needsAuth: true, needsOnboarded: true },
+  // Hotfix60a: /stocks + /stocks/<sym> are PUBLIC. The markets browser
+  // is read-only for anonymous users — no holdings, no watchlist saves,
+  // just live prices and the universe. Previously these were auth-gated
+  // with needsAuth+needsOnboarded, which meant any cold load with a
+  // stale ss.sb.session.v1 token (logged-out browser, leftover key from
+  // a prior session, expired JWT, etc.) showed "Getting your portfolio
+  // ready..." for up to 3 s before redirecting to /login. Awful first
+  // impression for a discovery page. The page itself handles missing
+  // user state cleanly: holdings/watchlist show their empty states,
+  // and buy/sell buttons on /stocks/<sym> already prompt login when
+  // an unauth'd user attempts a trade. So nothing else needs to change
+  // — just opening the gate.
+  { name: "stocks",        match: /^\/stocks\/?$/,                         render: renderStocks, public: true },
+  { name: "stock-detail",  match: /^\/stocks\/([A-Za-z0-9&\-_.]+)\/?$/,    render: renderStockDetail, param: "symbol", public: true },
   { name: "crash-replay",  match: /^\/crash-replay\/?$/,                   render: renderCrashReplay, public: true },
   { name: "crash-replay-scenario", match: /^\/crash-replay\/([A-Za-z0-9_]+)\/?$/, render: renderCrashReplay, param: "scenario", public: true },
   { name: "report-card",   match: /^\/report-card\/?$/,                    render: renderReportCard, needsAuth: true, needsOnboarded: true },
