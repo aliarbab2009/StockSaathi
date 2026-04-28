@@ -2,12 +2,30 @@
 // LANDING — StockSaathi pitch page.
 // =============================================================================
 
-import { getState } from "../state.js";
+import { getState, subscribe } from "../state.js";
+
+// Hero CTA differs by auth state:
+//   logged-in + onboarded → "Open portfolio" / "Try Time Travel"
+//   logged-in + pending   → "Finish onboarding"
+//   logged-out            → "Create account" / "I already have an account"
+// Pulled out of the template so the post-render subscriber can swap just
+// this fragment when auth state hydrates late (see renderLanding below).
+function ctaRowHtml(isAuthed, isOnboarded) {
+  if (isAuthed && isOnboarded) {
+    return `<a href="#/portfolio" class="btn btn-primary btn-lg">Open portfolio</a>
+            <a href="#/crash-replay" class="btn btn-ghost btn-lg">Try Time Travel</a>`;
+  }
+  if (isAuthed) {
+    return `<a href="#/onboarding" class="btn btn-primary btn-lg">Finish onboarding</a>`;
+  }
+  return `<a href="#/register" class="btn btn-primary btn-lg">Create account →</a>
+          <a href="#/login" class="btn btn-ghost btn-lg">I already have an account</a>`;
+}
 
 export function renderLanding(main) {
   const state = getState();
-  const isAuthed = state.isAuthed;
-  const isOnboarded = state.user.onboarded;
+  let lastAuthed = state.isAuthed;
+  let lastOnboarded = state.user.onboarded;
 
   main.innerHTML = `
     <section class="hero">
@@ -21,15 +39,8 @@ export function renderLanding(main) {
         with an AI coach that reflects on every decision without ever telling you what to do.
       </p>
 
-      <div class="cta-row">
-        ${isAuthed && isOnboarded
-          ? `<a href="#/portfolio" class="btn btn-primary btn-lg">Open portfolio</a>
-             <a href="#/crash-replay" class="btn btn-ghost btn-lg">Try Time Travel</a>`
-          : isAuthed
-          ? `<a href="#/onboarding" class="btn btn-primary btn-lg">Finish onboarding</a>`
-          : `<a href="#/register" class="btn btn-primary btn-lg">Create account →</a>
-             <a href="#/login" class="btn btn-ghost btn-lg">I already have an account</a>`
-        }
+      <div class="cta-row" data-landing-cta>
+        ${ctaRowHtml(lastAuthed, lastOnboarded)}
       </div>
 
       <div class="landing-compliance-note" style="margin-top: var(--sp-4); font-size: var(--text-xs); color: var(--text-faint); text-align: center; line-height: 1.5; max-width: 560px; margin-left: auto; margin-right: auto;">
@@ -132,4 +143,36 @@ export function renderLanding(main) {
       </details>
     </section>
   `;
+
+  // Hotfix62a: re-paint the CTA row when auth hydrates late.
+  //
+  // On a cold load the router fires renderLanding the moment the hash
+  // resolves. At that instant `currentUser()` may still return null —
+  // refreshCurrentUser is a few hundred ms behind because it has to
+  // wait on Supabase's getUser() and a profiles row fetch. The nav
+  // already re-renders on every state emit (see nav.js mountNav →
+  // subscribe(render)), so by the time the user sees the page their
+  // avatar + portfolio pill are correct in the top-right — but the
+  // landing hero, which read state ONCE at render time, still shows
+  // "Create account / I already have an account" forever. User screenshot
+  // confirms it: AA avatar + ₹1.00L pill at top, signup CTAs below.
+  //
+  // Fix: subscribe to state and swap just the CTA fragment when
+  // isAuthed/onboarded flips. Auto-unsubscribes when the hero detaches
+  // (i.e. user navigates to a different route, or back to landing
+  // which re-runs renderLanding and creates a fresh subscription).
+  const heroEl = main.querySelector(".hero");
+  const ctaEl = main.querySelector("[data-landing-cta]");
+  if (heroEl && ctaEl) {
+    const unsub = subscribe(() => {
+      // Hero element gets detached when router blanks main.innerHTML
+      // for the next route. isConnected returns false → we tear down.
+      if (!heroEl.isConnected) { unsub?.(); return; }
+      const s = getState();
+      if (s.isAuthed === lastAuthed && s.user.onboarded === lastOnboarded) return;
+      lastAuthed = s.isAuthed;
+      lastOnboarded = s.user.onboarded;
+      ctaEl.innerHTML = ctaRowHtml(lastAuthed, lastOnboarded);
+    });
+  }
 }
