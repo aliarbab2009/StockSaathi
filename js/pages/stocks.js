@@ -2201,6 +2201,35 @@ function renderMoodHtml(mood) {
 // This lets the coda render immediately on cold-load with yesterday's
 // persisted close — accurate enough for "your holding X +Y%" and far
 // better than a missing line entirely.
+//
+// Hotfix62b: humanise the label. Showing "MF_151908" to a teen makes
+// the page look broken — that's our internal AMFI scheme code, not a
+// fund name. For mutual funds we now use inst.name with predictable
+// plan/option suffixes stripped, then truncated to ~40 chars. Stocks
+// and ETFs keep the ticker — RELIANCE / NIFTYBEES are the canonical
+// public labels and readers know them.
+function _codaLabel(sym, inst) {
+  if (!sym.startsWith("MF_")) return sym;
+  let label = (inst && inst.name) || sym;
+  // Strip "- Direct Plan - Growth", "- Regular Plan - IDCW Payout",
+  // "- Direct Plan - IDCW", etc. The plan + option pair is implied by
+  // the buy flow (we only show one plan to teens) so the suffix is dead
+  // weight in a one-line coda.
+  label = label.replace(
+    /\s*-?\s*(Direct|Regular)\s+Plan\s*-?\s*(Growth|IDCW(\s+(Payout|Reinvestment))?)?\s*$/i, ""
+  );
+  // Then strip a trailing "- Growth" / "-IDCW" / "- IDCW Payout" that
+  // didn't have a plan word in front (common for ETF-style MFs whose
+  // name reads "Mirae Asset Nifty 1D Rate Liquid ETF-IDCW").
+  label = label.replace(
+    /\s*-\s*(Growth|IDCW(\s+(Payout|Reinvestment))?)\s*$/i, ""
+  );
+  label = label.trim();
+  if (!label) label = inst?.name || sym;
+  if (label.length > 42) label = label.slice(0, 40).trimEnd() + "…";
+  return label;
+}
+
 function _renderPersonalCoda() {
   try {
     const state = getState();
@@ -2227,15 +2256,16 @@ function _renderPersonalCoda() {
       }
       if (px == null || px <= 0 || ch == null) continue;
       const qty = state.holdings[sym]?.qty || 0;
-      rows.push({ sym, name: inst.name || sym, value: qty * px, ch });
+      rows.push({ sym, inst, name: inst.name || sym, value: qty * px, ch });
     }
     if (!rows.length) return "";
     rows.sort((a, b) => b.value - a.value);
     const top = rows[0];
     const sign = top.ch >= 0 ? "+" : "";
     const pct = `${sign}${(top.ch * 100).toFixed(2)}%`;
+    const label = _codaLabel(top.sym, top.inst);
     if (rows.length === 1) {
-      return `Your holding <strong>${escapeHtml(top.sym)}</strong> ${escapeHtml(pct)} today.`;
+      return `Your holding <strong>${escapeHtml(label)}</strong> ${escapeHtml(pct)} today.`;
     }
     let up = 0, down = 0, flat = 0;
     for (const r of rows) {
@@ -2247,7 +2277,7 @@ function _renderPersonalCoda() {
     if (up)   tally.push(`${up} up`);
     if (down) tally.push(`${down} down`);
     if (flat) tally.push(`${flat} flat`);
-    return `Your top holding <strong>${escapeHtml(top.sym)}</strong> ${escapeHtml(pct)} · portfolio today: ${tally.join(", ")}.`;
+    return `Your top holding <strong>${escapeHtml(label)}</strong> ${escapeHtml(pct)} · portfolio today: ${tally.join(", ")}.`;
   } catch {
     return "";
   }
