@@ -367,7 +367,25 @@ export function stockChart(ohlc, {
   if (mode === "area") {
     let d = "";
     for (let i = 0; i < ohlc.length; i++) {
-      d += (i === 0 ? "M" : "L") + toXk(ohlc[i], i).toFixed(2) + "," + toY(ohlc[i].c).toFixed(2) + " ";
+      // Hotfix62d: the FIRST plotted point uses OPEN, not CLOSE.
+      //
+      // Each OHLC bucket's timestamp marks the bucket START, but its
+      // .c (close) is the price at the bucket END. Plotting close-at-
+      // bucket-start makes the line visually "start" at the wrong
+      // price — for a 5m bucket [9:15, 9:20) that opened ₹495.95 and
+      // closed ₹494.00, the line dropped to ₹494 at the 9:15 mark on
+      // the x-axis even though at 9:15:00 the actual market price was
+      // ₹495.95. The user noticed this comparing our chart to Google
+      // Finance, which correctly anchors at the open.
+      //
+      // Subsequent points stay at .c — for those, the next bucket's
+      // open ≈ this bucket's close, so the visual error is small and
+      // rolling-it-along would over-correct (you'd plot ohlc[1].o at
+      // ohlc[1].t which equals ohlc[0].c, basically duplicating).
+      // Only the FIRST point has no preceding bucket to inherit from,
+      // so only the first point gets the fix.
+      const y = (i === 0) ? ohlc[i].o : ohlc[i].c;
+      d += (i === 0 ? "M" : "L") + toXk(ohlc[i], i).toFixed(2) + "," + toY(y).toFixed(2) + " ";
     }
     // Bottom edge of the fill polygon: anchor to the FIRST and LAST
     // candle's actual x positions, not the plot edges. Otherwise the
@@ -376,7 +394,11 @@ export function stockChart(ohlc, {
     const xFirst = toXk(ohlc[0], 0);
     const xLast  = toXk(ohlc[ohlc.length - 1], ohlc.length - 1);
     const areaD = d + ` L${xLast.toFixed(2)},${paddingTop + plotH} L${xFirst.toFixed(2)},${paddingTop + plotH} Z`;
-    const firstClose = ohlc[0].c;
+    // Day up/down color anchors on the day's OPEN (first bucket's .o)
+    // vs the latest close — same baseline the dashed reference line
+    // uses below. Previously used ohlc[0].c which mismatched the
+    // baseline by an entire bucket's worth of price action.
+    const firstClose = ohlc[0].o;
     const lastClose = ohlc[ohlc.length - 1].c;
     const up = lastClose >= firstClose;
     const color = up ? "var(--positive)" : "var(--negative)";
@@ -638,7 +660,12 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       }
       if (dotHalo) { dotHalo.setAttribute("cx", dotX); dotHalo.setAttribute("cy", dotY); }
       if (dotCore) { dotCore.setAttribute("cx", dotX); dotCore.setAttribute("cy", dotY); }
-      const dotColor = dotClose >= ohlc[0].c
+      // Hotfix62d: dot color anchors on the day's OPEN, matching the
+      // area path's up/down baseline. Was ohlc[0].c (first bucket
+      // CLOSE) which is the close of the 9:15 bucket — drifts ~1
+      // bucket of price action away from the actual day-open and
+      // disagrees with the dashed previous-close baseline below.
+      const dotColor = dotClose >= ohlc[0].o
         ? "var(--positive, #00B386)"
         : "var(--negative, #EB5757)";
       if (dotColor !== lastColor) {
