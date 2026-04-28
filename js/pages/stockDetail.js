@@ -23,8 +23,8 @@ import { mountQuantitySelector } from "../components/quantitySelector.js";
 import { toast } from "../components/toast.js";
 import { termHtml } from "../features/aiExplainer.js";
 
-// Timeframe → Yahoo range/interval. 1D uses 1m intraday so the line is
-// Google-Finance-smooth, not the 5m zig-zag we shipped originally.
+// Timeframe → Yahoo range/interval. Granularity tuned to match Groww/
+// Zerodha density at every TF the user lives in (1D, 1W, 1M).
 //
 // Hotfix47a: added YTD, 5Y, MAX. /api/history accepts all of these (see
 // _RANGE_RE in api/history.py). User asked for long-term context that
@@ -33,14 +33,21 @@ import { termHtml } from "../features/aiExplainer.js";
 //
 // Hotfix62c: 1D was 5m → ~75 candles per session, looked sparse next to
 // Groww/Google. Yahoo serves 1m for any range≤7d, so we get ~375 candles
-// for a full session at no extra latency. Candle width math in
-// stockChart() floors at 1.5 px so dense bars merge into a smooth
-// ribbon, matching what Google Finance ships. 1W stays at 30m (5d ×
-// 13 buckets ≈ 65) — still readable, no urgency to densify.
+// for a full session at no extra latency.
+//
+// Hotfix62g: 1W was 30m (~65 points across 5 days) and 1M was 1d (~22
+// points across a month). User's side-by-side with Groww showed both
+// were way too smooth/sparse — Groww shows minute-or-5-minute
+// granularity at every multi-day TF. Yahoo serves 5m for range≤60d, so:
+//   1W: 30m → 5m  (~375 points for 5 trading days)
+//   1M: 1d  → 30m (~290 points for ~22 trading days)
+// Same Yahoo endpoint, same latency, ~10× the visual texture. Candle
+// width math floors at 1.5 px so dense bars merge into a smooth
+// ribbon matching what Groww ships.
 const TF_MAP = {
   "1D":  { range: "1d",  interval: "1m",  days: 1     },
-  "1W":  { range: "5d",  interval: "30m", days: 5     },
-  "1M":  { range: "1mo", interval: "1d",  days: 22    },
+  "1W":  { range: "5d",  interval: "5m",  days: 5     },
+  "1M":  { range: "1mo", interval: "30m", days: 22    },
   "3M":  { range: "3mo", interval: "1d",  days: 66    },
   "6M":  { range: "6mo", interval: "1d",  days: 130   },
   "YTD": { range: "ytd", interval: "1d",  days: 260   },
