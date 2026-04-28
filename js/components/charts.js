@@ -367,25 +367,21 @@ export function stockChart(ohlc, {
   if (mode === "area") {
     let d = "";
     for (let i = 0; i < ohlc.length; i++) {
-      // Hotfix62d: the FIRST plotted point uses OPEN, not CLOSE.
+      // Plot each bucket's CLOSE at the bucket's stamp. This is the
+      // convention every Indian broker uses (Groww, Zerodha, Google
+      // Finance) — at 9:15 their chart reads the CLOSE of the [9:15,
+      // 9:16) 1m bucket, not the OPEN of it. With 1m granularity (TF
+      // post-Hotfix62c) each bucket is 60s wide, so plotting C-at-
+      // bucket-start vs C-at-bucket-end is a single-pixel shift no one
+      // perceives.
       //
-      // Each OHLC bucket's timestamp marks the bucket START, but its
-      // .c (close) is the price at the bucket END. Plotting close-at-
-      // bucket-start makes the line visually "start" at the wrong
-      // price — for a 5m bucket [9:15, 9:20) that opened ₹495.95 and
-      // closed ₹494.00, the line dropped to ₹494 at the 9:15 mark on
-      // the x-axis even though at 9:15:00 the actual market price was
-      // ₹495.95. The user noticed this comparing our chart to Google
-      // Finance, which correctly anchors at the open.
-      //
-      // Subsequent points stay at .c — for those, the next bucket's
-      // open ≈ this bucket's close, so the visual error is small and
-      // rolling-it-along would over-correct (you'd plot ohlc[1].o at
-      // ohlc[1].t which equals ohlc[0].c, basically duplicating).
-      // Only the FIRST point has no preceding bucket to inherit from,
-      // so only the first point gets the fix.
-      const y = (i === 0) ? ohlc[i].o : ohlc[i].c;
-      d += (i === 0 ? "M" : "L") + toXk(ohlc[i], i).toFixed(2) + "," + toY(y).toFixed(2) + " ";
+      // Hotfix62f: was briefly using ohlc[0].o for the first point
+      // (Hotfix62d) thinking that fixed the user's "opening price
+      // discrepancies" gripe — actually what they wanted was Groww
+      // parity, which means matching .c-at-stamp. The 1m switch in
+      // Hotfix62c had already done the heavy lifting; v224's open-
+      // anchored variant pushed us back out of sync. Reverted.
+      d += (i === 0 ? "M" : "L") + toXk(ohlc[i], i).toFixed(2) + "," + toY(ohlc[i].c).toFixed(2) + " ";
     }
     // Bottom edge of the fill polygon: anchor to the FIRST and LAST
     // candle's actual x positions, not the plot edges. Otherwise the
@@ -394,11 +390,7 @@ export function stockChart(ohlc, {
     const xFirst = toXk(ohlc[0], 0);
     const xLast  = toXk(ohlc[ohlc.length - 1], ohlc.length - 1);
     const areaD = d + ` L${xLast.toFixed(2)},${paddingTop + plotH} L${xFirst.toFixed(2)},${paddingTop + plotH} Z`;
-    // Day up/down color anchors on the day's OPEN (first bucket's .o)
-    // vs the latest close — same baseline the dashed reference line
-    // uses below. Previously used ohlc[0].c which mismatched the
-    // baseline by an entire bucket's worth of price action.
-    const firstClose = ohlc[0].o;
+    const firstClose = ohlc[0].c;
     const lastClose = ohlc[ohlc.length - 1].c;
     const up = lastClose >= firstClose;
     const color = up ? "var(--positive)" : "var(--negative)";
@@ -612,24 +604,16 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       // When useTimeAxis (1D always, or any TF zoomed in), the line IS
       // time-positioned, so time-interpolation remains correct.
       //
-      // Hotfix62e: the FIRST point's y-anchor in area mode is ohlc[0].o
-      // (per Hotfix62d), not ohlc[0].c. So when interpolating across
-      // segment 0→1, the start-Y must be ohlc[0].o or the dot floats
-      // above/below the rendered line in the first segment until it
-      // converges with the line at index 1. Visible mostly when zoomed
-      // in (the first segment stretches across more pixels). For all
-      // OTHER segments .c → .c is correct since the line uses .c too.
-      // Only matters in area mode — candle mode dot snaps to (x, .c) of
-      // the nearest candle, no interpolation involved.
-      const startY = (mode === "area") ? ohlc[0].o : ohlc[0].c;
+      // Hotfix62f reverted the open-anchored first-point logic
+      // (Hotfix62d/62e) — line and dot both use .c at every index now,
+      // matching Groww/Zerodha convention.
       if (!useTimeAxis) {
         const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
         const contIdx = rel * (N - 1);
         const i0 = Math.max(0, Math.min(N - 2, Math.floor(contIdx)));
         const i1 = i0 + 1;
         const frac = contIdx - i0;
-        const y0 = (i0 === 0) ? startY : ohlc[i0].c;
-        interpClose = y0 + (ohlc[i1].c - y0) * frac;
+        interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
         idx = Math.round(contIdx);
       } else {
         idx = nearestIdxAt(cursorMs);
@@ -640,8 +624,7 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
         else if (idx < N - 1 && ohlc[idx].t < cursorMs) { i0 = idx; i1 = idx + 1; }
         const span = ohlc[i1].t - ohlc[i0].t;
         const frac = span > 0 ? (cursorMs - ohlc[i0].t) / span : 0;
-        const y0 = (i0 === 0) ? startY : ohlc[i0].c;
-        interpClose = y0 + (ohlc[i1].c - y0) * frac;
+        interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
       }
       k = ohlc[idx];
     }
@@ -673,12 +656,10 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       }
       if (dotHalo) { dotHalo.setAttribute("cx", dotX); dotHalo.setAttribute("cy", dotY); }
       if (dotCore) { dotCore.setAttribute("cx", dotX); dotCore.setAttribute("cy", dotY); }
-      // Hotfix62d: dot color anchors on the day's OPEN, matching the
-      // area path's up/down baseline. Was ohlc[0].c (first bucket
-      // CLOSE) which is the close of the 9:15 bucket — drifts ~1
-      // bucket of price action away from the actual day-open and
-      // disagrees with the dashed previous-close baseline below.
-      const dotColor = dotClose >= ohlc[0].o
+      // Dot color anchors on first-bucket CLOSE — matches the area
+      // path's up/down baseline (Hotfix62f reverted both back to .c
+      // for Groww parity).
+      const dotColor = dotClose >= ohlc[0].c
         ? "var(--positive, #00B386)"
         : "var(--negative, #EB5757)";
       if (dotColor !== lastColor) {
