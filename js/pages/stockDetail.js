@@ -23,15 +23,22 @@ import { mountQuantitySelector } from "../components/quantitySelector.js";
 import { toast } from "../components/toast.js";
 import { termHtml } from "../features/aiExplainer.js";
 
-// Timeframe → Yahoo range/interval. 1D uses 5m intraday so the chart looks
-// like Groww's (dense 1-min-ish bars), not a sparse 5-daily-candle bar.
+// Timeframe → Yahoo range/interval. 1D uses 1m intraday so the line is
+// Google-Finance-smooth, not the 5m zig-zag we shipped originally.
 //
 // Hotfix47a: added YTD, 5Y, MAX. /api/history accepts all of these (see
 // _RANGE_RE in api/history.py). User asked for long-term context that
 // the previous 1Y cap blocked. Interval ladders down for longer ranges
 // so we don't overload the chart with 2,500 daily candles on MAX.
+//
+// Hotfix62c: 1D was 5m → ~75 candles per session, looked sparse next to
+// Groww/Google. Yahoo serves 1m for any range≤7d, so we get ~375 candles
+// for a full session at no extra latency. Candle width math in
+// stockChart() floors at 1.5 px so dense bars merge into a smooth
+// ribbon, matching what Google Finance ships. 1W stays at 30m (5d ×
+// 13 buckets ≈ 65) — still readable, no urgency to densify.
 const TF_MAP = {
-  "1D":  { range: "1d",  interval: "5m",  days: 1     },
+  "1D":  { range: "1d",  interval: "1m",  days: 1     },
   "1W":  { range: "5d",  interval: "30m", days: 5     },
   "1M":  { range: "1mo", interval: "1d",  days: 22    },
   "3M":  { range: "3mo", interval: "1d",  days: 66    },
@@ -482,7 +489,7 @@ async function applyZoomCommit(inst, symbol, next) {
   // heavy lifting for visible-price-range refinement.
   if (ui.timeframe === "1D") {
     const newInterval = intervalForScale(newScale);
-    const curInterval = ui.interval ?? (TF_MAP["1D"]?.interval ?? "5m");
+    const curInterval = ui.interval ?? (TF_MAP["1D"]?.interval ?? "1m");
     const intervalChanged = newInterval !== curInterval;
     ui.interval = (newScale <= 1) ? null : newInterval;
 
@@ -511,7 +518,8 @@ async function applyZoomCommit(inst, symbol, next) {
 }
 
 // Reset zoom back to full session 1x. Dropped back to TF_MAP default
-// interval so the user sees the same "stable" 5m view they started with.
+// interval (1m post-Hotfix62c) so the user sees the same "stable"
+// view they started with.
 function resetZoom(inst, symbol) {
   if (ui.zoom.scale === 1 && ui.interval == null) return;   // already reset
   ui.zoom = { scale: 1, centerMs: null, manualPan: false };

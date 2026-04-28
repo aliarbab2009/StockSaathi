@@ -482,8 +482,13 @@ export function attachChartZoom(container, opts) {
 }
 
 // Exposed as a helper for stockDetail.js to map scale → interval.
-export function intervalForScale(scale) {
-  if (scale <= 1.5) return "5m";
-  if (scale <= 3)   return "2m";
+//
+// Hotfix62c: was a 5m → 2m → 1m ladder back when the 1D base was 5m and
+// we needed to fetch finer data on zoom-in. Now that base is already 1m
+// (Yahoo's finest intraday tier for ranges ≤ 7d), there's nothing finer
+// to ladder to — zooming in just narrows the viewport over the existing
+// candles. Always returns "1m" so the upstream "interval changed →
+// refetch" path never fires unnecessarily on a 1D zoom.
+export function intervalForScale(_scale) {
   return "1m";
 }
