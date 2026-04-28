@@ -611,13 +611,25 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
       // by continuous INDEX so the dot's Y tracks the line pixel-for-pixel.
       // When useTimeAxis (1D always, or any TF zoomed in), the line IS
       // time-positioned, so time-interpolation remains correct.
+      //
+      // Hotfix62e: the FIRST point's y-anchor in area mode is ohlc[0].o
+      // (per Hotfix62d), not ohlc[0].c. So when interpolating across
+      // segment 0→1, the start-Y must be ohlc[0].o or the dot floats
+      // above/below the rendered line in the first segment until it
+      // converges with the line at index 1. Visible mostly when zoomed
+      // in (the first segment stretches across more pixels). For all
+      // OTHER segments .c → .c is correct since the line uses .c too.
+      // Only matters in area mode — candle mode dot snaps to (x, .c) of
+      // the nearest candle, no interpolation involved.
+      const startY = (mode === "area") ? ohlc[0].o : ohlc[0].c;
       if (!useTimeAxis) {
         const rel = Math.max(0, Math.min(1, (px - PL) / plotW));
         const contIdx = rel * (N - 1);
         const i0 = Math.max(0, Math.min(N - 2, Math.floor(contIdx)));
         const i1 = i0 + 1;
         const frac = contIdx - i0;
-        interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+        const y0 = (i0 === 0) ? startY : ohlc[i0].c;
+        interpClose = y0 + (ohlc[i1].c - y0) * frac;
         idx = Math.round(contIdx);
       } else {
         idx = nearestIdxAt(cursorMs);
@@ -628,7 +640,8 @@ export function attachStockChartHover(container, ohlc, { mode = "candle" } = {})
         else if (idx < N - 1 && ohlc[idx].t < cursorMs) { i0 = idx; i1 = idx + 1; }
         const span = ohlc[i1].t - ohlc[i0].t;
         const frac = span > 0 ? (cursorMs - ohlc[i0].t) / span : 0;
-        interpClose = ohlc[i0].c + (ohlc[i1].c - ohlc[i0].c) * frac;
+        const y0 = (i0 === 0) ? startY : ohlc[i0].c;
+        interpClose = y0 + (ohlc[i1].c - y0) * frac;
       }
       k = ohlc[idx];
     }
