@@ -101,10 +101,17 @@ let _prevLastDataMs = null;                  // tracked for sticky-right-edge lo
 async function loadHistoryWithFallback(symbol, tf, interval) {
   let h = await getHistory(symbol, tf.range, interval).catch(() => null);
   if (tf !== TF_MAP["1D"]) return h;
-  if (h && h.ohlc?.length >= 2) return h;
+  // Hotfix64e: getHistory() silently substitutes synthHistory() on Yahoo
+  // failure (returns 365 fake daily bars), so a non-empty `h` does NOT
+  // prove we got real intraday data. On weekends + holidays Yahoo's
+  // /api/history?range=1d returns 502 → getHistory returns synth →
+  // without rejecting synth here the 5d-slice path below never runs and
+  // the chart shows year-long synthetic data labelled "1D". Reject
+  // synth so the fallback fires and we paint Friday's session instead.
+  if (h && h.source && h.source !== "synthetic" && h.ohlc?.length >= 2) return h;
   // Refetch wider granularity, slice to last calendar day in IST.
   const wide = await getHistory(symbol, "5d", "30m").catch(() => null);
-  if (!wide?.ohlc?.length) return h;   // give up — caller falls back to skeleton
+  if (!wide?.ohlc?.length || wide.source === "synthetic") return h;   // give up — caller falls back to skeleton
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
   });
@@ -127,9 +134,19 @@ async function loadHistoryWithFallback(symbol, tf, interval) {
 
 function todaysMarketWindowMs() {
   const ms = marketStatus();
-  // marketStatus exposes istDate ("DD MMM YYYY"), istTime, isHoliday, weekday.
-  // For a robust IST date, derive YYYY-MM-DD via Intl in IST and use the
-  // explicit offset string for parseable construction.
+  // marketStatus exposes istDate, istTime, isHoliday, and istDay
+  // ("mon".."sun"). For a robust IST date, derive YYYY-MM-DD via Intl
+  // in IST and use the explicit offset string for parseable construction.
+  //
+  // Hotfix64e: was reading ms.weekday — that property doesn't exist.
+  // The actual key is ms.istDay. So isWeekend was always false, weekend
+  // windows leaked through to render() and the chart drew an empty
+  // frame for today instead of falling back to the last trading session.
+  // User: "on saturdays and sundays, the 1D graph STILL DRAWS." Now
+  // weekends are treated identically to holidays — return null so the
+  // render-side fallback below picks Friday's session and labels it
+  // "Showing last session: 02 May".
+  if (ms.isHoliday || ms.istDay === "sat" || ms.istDay === "sun") return null;
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
   });
@@ -138,10 +155,7 @@ function todaysMarketWindowMs() {
   const fromMs = new Date(`${ymd}T09:15:00+05:30`).getTime();
   const toMs   = new Date(`${ymd}T15:30:00+05:30`).getTime();
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
-  // Treat holidays + weekends as "no session today" — chart reverts to
-  // the data-bounded index axis showing yesterday's session.
-  if (ms.isHoliday) return null;
-  return { fromMs, toMs, isWeekend: ms.weekday === "sat" || ms.weekday === "sun" };
+  return { fromMs, toMs };
 }
 
 // Pick an SVG viewBox width that actually fits the user's viewport.
@@ -637,10 +651,14 @@ function render(inst, symbol) {
   if (inst.kind !== "MF" && ui.timeframe === "1D") {
     const win = todaysMarketWindowMs();
     if (win) {
+      // Hotfix64e: isWeekend check removed — todaysMarketWindowMs now
+      // returns null on weekends/holidays, so reaching this branch
+      // means it's a valid trading day. POST_CLOSE_GRACE_MS keeps the
+      // window pinned through 16:00 IST so end-of-day viewers don't
+      // see the chart snap to a 5d index axis at the bell.
       const POST_CLOSE_GRACE_MS = 30 * 60 * 1000;
       const inWindow = Date.now() < (win.toMs + POST_CLOSE_GRACE_MS);
-      const isWeekday = !win.isWeekend;
-      if (inWindow && isWeekday) {
+      if (inWindow) {
         sessionWindow = { fromMs: win.fromMs, toMs: win.toMs };
       }
     }
