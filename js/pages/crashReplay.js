@@ -12,6 +12,25 @@ import { recordCoachMessage, setState, getState } from "../state.js";
 import { navigate } from "../router.js";
 import { generateCustomCrash } from "../features/customCrash.js";
 
+// Featured replays — canonical phrasings that scripts/pregen-crashes.mjs
+// has populated into the cross-user cache. Clicking any of these calls
+// generateCustomCrash with the exact phrasing → cache hit → instant
+// load. MUST stay in sync with EVENTS in scripts/pregen-crashes.mjs.
+// If pregen hasn't run yet, the click still works but pays full
+// generation cost on first user.
+const FEATURED_PHRASINGS = [
+  { phrase: "Harshad Mehta 1992",            blurb: "Bombay's first big stock-broker scam — Sensex doubled then halved.", range: "Apr 1992 → Aug 1992" },
+  { phrase: "Dot Com 2000",                  blurb: "Indian IT pulled into the global tech bust.",                          range: "Mar 2000 → Jun 2000" },
+  { phrase: "Global Financial Crisis 2008",  blurb: "Lehman → Nifty fell 60% over six months.",                             range: "Sep 2008 → Mar 2009" },
+  { phrase: "Satyam scandal 2009",           blurb: "Ramalinga Raju's confession letter, IT sector circuit-breakers.",     range: "Jan 2009 → Apr 2009" },
+  { phrase: "IL&FS collapse 2018",           blurb: "AAA-rated NBFC defaults trigger a credit-market freeze.",              range: "Sep 2018 → Jan 2019" },
+  { phrase: "DHFL crisis 2019",              blurb: "Housing finance giant unravels live.",                                  range: "Jun 2019 → Dec 2019" },
+  { phrase: "YES Bank moratorium 2020",      blurb: "RBI freezes withdrawals, retail equity-holder gets wiped to ₹0.",     range: "Mar 2020 → Jul 2020" },
+  { phrase: "COVID March 2020",              blurb: "Fastest 35% drop in Nifty history. Recovered in 5 months.",            range: "Feb 2020 → Aug 2020" },
+  { phrase: "Paytm IPO Nov 2021",            blurb: "Listed at ₹2150, fell 27% on debut day. Six months in: -75%.",        range: "Nov 2021 → Apr 2022" },
+  { phrase: "Adani Hindenburg Jan 2023",     blurb: "Short-seller report wipes ₹10 lakh crore from group market cap.",     range: "Jan 2023 → Jun 2023" },
+];
+
 // Hotfix45b: post-process narration text to fix common LLM mis-phrasings.
 // Today's known issue: the LLM sometimes writes 'opens at â‚¹X' when the
 // startIndex/troughIndex/endIndex values are CLOSING prices (closes[0]
@@ -93,6 +112,23 @@ function renderSelector(main) {
       `).join("")}
     </div>
 
+    <div style="margin-top: var(--sp-6); margin-bottom: var(--sp-3);">
+      <h3 style="margin: 0;">Featured replays</h3>
+      <p class="muted text-sm">Pre-generated for instant load. Real Yahoo data, AI-built narration.</p>
+    </div>
+    <div class="crash-scenarios" id="featured-replays">
+      ${FEATURED_PHRASINGS.map(p => `
+        <button class="crash-scenario" data-featured="${escapeAttr(p.phrase)}">
+          <div class="flex items-center justify-between">
+            <h4>${escapeHtml(p.phrase)}</h4>
+            <span class="pill pill-brand">⚡ instant</span>
+          </div>
+          <div class="desc">${escapeHtml(p.blurb)}</div>
+          <div class="meta">${escapeHtml(p.range)}</div>
+        </button>
+      `).join("")}
+    </div>
+
     <div class="card" style="margin-top: var(--sp-8); text-align: center;">
       <h3 style="margin-bottom: var(--sp-2);">Tip</h3>
       <p class="muted">
@@ -102,7 +138,7 @@ function renderSelector(main) {
     </div>
   `;
 
-  main.querySelectorAll(".crash-scenario").forEach(btn => {
+  main.querySelectorAll(".crash-scenario[data-id]").forEach(btn => {
     btn.addEventListener("click", () => {
       location.hash = "#/crash-replay/" + btn.dataset.id;
     });
@@ -111,6 +147,16 @@ function renderSelector(main) {
   const input = main.querySelector("#custom-crash-input");
   const button = main.querySelector("#custom-crash-btn");
   const status = main.querySelector("#custom-crash-status");
+
+  // Featured-replay click → run the same generateCustomCrash flow as
+  // typing the phrase manually. Cache-hit when scripts/pregen-crashes.mjs
+  // has populated the row; falls back to live generation otherwise.
+  main.querySelectorAll(".crash-scenario[data-featured]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      input.value = btn.dataset.featured;
+      trigger();
+    });
+  });
 
   async function trigger() {
     const q = (input.value || "").trim();
