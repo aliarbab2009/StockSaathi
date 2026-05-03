@@ -150,19 +150,24 @@ export function lineChart(values, {
 }
 
 // ---- DUAL LINE CHART — for crash replay (held vs panic-sold) ------------
-export function dualLineChart({ held, panic, height = 280, width = 800, currentIndex = null }) {
+//
+// Streaming-look revamp: when `animate: true` (the default for first
+// render after navigation), both lines DRAW IN over 1.5s instead of
+// appearing instantly. Held line uses pathLength=1 + stroke-dashoffset
+// (canonical SVG draw-in trick). Panic line is dashed visually so we
+// can't reuse stroke-dasharray for animation — it's wrapped in a
+// clipPath whose <rect> sweeps from scaleX(0) to scaleX(1) over the
+// same duration. Axis labels, scrubber, legend fade in at 1.55s.
+// On scrubber drag the caller passes animate:false so the chart
+// re-renders instantly without replaying the intro animation.
+export function dualLineChart({ held, panic, height = 280, width = 800, currentIndex = null, animate = false }) {
   if (!held.length) return "";
   const all = [...held, ...panic];
   const { min: dataMin, max: dataMax } = minMax(all);
   const range = dataMax - dataMin;
   // Hotfix44a: was 0.08 (8%) on each side. User-reported on the YES Bank
-  // Moratorium replay: y-axis MAX label said â‚¹1.74L while the actual
-  // peak value was â‚¹1.64L (held portfolio at the Mar 17, 2020 short-
-  // squeeze). 8% padding of a â‚¹1.2L range = â‚¹9.6k headroom, so the
-  // peak line touched only ~93% up the y-axis â€” misleadingly low.
-  // 3% feels right: enough breathing room to keep the peak/trough lines
-  // off the chart edge for visual clarity, tight enough that the y-axis
-  // labels reflect actual data magnitudes within ~5%.
+  // Moratorium replay: y-axis MAX label said ₹1.74L while the actual
+  // peak value was ₹1.64L. 3% feels right.
   const min = dataMin - range * 0.03;
   const max = dataMax + range * 0.03;
   const paddingLeft = 60, paddingRight = 20, paddingTop = 20, paddingBottom = 28;
@@ -177,7 +182,6 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
     panicPath += (i === 0 ? "M" : "L") + toX(i).toFixed(1) + "," + toY(panic[i]).toFixed(1) + " ";
   }
 
-  // Starting line marker
   const startY = toY(held[0]);
   let gridLines = "";
   for (let i = 0; i <= 4; i++) {
@@ -191,7 +195,6 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
     yLabels += `<text class="chart-axis-label" x="${paddingLeft - 8}" y="${y + 4}" text-anchor="end">₹${formatAxisNumber(v)}</text>`;
   }
 
-  // Marker for current position (vertical line)
   let scrubber = "";
   if (currentIndex != null && currentIndex >= 0 && currentIndex < held.length) {
     const x = toX(currentIndex);
@@ -204,37 +207,75 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
     `;
   }
 
-  const heldEnd = held[held.length - 1];
-  const panicEnd = panic[panic.length - 1];
+  // Generate a stable id so multiple charts on one page don't clip-fight.
+  const uid = "ss" + Math.floor(Math.random() * 1e9).toString(36);
+  const animClass = animate ? "ss-chart-anim" : "";
+  const styleBlock = animate ? `
+    <style>
+      .ss-chart-anim .ss-line-held {
+        stroke-dasharray: 1; stroke-dashoffset: 1;
+        animation: ss-draw-line 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0s forwards;
+      }
+      .ss-chart-anim .ss-panic-clip-${uid} rect {
+        transform: scaleX(0); transform-origin: ${paddingLeft}px center;
+        animation: ss-sweep-x-${uid} 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.2s forwards;
+      }
+      .ss-chart-anim .ss-area-fill {
+        opacity: 0;
+        animation: ss-chart-fadein 0.6s ease-out 1.2s forwards;
+      }
+      .ss-chart-anim .ss-axis,
+      .ss-chart-anim .ss-scrubber,
+      .ss-chart-anim .ss-legend,
+      .ss-chart-anim .ss-startline {
+        opacity: 0;
+        animation: ss-chart-fadein 0.5s ease-out 1.55s forwards;
+      }
+      @keyframes ss-draw-line { to { stroke-dashoffset: 0; } }
+      @keyframes ss-sweep-x-${uid} { to { transform: scaleX(1); } }
+      @keyframes ss-chart-fadein { to { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) {
+        .ss-chart-anim .ss-line-held, .ss-chart-anim .ss-panic-clip-${uid} rect,
+        .ss-chart-anim .ss-area-fill, .ss-chart-anim .ss-axis,
+        .ss-chart-anim .ss-scrubber, .ss-chart-anim .ss-legend,
+        .ss-chart-anim .ss-startline {
+          animation: none; stroke-dashoffset: 0; transform: none; opacity: 1;
+        }
+      }
+    </style>
+  ` : "";
 
-  // Hotfix64d: same SVG-fill fix as lineChart above — preserveAspectRatio
-  // none + explicit 100% width/height so the chart stretches to its
-  // parent on mobile instead of falling back to its 800-unit intrinsic.
   return `
-    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-hidden="true">
+    <svg class="chart-svg ${animClass}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-hidden="true">
+      ${styleBlock}
       <defs>
-        <linearGradient id="heldFill" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="heldFill_${uid}" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="var(--positive)" stop-opacity="0.25" />
           <stop offset="100%" stop-color="var(--positive)" stop-opacity="0" />
         </linearGradient>
-        <linearGradient id="panicFill" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="panicFill_${uid}" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="var(--negative)" stop-opacity="0.2" />
           <stop offset="100%" stop-color="var(--negative)" stop-opacity="0" />
         </linearGradient>
+        <clipPath id="panicClip_${uid}" class="ss-panic-clip-${uid}">
+          <rect x="${paddingLeft}" y="0" width="${plotW}" height="${height}" />
+        </clipPath>
       </defs>
       <g class="chart-grid">${gridLines}</g>
-      <line x1="${paddingLeft}" x2="${width - paddingRight}" y1="${startY}" y2="${startY}" stroke="var(--text-faint)" stroke-dasharray="4 4" stroke-width="1" opacity="0.6" />
-      <text class="chart-axis-label" x="${width - paddingRight}" y="${startY - 4}" text-anchor="end">Start: ₹${formatAxisNumber(held[0])}</text>
+      <line class="ss-startline" x1="${paddingLeft}" x2="${width - paddingRight}" y1="${startY}" y2="${startY}" stroke="var(--text-faint)" stroke-dasharray="4 4" stroke-width="1" opacity="0.6" />
+      <text class="chart-axis-label ss-startline" x="${width - paddingRight}" y="${startY - 4}" text-anchor="end">Start: ₹${formatAxisNumber(held[0])}</text>
 
-      <path d="${heldPath} L${toX(held.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z" fill="url(#heldFill)" />
-      <path d="${panicPath} L${toX(panic.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z" fill="url(#panicFill)" />
-      <path d="${heldPath.trim()}" fill="none" stroke="var(--positive)" stroke-width="2.5" />
-      <path d="${panicPath.trim()}" fill="none" stroke="var(--negative)" stroke-width="2.5" stroke-dasharray="4 3" />
+      <path class="ss-area-fill" d="${heldPath} L${toX(held.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z" fill="url(#heldFill_${uid})" />
+      <path class="ss-area-fill" d="${panicPath} L${toX(panic.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z" fill="url(#panicFill_${uid})" />
+      <path class="ss-line-held" d="${heldPath.trim()}" pathLength="1" fill="none" stroke="var(--positive)" stroke-width="2.5" stroke-linecap="round" />
+      <g clip-path="url(#panicClip_${uid})">
+        <path d="${panicPath.trim()}" fill="none" stroke="var(--negative)" stroke-width="2.5" stroke-dasharray="4 3" stroke-linecap="round" />
+      </g>
 
-      ${scrubber}
-      ${yLabels}
+      <g class="ss-scrubber">${scrubber}</g>
+      <g class="ss-axis">${yLabels}</g>
 
-      <g>
+      <g class="ss-legend">
         <circle cx="${paddingLeft + 8}" cy="${paddingTop - 4}" r="5" fill="var(--positive)" />
         <text x="${paddingLeft + 20}" y="${paddingTop}" class="chart-axis-label" fill="var(--text-muted)">If you held</text>
         <circle cx="${paddingLeft + 110}" cy="${paddingTop - 4}" r="5" fill="var(--negative)" />

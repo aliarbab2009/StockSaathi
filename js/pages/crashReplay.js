@@ -365,6 +365,7 @@ function renderReplay(main, scenario) {
         <button class="btn btn-ghost btn-sm" id="reset-btn">⟲ Reset</button>
         <button class="btn btn-ghost btn-sm" id="jump-bottom-btn">📉 Bottom</button>
         <button class="btn btn-ghost btn-sm" id="jump-end-btn">⏭ End</button>
+        <button class="btn btn-ghost btn-sm" id="skip-anim-btn" hidden>⏭ Skip animation</button>
       </div>
     </div>
 
@@ -519,12 +520,17 @@ function renderReplay(main, scenario) {
       lastNarrationKey = activeNarKey;
     }
 
-    // Chart — we supply interpolated series up to currentIdx full range
+    // Chart — we supply interpolated series up to currentIdx full range.
+    // Animate ONLY on the first paint per scenario (subsequent scrubber
+    // ticks pass animate:false to avoid replaying the 1.5s draw-in).
     const heldSeries = frames.map(f => f.held);
     const panicSeries = frames.map(f => f.panic);
+    const isFirstPaint = !chartRoot.dataset.ssDrawn;
     chartRoot.innerHTML = dualLineChart({
-      held: heldSeries, panic: panicSeries, height: 340, width: 900, currentIndex: currentIdx,
+      held: heldSeries, panic: panicSeries, height: 340, width: 900,
+      currentIndex: currentIdx, animate: isFirstPaint,
     });
+    if (isFirstPaint) chartRoot.dataset.ssDrawn = "1";
 
     // Show final banner at end
     finalBanner.style.display = currentIdx >= frames.length - 1 ? "" : "none";
@@ -566,6 +572,16 @@ function renderReplay(main, scenario) {
   }
 
   renderAt(0);
+
+  // Streaming-look intro animation. Plays once per scenario.id — always,
+  // regardless of cache hit vs live generation. The user sees the chart
+  // draw in (1.5s SVG stroke animation), stats counters tick up to their
+  // real values (1.2s), then the description types out character by
+  // character (~22ms/char, so a 200-char description takes ~4s), then
+  // key moment cards stagger in. Skip Animation button cancels the queue.
+  // Skipped for _partial scenarios (the page will re-render with full
+  // data and trigger this then).
+  playReplayIntroAnimation(main, scenario);
 
   // PERF — first-paint mark closes the cold-start clock that customCrash.js
   // started with cc:start. Only fired for genuinely-fresh generations
@@ -692,6 +708,143 @@ function pickActiveNarration(frames, idx) {
     if (frames[i].n) return frames[i].n;
   }
   return null;
+}
+
+// =============================================================================
+// REPLAY INTRO ANIMATION
+//
+// "Streaming-look" UX: every replay load (cache hit OR live) plays a 5-7s
+// orchestrated reveal so the page feels alive instead of dumping a fully-
+// rendered scenario instantly. Sequence:
+//   t=0s    chart starts SVG draw-in (1.5s, handled by chart's animate flag)
+//           stats card numbers count UP to real values (1.2s, ease-out cubic)
+//   t=0.2s  title fades in
+//   t=0.5s  typewriter starts on description paragraphs (~22ms/char)
+//   t=4-6s  key-moment cards stagger in (150ms between each)
+// The Skip Animation button cancels mid-flight and snaps to final state.
+// Per-scenario one-shot guard: a re-render of the same scenario.id won't
+// replay (so when the partial→full re-render fires after streaming, the
+// animation doesn't double-fire).
+// =============================================================================
+const _replayAnimPlayed = new Set();
+function playReplayIntroAnimation(main, scenario) {
+  if (!scenario || !scenario.id) return;
+  if (_replayAnimPlayed.has(scenario.id)) return;
+  // Skip on _partial — the partial→full re-render will trigger this fresh
+  // with the complete scenario.
+  if (scenario._partial) return;
+  _replayAnimPlayed.add(scenario.id);
+
+  const skipBtn = main.querySelector("#skip-anim-btn");
+  const titleEl = main.querySelector(".replay-title-inline strong");
+  const heldVal = main.querySelector("#held-val");
+  const heldDelta = main.querySelector("#held-delta");
+  const paraEls = main.querySelectorAll(".replay-context-para");
+  const timelineRows = main.querySelectorAll(".replay-timeline-row");
+
+  // Snapshot final values + hide.
+  paraEls.forEach(p => {
+    p.dataset.full = p.textContent;
+    p.textContent = "";
+    p.classList.add("ss-typewriter-caret");
+  });
+  timelineRows.forEach(r => r.classList.add("ss-anim-hidden"));
+  if (titleEl) titleEl.classList.add("ss-anim-hidden");
+
+  let cancelled = false;
+  const timers = [];
+  let raf = null;
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    timers.forEach(clearTimeout);
+    if (raf) cancelAnimationFrame(raf);
+    paraEls.forEach(p => {
+      p.textContent = p.dataset.full || "";
+      p.classList.remove("ss-typewriter-caret");
+    });
+    timelineRows.forEach(r => r.classList.remove("ss-anim-hidden"));
+    if (titleEl) titleEl.classList.remove("ss-anim-hidden");
+    if (heldVal) heldVal.textContent = "₹1,00,000";
+    if (heldDelta) {
+      heldDelta.textContent = "+0.00%";
+      heldDelta.className = "delta tabular";
+    }
+    skipBtn?.setAttribute("hidden", "");
+  };
+  if (skipBtn) {
+    skipBtn.removeAttribute("hidden");
+    skipBtn.addEventListener("click", cancel, { once: true });
+  }
+  // Cancel on hashchange so navigating away doesn't leave timers running.
+  const onHashChange = () => cancel();
+  window.addEventListener("hashchange", onHashChange, { once: true });
+
+  // Stats counter (t=0): held starts at 100k, drops to peak-trough.
+  // Day-0 is always 100k so the counter "ticks up" visually from 0.
+  const peakDrop = Math.abs(scenario.indexDrop || 0);
+  const counterStart = performance.now();
+  const counterDur = 1200;
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const tick = (now) => {
+    if (cancelled) return;
+    const t = Math.min(1, (now - counterStart) / counterDur);
+    const v = ease(t);
+    if (heldVal) heldVal.textContent = "₹" + indianNumber(Math.round(100000 * v));
+    if (heldDelta) heldDelta.textContent = "0.00%";
+    if (t < 1) raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+
+  // Title fade-in (t=200ms).
+  timers.push(setTimeout(() => {
+    if (cancelled || !titleEl) return;
+    titleEl.classList.remove("ss-anim-hidden");
+    titleEl.classList.add("ss-anim-fade");
+  }, 200));
+
+  // Typewriter (t=500ms).
+  timers.push(setTimeout(() => {
+    if (cancelled || !paraEls.length) return;
+    let pIdx = 0, cIdx = 0;
+    const PER_CHAR = 18;
+    const PARA_PAUSE = 140;
+    const step = () => {
+      if (cancelled) return;
+      const p = paraEls[pIdx];
+      if (!p) return finish();
+      const full = p.dataset.full || "";
+      if (cIdx <= full.length) {
+        p.textContent = full.slice(0, cIdx);
+        cIdx++;
+        timers.push(setTimeout(step, PER_CHAR));
+      } else {
+        p.classList.remove("ss-typewriter-caret");
+        pIdx++; cIdx = 0;
+        if (paraEls[pIdx]) {
+          timers.push(setTimeout(step, PARA_PAUSE));
+        } else {
+          finish();
+        }
+      }
+    };
+    const finish = () => {
+      if (cancelled) return;
+      // Stagger key-moment cards.
+      timelineRows.forEach((row, i) => {
+        timers.push(setTimeout(() => {
+          if (cancelled) return;
+          row.classList.remove("ss-anim-hidden");
+          row.classList.add("ss-anim-slide-up");
+        }, i * 130));
+      });
+      // Hide skip button at end.
+      timers.push(setTimeout(() => {
+        skipBtn?.setAttribute("hidden", "");
+      }, timelineRows.length * 130 + 400));
+    };
+    step();
+  }, 500));
 }
 
 function buildMarkers(scenario) {

@@ -2810,6 +2810,36 @@
   list-style-position: outside;
 }
 .replay-context-body { margin-top: var(--sp-3); }
+
+/* =============================================================================
+ * REPLAY INTRO ANIMATION — typewriter + stagger reveal
+ * ============================================================================= */
+@keyframes ss-fade-slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ss-fade-only {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ss-caret-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.ss-anim-hidden        { opacity: 0 !important; }
+.ss-anim-fade          { animation: ss-fade-only 320ms ease-out forwards; }
+.ss-anim-slide-up      { animation: ss-fade-slide-up 380ms cubic-bezier(.2,.8,.2,1) both; }
+.ss-typewriter-caret::after {
+  content: "▋";
+  margin-left: 2px;
+  color: var(--brand);
+  animation: ss-caret-blink 0.8s step-end infinite;
+  font-weight: 100;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-anim-fade, .ss-anim-slide-up { animation: none; }
+  .ss-anim-hidden { opacity: 1 !important; }
+}
 .replay-streaming-pulse {
   display: flex;
   align-items: center;
