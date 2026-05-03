@@ -548,48 +548,76 @@ export async function generateCustomCrash(description) {
     } catch {}
   }
 
-  // 2. Supabase cross-user cache. First user generates + pays; everyone else
-  //    pulls for free. We DO NOT cache refusals — a refusal is often a
-  //    model-mood mistake (overzealous not_a_crash), and re-querying should
-  //    be free to produce a real replay. Only successful scenarios are cached.
+  // 2. Supabase cross-user cache RACED against Phase A (PERF_AUDIT #2 + #3).
+  //    Two-step Phase A:
+  //      a) deterministic router (PERF #2) — instant, no fetch. If it
+  //         matches a known event we skip the LLM entirely.
+  //      b) LLM fallback for genuinely-novel queries.
+  //    Both run concurrently with the cache GET so the cache can short-
+  //    circuit either path. AbortController cancels the LLM if cache
+  //    wins. We DO NOT cache refusals.
   _perfMark("cc:cache-start");
-  const cached = await cacheReplayGet(hash);
-  _perfMark("cc:cache-end");
-  _perfMeasure("cc:cache-get", "cc:cache-start", "cc:cache-end");
-  if (cached && cached.id && !cached.error) {
-    // Hydrate localStorage so subsequent loads hit the local path first.
+  _perfMark("cc:phaseA-start");
+  const phaseAAbort = new AbortController();
+  const cachePromise = cacheReplayGet(hash);
+  const routerBracket = _routePhaseADeterministic(description);
+  // If the router matched, we don't need the LLM at all — skip the
+  // network round-trip entirely. Otherwise kick the LLM off in parallel
+  // with the cache lookup.
+  const llmPromise = routerBracket
+    ? Promise.resolve(routerBracket)
+    : callLlmForBracket(description, phaseAAbort.signal).catch(e => ({ _err: e }));
+
+  // Race for the cache-hit fast path.
+  const winner = await Promise.race([
+    cachePromise.then(c => ({ kind: "cache", value: c })),
+    llmPromise.then(b => ({ kind: "llm", value: b })),
+  ]);
+
+  // Helper to apply a cache hit.
+  const applyCacheHit = (cached) => {
     try {
       const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
       all[cached.id] = cached;
       localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
     } catch {}
     rememberQuery(queryKey(description), cached.id);
+  };
+
+  if (winner.kind === "cache" && winner.value && winner.value.id && !winner.value.error) {
+    // Cache won the race AND had a hit. Save Phase A LLM cost.
+    phaseAAbort.abort();
+    _perfMark("cc:cache-end");
+    _perfMeasure("cc:cache-get", "cc:cache-start", "cc:cache-end");
+    applyCacheHit(winner.value);
+    return winner.value;
+  }
+
+  // Either cache missed OR Phase A finished first. Wait for both to
+  // settle so we know the final state of the cache before committing
+  // to LLM/router output.
+  const [cached, bracketResult] = await Promise.all([cachePromise, llmPromise]);
+  _perfMark("cc:cache-end");
+  _perfMeasure("cc:cache-get", "cc:cache-start", "cc:cache-end");
+  if (cached && cached.id && !cached.error) {
+    // Phase A won the race but cache also had a hit — prefer cache.
+    phaseAAbort.abort();
+    applyCacheHit(cached);
     return cached;
   }
 
   // 3. Cache miss → THREE-PHASE grounded generation:
-  //    a) LLM picks the event's startIso/endIso/symbol — UNLESS the
-  //       deterministic router (PERF_AUDIT #2) already knows this
-  //       event, in which case we skip the ~950 ms LLM round-trip
-  //       and proceed straight to Phase B with the canonical bracket.
+  //    a) Phase A bracket from above (router OR LLM, may have errored)
   //    b) Server fetches REAL daily closes from Yahoo for that range
-  //    c) LLM generates the replay JSON using the real numbers (no hallucination)
+  //    c) LLM generates the replay JSON using the real numbers
   let lastErr = null;
 
-  // Phase A: deterministic router → LLM fallback.
-  _perfMark("cc:phaseA-start");
-  let bracket = _routePhaseADeterministic(description);
-  if (!bracket) {
-    try {
-      bracket = await callLlmForBracket(description);
-    } catch (e) {
-      _perfMark("cc:phaseA-end");
-      _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
-      throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
-    }
-  }
+  const bracket = bracketResult && !bracketResult._err ? bracketResult : null;
   _perfMark("cc:phaseA-end");
   _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
+  if (!bracket) {
+    throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
+  }
   // LLM's off-topic flag — catches adult/vulgar/zero-market queries that the
   // regex blocklist missed. Reject cleanly.
   if (bracket?.offTopic === true) {
@@ -726,7 +754,10 @@ function pickRandomExample() {
 }
 
 // Phase A: ask Gemini for the event's date range + target symbol.
-async function callLlmForBracket(description) {
+// Optional AbortSignal lets the caller cancel a redundant LLM round-trip
+// when the cross-user cache wins the race in generateCustomCrash (PERF #3).
+// Aborted fetches throw an AbortError; the caller .catch()s it as _err.
+async function callLlmForBracket(description, signal) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -740,6 +771,7 @@ async function callLlmForBracket(description) {
       response_format: { type: "json_object" },
       profile: "json",
     }),
+    signal,
   });
   _perfServerTiming(res, "phaseA");
   if (!res.ok) throw new Error(`phase1_http_${res.status}`);
