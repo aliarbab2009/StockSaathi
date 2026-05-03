@@ -165,114 +165,107 @@ function renderSelector(main) {
       input.focus();
       return;
     }
-    button.disabled = true;
-    input.disabled = true;
-    button.textContent = "Generating…";
-    status.textContent = "Gathering historical context and synthesising the day-by-day trajectory. ~8–15 s.";
-    // PERF_AUDIT #4: progress callback drives the perceived-time feel.
-    // generateCustomCrash emits stage names as it moves through the
-    // three phases; we map each to a friendly status string. The page
-    // feels alive instead of frozen for ~5 s on a static line. Real
-    // wall-clock unchanged.
-    const STAGES = {
-      "cache-check":        "Looking for a cached replay…",
-      "phase-a":            "Picking dates and the right index…",
-      "phase-b":            "Pulling historical price data…",
-      "phase-c":            "Building the day-by-day narrative…",
-      "phase-c-streaming":  "Writing the story now…",
-    };
+    // REVAMP: replace the entire selector main with the generating-stage
+    // visualisation. The intro animation that used to play AFTER the
+    // replay loaded is replaced by this — it runs DURING the actual
+    // Phase A/B/C work, not after, so the visualisation overlaps real
+    // latency instead of stacking on top of it.
+    renderGeneratingStage(main, q);
+    advanceGeneratingStage(main, "cache", "active");
+
+    // Track real Phase B / Phase C state so the live feed can switch
+    // from "ticker prices" to "narrative streaming" at the right moment.
+    let phaseBPricesShown = false;
+    let phaseCStarted = false;
+
     const onProgress = (stage, payload) => {
-      // Per-chunk: dispatch the partial accumulated text so the replay
-      // page can surface it as visible streaming progress (extract title
-      // / description as JSON keys close, render token counter, etc.).
-      // Replay page listens via "crash-scenario-streaming" event.
-      if (stage === "phase-c-chunk" && typeof payload === "string") {
-        try {
-          window.dispatchEvent(new CustomEvent("crash-scenario-streaming", {
-            detail: { partialText: payload }
-          }));
-        } catch {}
-        return;
+      if (stage === "cache-check") {
+        advanceGeneratingStage(main, "cache", "active");
+      } else if (stage === "phase-a") {
+        advanceGeneratingStage(main, "cache", "done", "miss");
+        advanceGeneratingStage(main, "phaseA", "active");
+      } else if (stage === "phase-b") {
+        advanceGeneratingStage(main, "phaseA", "done");
+        advanceGeneratingStage(main, "phaseB", "active");
+      } else if (stage === "phase-c") {
+        advanceGeneratingStage(main, "phaseB", "done");
+        advanceGeneratingStage(main, "phaseC", "active");
+        if (!phaseCStarted) {
+          phaseCStarted = true;
+          startGenFeedNarrative(main);
+        }
+      } else if (stage === "phase-c-streaming") {
+        // First byte arrived — placeholder swap to indicate streaming
+        // has begun. The actual text will arrive via phase-c-chunk.
+      } else if (stage === "phase-c-chunk" && typeof payload === "string") {
+        // Extract the in-flight description value (regex matches the
+        // closed string OR the open one we're still streaming into).
+        const m = payload.match(/"description"\s*:\s*"((?:\\.|[^"\\])*)"?/);
+        const txt = m ? m[1].replace(/\\n/g, "\n").replace(/\\"/g, "\"") : "";
+        if (txt) updateGenFeedNarrative(main, txt);
       }
-      const msg = STAGES[stage];
-      if (msg && status) status.textContent = msg;
     };
-    // PERF: chart-first render. After Phase B (~1s in), customCrash gives
-    // us a stub scenario with REAL chart data + placeholder narration. We
-    // navigate immediately so the user sees the chart drawing instead of
-    // staring at a status spinner. When Phase C completes, we patch the
-    // registered scenario with the full data and dispatch a custom event
-    // that renderReplay listens for to swap the placeholder text in place.
-    //
-    // CRITICAL: stub and full scenario must share the SAME id, otherwise
-    // (a) the URL would change (jarring) and (b) the renderReplay listener
-    // matches on id and would never fire. buildScenario derives id from
-    // slugified title + hash suffix; stub uses bracket.hint title and full
-    // uses the LLM-generated title, so they naturally diverge. We force
-    // them equal by overwriting the full scenario's id with the stub's
-    // before re-registering.
-    let navigatedEarly = false;
-    let stubId = null;
+
+    // After Phase B completes we have real Yahoo prices in stub._realCloses.
+    // Stream them into the live feed as a price ticker (1 row per ~10 days).
     const onChartReady = (stubScenario) => {
-      if (navigatedEarly) return;
-      navigatedEarly = true;
-      stubId = stubScenario.id;
-      registerCustomCrash(stubScenario);
-      status.textContent = "Chart ready — narrative streaming in…";
-      location.hash = "#/crash-replay/" + stubScenario.id;
+      if (phaseBPricesShown) return;
+      phaseBPricesShown = true;
+      const closes = stubScenario.frames.map(f => f.nifty);
+      const total = closes.length;
+      // Sample ~10 evenly-spaced days so the feed doesn't overflow.
+      const step = Math.max(1, Math.floor(total / 8));
+      const startIso = stubScenario.startLabel || "";
+      let prevClose = closes[0];
+      for (let i = 0; i < total; i += step) {
+        const c = closes[i];
+        const delta = i === 0 ? 0 : ((c - prevClose) / prevClose) * 100;
+        const dCls = delta >= 0 ? "delta-up" : "delta-down";
+        const dStr = i === 0 ? "" : `<span class="${dCls}">${delta >= 0 ? "+" : ""}${delta.toFixed(2)}%</span>`;
+        appendGenFeedRow(main,
+          `<span class="day">Day ${i}</span>` +
+          `<span class="px">₹${Math.round(c).toLocaleString("en-IN")}</span>` +
+          dStr
+        );
+        prevClose = c;
+      }
+      advanceGeneratingStage(main, "phaseB", "done", `${total} days`);
     };
+
     try {
       const scenario = await generateCustomCrash(q, { onProgress, onChartReady });
-      if (navigatedEarly && stubId) {
-        // Force same id so registerCustomCrash overwrites the stub entry
-        // and the dispatched event finds the same scenario the renderReplay
-        // listener was registered against.
-        scenario.id = stubId;
-      }
       registerCustomCrash(scenario);
-      if (navigatedEarly) {
-        // Defer the swap-in dispatch behind a frame so renderReplay's
-        // listener (attached during the hashchange-induced render) has
-        // definitely run. Without this defer, dispatchEvent can race
-        // ahead of listener registration when Phase C resolves quickly.
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            try {
-              window.dispatchEvent(new CustomEvent("crash-scenario-updated", {
-                detail: { scenarioId: scenario.id }
-              }));
-            } catch {}
-          });
-        });
-      } else {
-        status.textContent = `Ready — ${scenario.title}. Loading replay…`;
+      // Mark all stages done.
+      advanceGeneratingStage(main, "phaseC", "done");
+      // Smooth fade-out then navigate.
+      const stage = main.querySelector("#gen-stage");
+      if (stage) stage.classList.add("gen-fading-out");
+      setTimeout(() => {
         location.hash = "#/crash-replay/" + scenario.id;
-      }
+      }, 230);
     } catch (e) {
       const msg = String(e?.message || "unknown error");
-      // If we already navigated to the stub, the user is staring at a
-      // page that will never finish loading. Rewind to the selector and
-      // delete the stub from CUSTOM_CRASHES so it doesn't pollute future
-      // queries. Then show the error inline.
-      if (navigatedEarly && stubId) {
-        try {
-          // Evict the stub from in-memory + localStorage.
-          const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
-          delete all[stubId];
-          localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
-        } catch {}
-        location.hash = "#/crash-replay";
+      // Mark current active stage as error, give user a moment to read,
+      // then rewind to the selector page with the error visible inline.
+      const activeRow = main.querySelector(".gen-stage-row[data-state='active']");
+      if (activeRow) advanceGeneratingStage(main, activeRow.dataset.stage, "error");
+      const stage = main.querySelector("#gen-stage");
+      if (stage) {
+        // Append the error message to the stage card.
+        const err = document.createElement("p");
+        err.style.cssText = "margin: var(--sp-3) 0 0 0; color: var(--negative); font-size: var(--text-sm);";
+        const isAuthIssue = /quota|key|rate-?limit/i.test(msg);
+        const extra = isAuthIssue ? "" : " Try a different phrasing, or pick one of the curated replays.";
+        err.textContent = msg + extra;
+        stage.appendChild(err);
+        // Add a "Back to scenarios" button.
+        const back = document.createElement("button");
+        back.className = "btn btn-primary btn-sm";
+        back.style.cssText = "margin-top: var(--sp-3);";
+        back.textContent = "← Back to scenarios";
+        back.addEventListener("click", () => { location.hash = "#/crash-replay"; });
+        stage.appendChild(back);
       }
-      const isAuthIssue = /quota|key|rate-?limit/i.test(msg);
-      const extra = isAuthIssue ? "" : " Try a different phrasing, or pick a curated replay below.";
-      if (status) {
-        status.innerHTML = `<span style="color:var(--negative);">${escapeHtml(msg)}${escapeHtml(extra)}</span>`;
-      }
-      if (button) {
-        button.disabled = false;
-        button.textContent = "Generate replay";
-      }
-      if (input) input.disabled = false;
     }
   }
 
