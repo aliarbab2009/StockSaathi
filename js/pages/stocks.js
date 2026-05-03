@@ -14,7 +14,11 @@ import { toast } from "../components/toast.js";
 // — Nifty 50/100 stocks naturally land on top). No Featured/All split.
 // `mfBucket` and `mfPlan` are MF-tab-only filters — preserved across tab
 // switches so coming back to Mutual Funds keeps the user's last view.
-let filter = { q: "", sector: "all", kind: "EQUITY", sort: "marketCap", mfBucket: "all", mfPlan: "all" };
+// Hotfix64b: default sort = name A→Z. User wanted "every stock arranged in
+// ALPHABETICAL ORDER" both in the all-sectors view and inside any category.
+// Power users can still flip to "Top by size" / Gainers / Losers via the
+// dropdown — sticky across pill clicks like before.
+let filter = { q: "", sector: "all", kind: "EQUITY", sort: "name", mfBucket: "all", mfPlan: "all" };
 let quoteCache = {};
 let marketMood = null;       // { narrative, temperature } | null
 let _moodFetched = false; // true after first /api/market-mood resolves
