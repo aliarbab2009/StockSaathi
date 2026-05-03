@@ -2920,18 +2920,31 @@ async function opClearCrashCache(req, origin) {
     return j(501, { error: "supabase_not_configured" }, origin);
   }
   const baseUrl = `${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache?bucket=eq.crash_replay`;
-  // Count first.
-  const countRes = await fetch(`${baseUrl}&select=cache_key`, {
+  // Diagnostic: list cache_keys present so we can verify the bucket is
+  // populated. Returns first 50 keys to keep the response small.
+  const listRes = await fetch(`${baseUrl}&select=cache_key,display_key&limit=50`, {
     headers: {
       "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
       "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "Prefer": "count=exact",
-      "Range": "0-0",
     },
   });
-  const contentRange = countRes.headers.get("content-range") || "";
-  const total = Number((contentRange.split("/")[1] || "0"));
-  if (total === 0) return j(200, { ok: true, deleted: 0 }, origin);
+  const listText = await listRes.text();
+  let listJson = null;
+  try { listJson = JSON.parse(listText); } catch {}
+  const total = Array.isArray(listJson) ? listJson.length : 0;
+  if (total === 0) {
+    return j(200, {
+      ok: true,
+      deleted: 0,
+      diag: {
+        listStatus: listRes.status,
+        listHeaders: Object.fromEntries(listRes.headers),
+        listBody: listText.slice(0, 500),
+        supabase_url_set: !!env.SUPABASE_URL,
+        service_key_set: !!env.SUPABASE_SERVICE_ROLE_KEY,
+      },
+    }, origin);
+  }
   const delRes = await fetch(baseUrl, {
     method: "DELETE",
     headers: {
