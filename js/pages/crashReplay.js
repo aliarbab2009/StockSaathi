@@ -566,15 +566,15 @@ function renderReplay(main, scenario) {
 
   renderAt(0);
 
-  // Streaming-look intro animation. Plays once per scenario.id — always,
-  // regardless of cache hit vs live generation. The user sees the chart
-  // draw in (1.5s SVG stroke animation), stats counters tick up to their
-  // real values (1.2s), then the description types out character by
-  // character (~22ms/char, so a 200-char description takes ~4s), then
-  // key moment cards stagger in. Skip Animation button cancels the queue.
-  // Skipped for _partial scenarios (the page will re-render with full
-  // data and trigger this then).
-  playReplayIntroAnimation(main, scenario);
+  // The old playReplayIntroAnimation (typewriter / counters / stagger)
+  // was meaningful when the replay page loaded INSTANTLY from cache and
+  // we needed an artificial sense of work. Now the generating-stage
+  // covers that need DURING real generation, so the post-load animation
+  // is redundant. We do still keep the chart's SVG draw-in (1.5s) since
+  // the scrubber-tick gate makes it run only on first paint and it's a
+  // cheap visual win on direct /#/crash-replay/<id> hits (e.g. shared
+  // links). For now, no JS-driven typewriter — the chart's CSS-only
+  // draw-in is the only intro effect.
 
   // PERF — first-paint mark closes the cold-start clock that customCrash.js
   // started with cc:start. Only fired for genuinely-fresh generations
