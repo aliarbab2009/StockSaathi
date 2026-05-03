@@ -1,0 +1,79 @@
+name: perf-syntax
+
+# Smoke test for the crash-replay perf code paths. Cheap (~10 s) so it
+# can run on every push, every PR, every branch. Catches typos before
+# they hit Vercel's edge build and before they ship to users.
+#
+# What it checks:
+#   - All four files in PERF_AUDIT scope parse cleanly under Node 20
+#   - The pregen admin script parses cleanly
+#   - PERF_AUDIT.md still references each open perf/* branch by name
+#   - CURRENT_PROMPT_VERSION matches between customCrash.js and pregen-crashes.mjs
+#
+# What it does NOT do:
+#   - No live LLM calls (would burn Gemini credits per CI run).
+#   - No e2e tests (no headless browser dependency).
+#   - No --dry-run of pregen against prod (would spam logs).
+
+on:
+  push:
+    branches: [main, "perf/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: perf-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax-check:
+    name: Syntax check perf-touched files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Node parse — customCrash.js
+        run: node --check js/features/customCrash.js
+
+      - name: Node parse — chat.js
+        run: node --check api/chat.js
+
+      - name: Node parse — ai.js
+        run: node --check api/ai.js
+
+      - name: Node parse — crashReplay.js
+        run: node --check js/pages/crashReplay.js
+
+      - name: Node parse — pregen-crashes.mjs (only on branches that have it)
+        run: |
+          if [ -f scripts/pregen-crashes.mjs ]; then
+            node --check scripts/pregen-crashes.mjs
+          else
+            echo "scripts/pregen-crashes.mjs not present on this branch — skipped"
+          fi
+
+  prompt-version-sync:
+    name: CURRENT_PROMPT_VERSION matches across customCrash.js and pregen-crashes.mjs
+    runs-on: ubuntu-latest
+    if: hashFiles('scripts/pregen-crashes.mjs') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract + compare versions
+        run: |
+          v1=$(grep -oE 'CURRENT_PROMPT_VERSION = "[^"]+"' js/features/customCrash.js | head -1 | sed 's/.*"\(.*\)"/\1/')
+          v2=$(grep -oE 'CURRENT_PROMPT_VERSION = "[^"]+"' scripts/pregen-crashes.mjs | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "customCrash.js  -> $v1"
+          echo "pregen script   -> $v2"
+          if [ -z "$v1" ] || [ -z "$v2" ]; then
+            echo "Could not extract version from one of the files — check the regex"
+            exit 1
+          fi
+          if [ "$v1" != "$v2" ]; then
+            echo "::error::CURRENT_PROMPT_VERSION mismatch — customCrash.js says '$v1', pregen says '$v2'. Re-run pregen after every prompt-version bump."
+            exit 1
+          fi
+          echo "OK — versions match: $v1"
