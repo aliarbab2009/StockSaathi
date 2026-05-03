@@ -321,7 +321,17 @@ export function renderPortfolio(main) {
     const returnPct = start ? deltaPaise / start : 0;
 
     const src = getDataSource();
-    const hasRealHistory = state.portfolioHistory && state.portfolioHistory.length > 1;
+    // Hotfix66a: state.portfolioHistory is now populated by sync.js with
+    // {ts, valuePaise} rows from Supabase. Project to a flat numeric
+    // rupee series for areaChart (which expects values, not row objects),
+    // and append the live pfValue as the rightmost point so the line
+    // ends at "right now" instead of the last DB-snapshot tick.
+    const histPaiseRows = Array.isArray(state.portfolioHistory) ? state.portfolioHistory : [];
+    const histValues = [
+      ...histPaiseRows.map(r => Number(r.valuePaise || 0) / 100),
+      pfValue / 100,
+    ].filter(v => Number.isFinite(v) && v >= 0);
+    const hasRealHistory = histValues.length > 1;
 
     main.innerHTML = `
       <div class="portfolio-hero">
@@ -361,11 +371,11 @@ export function renderPortfolio(main) {
             </div>
             <div style="height: 260px; position: relative;">
               ${hasRealHistory
-                ? areaChart(state.portfolioHistory, { height: 260, color: "var(--brand)", paddingLeft: 60 })
+                ? areaChart(histValues, { height: 260, color: "var(--brand)", paddingLeft: 60 })
                 : `<div style="height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 1px dashed var(--border); border-radius: var(--r); background: var(--surface);">
                     <div style="font-size: 40px; opacity: 0.45;">📈</div>
-                    <div class="font-semi" style="color: var(--text-strong);">Chart will start drawing soon</div>
-                    <div class="muted text-sm" style="text-align: center; max-width: 340px;">Use StockSaathi for a few days — we'll plot your real portfolio value once there's enough history to draw an accurate line.</div>
+                    <div class="font-semi" style="color: var(--text-strong);">Make your first trade to start charting</div>
+                    <div class="muted text-sm" style="text-align: center; max-width: 340px;">Buy any stock or fund and your portfolio value gets snapshotted automatically. The line builds up from there.</div>
                   </div>`}
             </div>
           </div>

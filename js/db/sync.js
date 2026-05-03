@@ -99,7 +99,7 @@ export async function loadAllFromDb() {
     // counterparty's username + display name come back even though the new
     // profiles RLS blocks anon cross-user reads. The Postgrest join approach
     // used previously silently returned empty profile objects under RLS.
-    const [pf, holdings, txns, wl, friendsRpc, transfersRpc, msgs] = await Promise.all([
+    const [pf, holdings, txns, wl, friendsRpc, transfersRpc, msgs, hist] = await Promise.all([
       client.from("portfolios").select("*").eq("user_id", uid).maybeSingle(),
       client.from("holdings").select("*").eq("user_id", uid),
       client.from("transactions").select("*").eq("user_id", uid).order("created_at", { ascending: false }).limit(200),
@@ -107,6 +107,19 @@ export async function loadAllFromDb() {
       client.rpc("list_my_friends"),
       client.rpc("list_my_transfers", { p_limit: 100 }),
       client.from("coach_messages").select("*").eq("user_id", uid).order("created_at", { ascending: false }).limit(500),
+      // Hotfix66a: portfolio_history fetch — was missing entirely. Fixes
+      // the "Chart will start drawing soon" placeholder that showed
+      // forever even after dozens of trades. The DB table is populated
+      // by trg_transaction_portfolio_snapshot (every trade) + the hourly
+      // admin_portfolio_backfill cron, and RLS policy
+      // portfolio_history_self_read lets each user fetch their own
+      // rows. We just never asked. Capped at 2000 rows (~5 years of
+      // hourly snapshots) so the JSON payload stays under 200KB.
+      client.from("portfolio_history")
+        .select("ts,total_value_paise")
+        .eq("user_id", uid)
+        .order("ts", { ascending: true })
+        .limit(2000),
     ]);
     const friends = { data: friendsRpc.data || [], error: friendsRpc.error };
     const transfers = { data: transfersRpc.data || [], error: transfersRpc.error };
@@ -163,6 +176,14 @@ export async function loadAllFromDb() {
       payload: m.payload, model: m.model,
     }));
 
+    // Hotfix66a: project portfolio_history rows to {ts, valuePaise}
+    // tuples. portfolio.js maps these to a flat numeric series for
+    // areaChart and gates "hasRealHistory" on length > 1.
+    const nextPortfolioHistory = (hist?.data || []).map(r => ({
+      ts: new Date(r.ts).getTime(),
+      valuePaise: Number(r.total_value_paise),
+    }));
+
     setState(s => ({
       ...s,
       portfolio: nextPortfolio,
@@ -172,6 +193,7 @@ export async function loadAllFromDb() {
       friends: nextFriends,
       transfers: nextTransfers,
       coachMessages: nextCoachMessages,
+      portfolioHistory: nextPortfolioHistory,
     }));
 
     // Rebuild the /chat multi-session envelope + side-panel running log
