@@ -284,7 +284,14 @@ async function opCachePut(req, origin) {
   const bucket = normalizeKey(body.bucket);
   const key = normalizeKey(body.key);
   if (!bucket || !key || body.payload == null) return j(400, { error: "bad_params" }, origin);
-  cachePut(bucket, key, body.display || null, body.payload);
+  // CRITICAL: must AWAIT the write. Vercel Edge runtime tears down the
+  // function the moment the response is returned — fire-and-forget
+  // supabaseReq() Promises get cancelled mid-flight. Pre-this-fix, every
+  // cross-user crash_replay row got silently dropped (and likely many
+  // other buckets too — the visible ones in Supabase are races where the
+  // upstream resolved before Edge teardown). cachePutAwait blocks until
+  // Supabase confirms persistence.
+  await cachePutAwait(bucket, key, body.display || null, body.payload);
   return j(200, { ok: true }, origin);
 }
 
@@ -2920,59 +2927,16 @@ async function opClearCrashCache(req, origin) {
     return j(501, { error: "supabase_not_configured" }, origin);
   }
   const baseUrl = `${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache?bucket=eq.crash_replay`;
-  // Diagnostic: also fetch ALL buckets to confirm the table itself is
-  // populated and the bucket name is what we expect.
-  const allRes = await fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache?select=bucket,cache_key,display_key&limit=20`, {
+  // Count first.
+  const listRes = await fetch(`${baseUrl}&select=cache_key&limit=10000`, {
     headers: {
       "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
       "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
     },
   });
-  const allText = await allRes.text();
-  // Diagnostic: list cache_keys present so we can verify the bucket is
-  // populated. Returns first 50 keys to keep the response small.
-  const listRes = await fetch(`${baseUrl}&select=cache_key,display_key&limit=50`, {
-    headers: {
-      "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
-      "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-    },
-  });
-  const listText = await listRes.text();
-  let listJson = null;
-  try { listJson = JSON.parse(listText); } catch {}
+  const listJson = await listRes.json().catch(() => []);
   const total = Array.isArray(listJson) ? listJson.length : 0;
-  if (total === 0) {
-    // Diagnostic: try a direct write to crash_replay and capture the
-    // Supabase response so we can see why cache-put silently fails.
-    const writeRes = await fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache`, {
-      method: "POST",
-      headers: {
-        "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=representation",
-      },
-      body: JSON.stringify({
-        bucket: "crash_replay",
-        cache_key: "diag_test_key",
-        display_key: "diagnostic write",
-        payload: { hello: "world" },
-      }),
-    });
-    const writeText = await writeRes.text();
-    return j(200, {
-      ok: true,
-      deleted: 0,
-      diag: {
-        listStatus: listRes.status,
-        listBody: listText.slice(0, 500),
-        allBucketsStatus: allRes.status,
-        allBucketsBody: allText.slice(0, 800),
-        writeStatus: writeRes.status,
-        writeBody: writeText.slice(0, 800),
-      },
-    }, origin);
-  }
+  if (total === 0) return j(200, { ok: true, deleted: 0 }, origin);
   const delRes = await fetch(baseUrl, {
     method: "DELETE",
     headers: {
