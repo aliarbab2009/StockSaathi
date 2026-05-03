@@ -2812,10 +2812,183 @@
 .replay-context-body { margin-top: var(--sp-3); }
 
 /* =============================================================================
- * GENERATING STAGE — visualisation that runs DURING the actual generation.
- * Replaces the selector page main content while Phase A/B/C are in flight.
- * Transitions out smoothly when the scenario is ready.
+ * GENERATING STAGE v2 — INLINE overlay inside the selector input card.
+ * Selector page hero + featured cards stay visible; the input card itself
+ * morphs into a live console showing the 4-stage flow + tape ticker +
+ * mini-sparkline that builds with real Phase B prices. NOT a full takeover.
  * ============================================================================= */
+.generating-stage.gen-inline {
+  padding: var(--sp-2) 0 0 0;
+  background: transparent;
+  border: none;
+  margin: 0;
+  max-width: none;
+  animation: gen-inline-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes gen-inline-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.gen-inline .gen-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: var(--sp-3);
+  font-size: var(--text-base);
+}
+.gen-pulse {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--brand);
+  position: relative;
+  animation: gen-pulse-glow 1.4s ease-in-out infinite;
+}
+.gen-pulse::after {
+  content: ""; position: absolute; inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--brand);
+  animation: gen-pulse-ring 1.4s ease-out infinite;
+}
+@keyframes gen-pulse-glow { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
+@keyframes gen-pulse-ring { 0% { transform: scale(0.6); opacity: 1; } 100% { transform: scale(1.6); opacity: 0; } }
+.gen-inline .gen-query {
+  color: var(--brand);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95em;
+}
+
+/* Stage flow — dots connected by lines, glowing as they complete */
+.gen-flow {
+  display: flex; align-items: center;
+  margin: var(--sp-3) 0;
+  padding: var(--sp-2) 0;
+  gap: 0;
+}
+.gen-flow-node {
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center;
+  flex: 0 0 auto;
+  min-width: 90px;
+  position: relative;
+}
+.gen-flow-dot {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--text-faint);
+  background: var(--surface);
+  margin-bottom: 6px;
+  transition: all 280ms ease;
+  position: relative;
+}
+.gen-flow-node[data-state="active"] .gen-flow-dot {
+  border-color: var(--brand);
+  background: var(--brand);
+  box-shadow: 0 0 0 4px rgba(34,197,94,0.18), 0 0 12px rgba(34,197,94,0.5);
+  animation: gen-dot-pulse 1.2s ease-in-out infinite;
+}
+.gen-flow-node[data-state="done"] .gen-flow-dot {
+  border-color: var(--positive);
+  background: var(--positive);
+}
+.gen-flow-node[data-state="done"] .gen-flow-dot::after {
+  content: "✓"; color: white; font-size: 11px; font-weight: bold;
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.gen-flow-node[data-state="error"] .gen-flow-dot {
+  border-color: var(--negative);
+  background: var(--negative);
+}
+.gen-flow-node[data-state="error"] .gen-flow-dot::after {
+  content: "!"; color: white; font-size: 11px; font-weight: bold;
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+@keyframes gen-dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.18); }
+}
+.gen-flow-label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-weight: 500;
+  transition: color 200ms ease;
+}
+.gen-flow-node[data-state="active"] .gen-flow-label { color: var(--text); font-weight: 600; }
+.gen-flow-node[data-state="done"]   .gen-flow-label { color: var(--positive); }
+.gen-flow-node[data-state="error"]  .gen-flow-label { color: var(--negative); }
+.gen-flow-detail {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+  min-height: 12px;
+}
+.gen-flow-link {
+  flex: 1 1 auto;
+  height: 2px;
+  background: var(--text-faint);
+  margin-top: -16px; /* center on the dots vertically */
+  position: relative;
+  overflow: hidden;
+}
+.gen-flow-link::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(to right, var(--positive), var(--brand));
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gen-flow-link.gen-link-done::after { transform: scaleX(1); }
+
+/* Body: live feed (left) + sparkline (right) side-by-side */
+.gen-inline .gen-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+.gen-feed-col, .gen-spark-col { min-width: 0; }
+.gen-feed-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.gen-inline .gen-feed {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  height: 100px;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--text-xs);
+}
+.gen-inline .gen-feed-empty {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.gen-inline .gen-spark {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 12px;
+  height: 100px;
+  display: flex; align-items: center;
+}
+.gen-inline .gen-spark svg { width: 100%; height: 60px; }
+
+@media (max-width: 720px) {
+  .gen-inline .gen-body { grid-template-columns: 1fr; }
+  .gen-flow-node { min-width: 70px; }
+  .gen-flow-label { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gen-pulse, .gen-pulse::after, .gen-flow-node[data-state="active"] .gen-flow-dot { animation: none; }
+}
+
+/* ================ legacy full-takeover fallback (used if input card missing) === */
 .generating-stage {
   max-width: 720px;
   margin: var(--sp-6) auto;

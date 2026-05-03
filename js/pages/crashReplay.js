@@ -218,16 +218,15 @@ function renderSelector(main) {
       }
     };
 
-    // After Phase B completes we have real Yahoo prices in stub._realCloses.
-    // Stream them into the live feed as a price ticker (1 row per ~10 days).
+    // After Phase B completes we have real prices in stub.frames. Stream
+    // them into the live feed as a tape ticker AND build the mini-spark.
     const onChartReady = (stubScenario) => {
       if (phaseBPricesShown) return;
       phaseBPricesShown = true;
       const closes = stubScenario.frames.map(f => f.nifty);
       const total = closes.length;
-      // Sample ~10 evenly-spaced days so the feed doesn't overflow.
-      const step = Math.max(1, Math.floor(total / 8));
-      const startIso = stubScenario.startLabel || "";
+      // Sample ~6 evenly-spaced days for the tape (compact view).
+      const step = Math.max(1, Math.floor(total / 6));
       let prevClose = closes[0];
       for (let i = 0; i < total; i += step) {
         const c = closes[i];
@@ -235,12 +234,15 @@ function renderSelector(main) {
         const dCls = delta >= 0 ? "delta-up" : "delta-down";
         const dStr = i === 0 ? "" : `<span class="${dCls}">${delta >= 0 ? "+" : ""}${delta.toFixed(2)}%</span>`;
         appendGenFeedRow(main,
-          `<span class="day">Day ${i}</span>` +
+          `<span class="day">D${i}</span>` +
           `<span class="px">₹${Math.round(c).toLocaleString("en-IN")}</span>` +
           dStr
         );
         prevClose = c;
       }
+      // Build the mini-spark from the FULL closes array so the visual is
+      // a true preview of the final chart's shape.
+      drawGenSparkline(main, closes);
       advanceGeneratingStage(main, "phaseB", "done", `${total} days`);
     };
 
@@ -933,51 +935,83 @@ function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(
 // drives state transitions via advanceGeneratingStage(main, stageId, opts).
 // =============================================================================
 const GEN_STAGES = [
-  { id: "cache",  label: "Looking up cached replay" },
-  { id: "phaseA", label: "Identifying event + dates" },
-  { id: "phaseB", label: "Fetching real prices from Yahoo Finance" },
-  { id: "phaseC", label: "Writing narrative" },
+  { id: "cache",  label: "Looking up cached replay",            shortLabel: "Cache" },
+  { id: "phaseA", label: "Identifying event + dates",            shortLabel: "Identify" },
+  { id: "phaseB", label: "Fetching real prices from Yahoo Finance", shortLabel: "Prices" },
+  { id: "phaseC", label: "Writing narrative",                    shortLabel: "Narrate" },
 ];
-// Mark a stage row as pending|active|done|error with optional detail text.
-// Updates the icon glyph + state attribute + progress bar to reflect
-// completion. Idempotent — safe to call repeatedly with the same state.
+// Mark a stage node as pending|active|done|error with optional detail.
+// Also lights up the connecting flow-link to the next stage when this
+// one becomes done. Idempotent.
 function advanceGeneratingStage(main, stageId, state, detail) {
-  const row = main.querySelector(`.gen-stage-row[data-stage="${stageId}"]`);
-  if (!row) return;
-  row.dataset.state = state;
-  const icon = row.querySelector(".gen-stage-icon");
-  const detailEl = row.querySelector(".gen-stage-detail");
-  if (icon) icon.textContent = state === "done" ? "✓" : state === "active" ? "" : state === "error" ? "!" : "";
+  const node = main.querySelector(`.gen-flow-node[data-stage="${stageId}"]`);
+  if (!node) return;
+  node.dataset.state = state;
+  const detailEl = node.querySelector(".gen-flow-detail");
   if (detailEl && detail != null) detailEl.textContent = detail;
-  // Recompute progress bar based on completed stages.
-  const allRows = main.querySelectorAll(".gen-stage-row");
-  let doneCount = 0;
-  allRows.forEach((r) => {
-    if (r.dataset.state === "done") doneCount += 1;
-    if (r.dataset.state === "active") doneCount += 0.5;
-  });
-  const bar = main.querySelector("#gen-progress-bar");
-  if (bar) bar.style.width = (doneCount / allRows.length * 100).toFixed(1) + "%";
+  // Light up the link AFTER this node when it goes done.
+  const allNodes = Array.from(main.querySelectorAll(".gen-flow-node"));
+  const idx = allNodes.indexOf(node);
+  if (state === "done" && idx >= 0 && idx < allNodes.length - 1) {
+    const link = main.querySelector(`.gen-flow-link[data-link="${idx}"]`);
+    if (link) link.classList.add("gen-link-done");
+  }
 }
 
 // Append a row to the live feed area. Used to stream Phase B prices
-// as they arrive (one row per ~10 days of real Yahoo data) so the user
-// sees a tape ticker effect. Auto-scrolls to keep the latest visible.
+// as they arrive so the user sees a tape ticker effect. Auto-scrolls
+// to keep the latest visible. Trim past 8 rows.
 function appendGenFeedRow(main, html) {
   const feed = main.querySelector("#gen-feed");
   if (!feed) return;
-  // Clear empty placeholder on first append.
   const empty = feed.querySelector(".gen-feed-empty");
   if (empty) empty.remove();
   const row = document.createElement("div");
   row.className = "gen-feed-row";
   row.innerHTML = html;
   feed.appendChild(row);
-  // Trim if overflow (keep last ~12 rows).
   const rows = feed.querySelectorAll(".gen-feed-row");
-  if (rows.length > 12) rows[0].remove();
-  // Scroll to bottom to keep the latest visible.
+  if (rows.length > 8) rows[0].remove();
   feed.scrollTop = feed.scrollHeight;
+}
+
+// Build the mini-sparkline progressively from a series of close prices.
+// Called after Phase B with the full closes array — animates each point
+// in over ~600ms so the spark visibly "draws" rather than appearing all
+// at once. Auto-scales to viewBox.
+function drawGenSparkline(main, closes) {
+  if (!Array.isArray(closes) || closes.length < 2) return;
+  const path = main.querySelector("#gen-spark-path");
+  const fill = main.querySelector("#gen-spark-fill");
+  if (!path) return;
+  const w = 200, h = 60, pad = 2;
+  const min = Math.min(...closes), max = Math.max(...closes);
+  const range = max - min || 1;
+  const toX = (i) => pad + (i / (closes.length - 1)) * (w - pad * 2);
+  const toY = (v) => pad + (h - pad * 2) - ((v - min) / range) * (h - pad * 2);
+  // Animate by progressively building the path.
+  const totalSteps = Math.min(closes.length, 30);
+  const stride = closes.length / totalSteps;
+  let step = 0;
+  const draw = () => {
+    if (step > totalSteps) return;
+    let d = "", lastX = 0, lastY = 0;
+    for (let i = 0; i <= step; i++) {
+      const realIdx = Math.min(closes.length - 1, Math.floor(i * stride));
+      const x = toX(realIdx);
+      const y = toY(closes[realIdx]);
+      d += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1) + " ";
+      lastX = x; lastY = y;
+    }
+    path.setAttribute("d", d.trim());
+    if (fill) {
+      // Close the path down to baseline for the gradient fill.
+      fill.setAttribute("d", d.trim() + ` L${lastX.toFixed(1)},${(h - pad).toFixed(1)} L${pad},${(h - pad).toFixed(1)} Z`);
+    }
+    step++;
+    if (step <= totalSteps) setTimeout(draw, 18);
+  };
+  draw();
 }
 
 // Replace the live feed with a single narrative-streaming text block.
@@ -994,25 +1028,66 @@ function updateGenFeedNarrative(main, text) {
   el.textContent = text;
 }
 
+// REVAMP v2: render the generating UI INSIDE the existing input card,
+// preserving the selector page context (hero text, featured cards, etc.
+// stay visible). Visual: stage-dots (4 connected circles + glowing
+// progress line), a real-time mini-sparkline that builds as Phase B
+// prices arrive, and a compact source-chain detail line. Far less
+// "bland separate page" and more "live console below the input".
 function renderGeneratingStage(main, queryText) {
   const safeQuery = escapeHtml(queryText);
-  main.innerHTML = `
-    <div class="generating-stage" id="gen-stage">
-      <h2>Generating <span class="gen-query">"${safeQuery}"</span></h2>
-      <p class="gen-sub">Building a real day-by-day replay from live market data. ~3-5 seconds.</p>
-      <div class="gen-stages">
-        ${GEN_STAGES.map((s) => `
-          <div class="gen-stage-row" data-stage="${s.id}" data-state="pending">
-            <span class="gen-stage-icon">${s.id === "cache" ? "?" : ""}</span>
-            <span class="gen-stage-label">${escapeHtml(s.label)}</span>
-            <span class="gen-stage-detail"></span>
+  // Find the input card and inject the generating UI into it,
+  // collapsing the input area but keeping the rest of the page intact.
+  const card = main.querySelector("#custom-crash-card");
+  if (!card) {
+    // Fallback if structure isn't there — inject at top of main.
+    const stub = document.createElement("div");
+    main.insertBefore(stub, main.firstChild);
+    stub.innerHTML = `<div class="card" id="custom-crash-card"></div>`;
+    return renderGeneratingStage(main, queryText);
+  }
+  // Cache the original card HTML so trigger()'s catch can restore on
+  // error if needed (currently we render inline error inside the stage).
+  card.innerHTML = `
+    <div class="generating-stage gen-inline" id="gen-stage">
+      <div class="gen-header">
+        <span class="gen-pulse"></span>
+        <strong>Generating</strong>
+        <span class="gen-query">"${safeQuery}"</span>
+      </div>
+      <div class="gen-flow" role="progressbar">
+        ${GEN_STAGES.map((s, i) => `
+          <div class="gen-flow-node" data-stage="${s.id}" data-state="pending">
+            <span class="gen-flow-dot"></span>
+            <span class="gen-flow-label">${escapeHtml(s.shortLabel || s.label)}</span>
+            <span class="gen-flow-detail"></span>
           </div>
+          ${i < GEN_STAGES.length - 1 ? `<div class="gen-flow-link" data-link="${i}"></div>` : ""}
         `).join("")}
       </div>
-      <div class="gen-feed" id="gen-feed">
-        <div class="gen-feed-empty" style="color:var(--muted); font-size:var(--text-xs);">Waiting for data…</div>
+      <div class="gen-body">
+        <div class="gen-feed-col">
+          <div class="gen-feed-label">LIVE FEED</div>
+          <div class="gen-feed" id="gen-feed">
+            <div class="gen-feed-empty">Waiting for data…</div>
+          </div>
+        </div>
+        <div class="gen-spark-col">
+          <div class="gen-feed-label">PRICE TRAJECTORY</div>
+          <div class="gen-spark" id="gen-spark">
+            <svg viewBox="0 0 200 60" preserveAspectRatio="none" width="100%" height="60" aria-hidden="true">
+              <path id="gen-spark-path" fill="none" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" />
+              <path id="gen-spark-fill" fill="url(#genSparkGrad)" opacity="0.35" />
+              <defs>
+                <linearGradient id="genSparkGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.5" />
+                  <stop offset="100%" stop-color="var(--brand)" stop-opacity="0" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+        </div>
       </div>
-      <div class="gen-progress"><div class="gen-progress-bar" id="gen-progress-bar"></div></div>
     </div>
   `;
 }
