@@ -634,18 +634,16 @@ export async function generateCustomCrash(description) {
   // for bank events, Nifty IT for tech events, etc.). The primary symbol
   // is the source of truth for the chart; companions are context-only
   // and don't block rendering if they fail.
+  // PERF_AUDIT #7: companions removed from the cold path. Previously
+  // we fetched 2-3 sector indices in parallel with the primary; the
+  // slowest companion (often ^NSEBANK) added 200-400 ms wall-clock for
+  // narrative colour the user rarely notices. Primary chart unaffected.
   const primary = bracket.symbol || "^NSEI";
-  const companions = pickCompanionSymbols(primary, description);
   _perfMark("cc:phaseB-start");
-  const fetches = [
-    fetchHistory(primary, bracket.startIso, bracket.endIso).catch(() => null),
-    ...companions.map(sym => fetchHistory(sym, bracket.startIso, bracket.endIso).catch(() => null)),
-  ];
-  const results = await Promise.all(fetches);
+  let history = await fetchHistory(primary, bracket.startIso, bracket.endIso).catch(() => null);
   _perfMark("cc:phaseB-end");
   _perfMeasure("cc:phaseB", "cc:phaseB-start", "cc:phaseB-end");
-  let history = results[0];
-  const companionHistory = results.slice(1).filter(h => h && h.points && h.points.length >= 5);
+  const companionHistory = [];
   // Fallback: if the LLM picked a specific ticker and Yahoo returned too little
   // data, retry with ^NSEI before giving up. This catches delisted-stock
   // events where the stock no longer exists on Yahoo (Satyam 2009 →
