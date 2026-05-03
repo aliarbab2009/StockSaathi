@@ -636,6 +636,43 @@ export async function generateCustomCrash(description, opts = {}) {
     throw err;
   }
 
+  // PERF: Phase B is done — we have everything needed to draw the chart.
+  // Build a stub scenario with REAL chart data + placeholder narrative,
+  // and hand it to the caller via onChartReady. The caller can navigate
+  // to the replay page immediately so the chart appears at ~1s instead
+  // of ~5s. Phase C will return the full scenario; the caller patches
+  // the live page when that resolves.
+  if (typeof opts.onChartReady === "function") {
+    try {
+      const stubMeta = {
+        title: bracket.hint
+          ? bracket.hint.replace(/\.$/, "").slice(0, 50)
+          : "Building event details…",
+        startLabel: formatIsoToLabel(bracket.startIso),
+        endLabel: formatIsoToLabel(bracket.endIso),
+        description: "Pulling the narrative now — should land in a couple of seconds. The chart below is real data from Yahoo Finance.",
+        totalDays: history.points.length,
+        startIndex: Math.round(startIdx * 100) / 100,
+        troughIndex: Math.round(troughIdx * 100) / 100,
+        endIndex: Math.round(endIdx * 100) / 100,
+        troughDay: troughDayIdx,
+        indexDrop: Math.round(realDropPct * 10) / 10,
+        recoveryDays: 0,
+        panicDay: Math.min(3, history.points.length - 2),
+        keyMoments: [
+          { day: 0, label: "Start", narration: "" },
+          { day: troughDayIdx, label: "Trough", narration: "" },
+          { day: history.points.length - 1, label: "End of window", narration: "" },
+        ],
+        _realCloses: closes,
+        _startIso: bracket.startIso,
+      };
+      const stubScenario = buildScenario(stubMeta, hash);
+      stubScenario._partial = true;
+      try { opts.onChartReady(stubScenario); } catch {}
+    } catch {}
+  }
+
   // Phase C: generate narrative with real data in context
   onProgress("phase-c");
   for (const { profile, temperature } of ATTEMPTS) {

@@ -185,11 +185,35 @@ function renderSelector(main) {
       const msg = STAGES[stage];
       if (msg) status.textContent = msg;
     };
+    // PERF: chart-first render. After Phase B (~1s in), customCrash gives
+    // us a stub scenario with REAL chart data + placeholder narration. We
+    // navigate immediately so the user sees the chart drawing instead of
+    // staring at a status spinner. When Phase C completes, we patch the
+    // registered scenario with the full data and dispatch a custom event
+    // that renderReplay listens for to swap the placeholder text in place.
+    let navigatedEarly = false;
+    const onChartReady = (stubScenario) => {
+      if (navigatedEarly) return;
+      navigatedEarly = true;
+      registerCustomCrash(stubScenario);
+      status.textContent = "Chart ready — narrative streaming in…";
+      location.hash = "#/crash-replay/" + stubScenario.id;
+    };
     try {
-      const scenario = await generateCustomCrash(q, { onProgress });
+      const scenario = await generateCustomCrash(q, { onProgress, onChartReady });
       registerCustomCrash(scenario);
-      status.textContent = `Ready — ${scenario.title}. Loading replay…`;
-      location.hash = "#/crash-replay/" + scenario.id;
+      if (navigatedEarly) {
+        // Already on the replay page with the stub. Tell renderReplay
+        // to refresh in place using the now-full scenario.
+        try {
+          window.dispatchEvent(new CustomEvent("crash-scenario-updated", {
+            detail: { scenarioId: scenario.id }
+          }));
+        } catch {}
+      } else {
+        status.textContent = `Ready — ${scenario.title}. Loading replay…`;
+        location.hash = "#/crash-replay/" + scenario.id;
+      }
     } catch (e) {
       const msg = String(e?.message || "unknown error");
       // Route quota / key errors straight through so the guidance survives.
@@ -234,6 +258,26 @@ function renderSelector(main) {
 }
 
 function renderReplay(main, scenario) {
+  // PERF: chart-first render. If we navigated here with a partial scenario
+  // (Phase B done, Phase C still streaming), listen for the 'crash-scenario-
+  // updated' event that customCrash dispatches when Phase C completes, and
+  // re-render in place with the full scenario.
+  if (scenario._partial) {
+    const onUpdated = (ev) => {
+      if (ev?.detail?.scenarioId !== scenario.id) return;
+      const fullScenario = getCrashById(scenario.id);
+      if (fullScenario && !fullScenario._partial) {
+        window.removeEventListener("crash-scenario-updated", onUpdated);
+        renderReplay(main, fullScenario);
+      }
+    };
+    window.addEventListener("crash-scenario-updated", onUpdated);
+    // Also clear the listener if user navigates away.
+    window.addEventListener("hashchange", () => {
+      window.removeEventListener("crash-scenario-updated", onUpdated);
+    }, { once: true });
+  }
+
   const totalFrames = scenario.frames.length;
 
   // Interpolate frames to a uniform 0..N index. We use scenario.frames[i].day as
@@ -312,8 +356,12 @@ function renderReplay(main, scenario) {
     </div>
 
     <details class="replay-context-details" open>
-      <summary>What this scenario is</summary>
+      <summary>${scenario._partial ? "Narrative streaming in…" : "What this scenario is"}</summary>
       <div class="replay-context-body">
+        ${scenario._partial ? `<div class="replay-streaming-pulse">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span style="margin-left:8px;color:var(--muted);font-size:var(--text-sm);">Writing the day-by-day story now…</span>
+        </div>` : ""}
         ${renderDescriptionParagraphs(scenario.description)}
         ${scenario.indexDrop != null ? `<div class="replay-context-stats">
           <div><span class="rc-key">Peak drop</span><span class="rc-val negative">${Math.abs(scenario.indexDrop).toFixed(1)}%</span></div>
