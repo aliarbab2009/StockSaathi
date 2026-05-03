@@ -115,16 +115,17 @@ from §1's table.
 
 | Item | Branch | PR | Real | Perceived |
 |---|---|---|---|---|
-| §1  | `perf/01-profiling-hooks`     | [#2](https://github.com/Ali-Arbab/StockSaathi/pull/2) | 0   | 0   |
-| #1  | `perf/03-pregen-top10`        | [#3](https://github.com/Ali-Arbab/StockSaathi/pull/3) | 5500 (top-10) | 5500 |
-| #2  | `perf/02-deterministic-router`| [#4](https://github.com/Ali-Arbab/StockSaathi/pull/4) | 950 | 950 |
-| #3  | `perf/04-race-cache-vs-llm`   | [#5](https://github.com/Ali-Arbab/StockSaathi/pull/5) | 180 | 180 |
-| #5  | `perf/05-cap-phase-c-tokens`  | [#6](https://github.com/Ali-Arbab/StockSaathi/pull/6) | 350 | 350 |
-| #7  | `perf/07-drop-companions`     | [#7](https://github.com/Ali-Arbab/StockSaathi/pull/7) | 200-400 | 200-400 |
-| #6  | `perf/06-trim-prompts`        | [#8](https://github.com/Ali-Arbab/StockSaathi/pull/8) | 120 | 120 |
-| #4  | `perf/08-stream-phase-c`      | [#9](https://github.com/Ali-Arbab/StockSaathi/pull/9) | 0   | 1500-2000 |
+| §1  | `perf/01-profiling-hooks`     | [#2](https://github.com/Ali-Arbab/StockSaathi/pull/2)  | 0   | 0   |
+| #1  | `perf/03-pregen-top10`        | [#3](https://github.com/Ali-Arbab/StockSaathi/pull/3)  | 5500 (top-10) | 5500 |
+| #2  | `perf/02-deterministic-router`| [#4](https://github.com/Ali-Arbab/StockSaathi/pull/4)  | 950 | 950 |
+| #3  | `perf/04-race-cache-vs-llm`   | [#5](https://github.com/Ali-Arbab/StockSaathi/pull/5)  | 180 | 180 |
+| #5  | `perf/05-cap-phase-c-tokens`  | [#6](https://github.com/Ali-Arbab/StockSaathi/pull/6)  | 350 | 350 |
+| #7  | `perf/07-drop-companions`     | [#7](https://github.com/Ali-Arbab/StockSaathi/pull/7)  | 200-400 | 200-400 |
+| #6  | `perf/06-trim-prompts`        | [#8](https://github.com/Ali-Arbab/StockSaathi/pull/8)  | 120 | 120 |
+| #4  | `perf/08-stream-phase-c`      | [#9](https://github.com/Ali-Arbab/StockSaathi/pull/9)  | 0   | 1500-2000 |
+| F/U | `perf/09-featured-replays`    | [#10](https://github.com/Ali-Arbab/StockSaathi/pull/10)| 0   | 5500 (top-10 click-through) |
 
-Merge order: §1 → #1 → #2 → #3 → #5 → #7 → #6 (depends on #2) → #4.
+Merge order: §1 → #1 → #2 → #3 → #5 → #7 → #6 (depends on #2) → #4 → F/U (depends on #1).
 
 ### Item 1 — Pre-generate top 10 (branch `perf/03-pregen-top10`)
 
