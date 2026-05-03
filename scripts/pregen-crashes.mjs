@@ -44,7 +44,7 @@ import crypto from "node:crypto";
 
 // MUST stay in sync with js/features/customCrash.js CURRENT_PROMPT_VERSION.
 // See the constant's comment in customCrash.js for bump rules.
-const CURRENT_PROMPT_VERSION = "v1.2026-05-03";
+const CURRENT_PROMPT_VERSION = "v2.2026-05-03";
 
 // MUST stay in sync with js/features/customCrash.js PHASE1_PROMPT.
 const PHASE1_PROMPT = `You are Saathi's historical-event-date picker for Indian markets. Given a free-form description of any Indian market event — even COLLOQUIAL, MIS-SPELT, or HINDI-INFLECTED references — identify the real event and return ONLY JSON:

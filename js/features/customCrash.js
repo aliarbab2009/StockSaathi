@@ -427,7 +427,22 @@ export function existingScenarioForQuery(description) {
   if (!id) return null;
   try {
     const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
-    return all[id] ? id : null;
+    const scenario = all[id];
+    if (!scenario) return null;
+    // Version gate — same logic as cacheReplayGet. Old scenarios from a
+    // previous prompt version (or no version stamp at all) are evicted
+    // so the user gets a fresh generation against current router/prompts.
+    if (scenario._promptVersion !== CURRENT_PROMPT_VERSION) {
+      try {
+        delete all[id];
+        localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
+        const idx = queryIndex();
+        delete idx[key];
+        localStorage.setItem(QUERY_INDEX_STORAGE_KEY, JSON.stringify(idx));
+      } catch {}
+      return null;
+    }
+    return id;
   } catch { return null; }
 }
 
@@ -479,7 +494,12 @@ async function queryHash(desc) {
 //
 // Format: "v<major>.<YYYY-MM-DD>". Date helps debugging; major version
 // helps coordinate breaking changes across the script + live code.
-export const CURRENT_PROMPT_VERSION = "v1.2026-05-03";
+// v2 (2026-05-03): bumped after PERF_AUDIT router/race/trim/companion/stream
+// PRs landed. Old v1 cache rows had wrong tickers (LLM picked RELINFRA for
+// 2G scam, etc.) and pre-streaming-aware shape. Bumping invalidates all old
+// rows in BOTH the cross-user Supabase cache AND the per-browser localStorage
+// cache so users get a fresh generation against the current router + prompts.
+export const CURRENT_PROMPT_VERSION = "v2.2026-05-03";
 
 // Cross-user cache via /api/ai?op=cache-get|cache-put (Supabase-backed).
 // Popular prompts get generated once, ever — the first user pays the LLM
@@ -713,6 +733,7 @@ export async function generateCustomCrash(description, opts = {}) {
       };
       const stubScenario = buildScenario(stubMeta, hash);
       stubScenario._partial = true;
+      stubScenario._promptVersion = CURRENT_PROMPT_VERSION;
       try { opts.onChartReady(stubScenario); } catch {}
     } catch {}
   }
@@ -759,6 +780,10 @@ export async function generateCustomCrash(description, opts = {}) {
       const scenario = buildScenario(meta, hash);
       _perfMark("cc:build-end");
       _perfMeasure("cc:buildScenario", "cc:build-start", "cc:build-end");
+      // Stamp the prompt version onto the local copy too — existingScenario-
+      // ForQuery checks this on read so the local cache evicts old-version
+      // scenarios the same way the cross-user cache does.
+      scenario._promptVersion = CURRENT_PROMPT_VERSION;
       rememberQuery(queryKey(description), scenario.id);
       cacheReplayPut(hash, description, scenario);
       return scenario;

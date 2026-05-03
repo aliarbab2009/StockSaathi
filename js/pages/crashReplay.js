@@ -191,20 +191,34 @@ function renderSelector(main) {
     // staring at a status spinner. When Phase C completes, we patch the
     // registered scenario with the full data and dispatch a custom event
     // that renderReplay listens for to swap the placeholder text in place.
+    //
+    // CRITICAL: stub and full scenario must share the SAME id, otherwise
+    // (a) the URL would change (jarring) and (b) the renderReplay listener
+    // matches on id and would never fire. buildScenario derives id from
+    // slugified title + hash suffix; stub uses bracket.hint title and full
+    // uses the LLM-generated title, so they naturally diverge. We force
+    // them equal by overwriting the full scenario's id with the stub's
+    // before re-registering.
     let navigatedEarly = false;
+    let stubId = null;
     const onChartReady = (stubScenario) => {
       if (navigatedEarly) return;
       navigatedEarly = true;
+      stubId = stubScenario.id;
       registerCustomCrash(stubScenario);
       status.textContent = "Chart ready — narrative streaming in…";
       location.hash = "#/crash-replay/" + stubScenario.id;
     };
     try {
       const scenario = await generateCustomCrash(q, { onProgress, onChartReady });
+      if (navigatedEarly && stubId) {
+        // Force same id so registerCustomCrash overwrites the stub entry
+        // and the dispatched event finds the same scenario the renderReplay
+        // listener was registered against.
+        scenario.id = stubId;
+      }
       registerCustomCrash(scenario);
       if (navigatedEarly) {
-        // Already on the replay page with the stub. Tell renderReplay
-        // to refresh in place using the now-full scenario.
         try {
           window.dispatchEvent(new CustomEvent("crash-scenario-updated", {
             detail: { scenarioId: scenario.id }
