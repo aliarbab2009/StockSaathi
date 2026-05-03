@@ -250,33 +250,72 @@ export async function generateCustomCrash(description) {
     } catch {}
   }
 
-  // 2. Supabase cross-user cache. First user generates + pays; everyone else
-  //    pulls for free. We DO NOT cache refusals — a refusal is often a
-  //    model-mood mistake (overzealous not_a_crash), and re-querying should
-  //    be free to produce a real replay. Only successful scenarios are cached.
-  const cached = await cacheReplayGet(hash);
-  if (cached && cached.id && !cached.error) {
-    // Hydrate localStorage so subsequent loads hit the local path first.
+  // 2. Supabase cross-user cache RACED against Phase A LLM (PERF_AUDIT #3).
+  //    Previously this was sequential: cacheReplayGet RTT (~180 ms)
+  //    blocked Phase A from starting. Now both run concurrently under a
+  //    shared AbortController:
+  //      - If cache resolves first AND has a hit → abort the LLM, return
+  //        the cached scenario (saves the full Phase A 950 ms + Phase B
+  //        + Phase C since we're done).
+  //      - If LLM resolves first → still await cache; if cache also has
+  //        a hit, prefer it (LLM result discarded — token spend is the
+  //        cost of the race; cache rows are higher quality because they
+  //        are already shape-validated past versions).
+  //      - If both resolve with cache miss → use Phase A's bracket and
+  //        proceed to Phase B unchanged. Real saving here is just the
+  //        cache RTT (~180 ms) — Phase A is no longer in serial after it.
+  //    We DO NOT cache refusals.
+  const phaseAAbort = new AbortController();
+  const cachePromise = cacheReplayGet(hash);
+  const llmPromise = callLlmForBracket(description, phaseAAbort.signal)
+    .catch(e => ({ _err: e }));
+
+  // Race for the cache-hit fast path.
+  const winner = await Promise.race([
+    cachePromise.then(c => ({ kind: "cache", value: c })),
+    llmPromise.then(b => ({ kind: "llm", value: b })),
+  ]);
+
+  // Helper to apply a cache hit.
+  const applyCacheHit = (cached) => {
     try {
       const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
       all[cached.id] = cached;
       localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
     } catch {}
     rememberQuery(queryKey(description), cached.id);
+  };
+
+  if (winner.kind === "cache" && winner.value && winner.value.id && !winner.value.error) {
+    // Cache won the race AND had a hit. Save Phase A LLM cost.
+    phaseAAbort.abort();
+    applyCacheHit(winner.value);
+    return winner.value;
+  }
+
+  // Either cache missed OR LLM finished first. We must still wait for both
+  // to settle before continuing because if LLM finished first we don't yet
+  // know whether cache had a hit. The LLM will return ~950 ms; cache is
+  // typically ~180 ms, so the wait is bounded.
+  const [cached, bracketResult] = await Promise.all([cachePromise, llmPromise]);
+  if (cached && cached.id && !cached.error) {
+    // LLM won the race but cache also had a hit — prefer cache (token
+    // spend on LLM is sunk cost; cache result is the canonical one).
+    phaseAAbort.abort();
+    applyCacheHit(cached);
     return cached;
   }
 
   // 3. Cache miss → THREE-PHASE grounded generation:
-  //    a) LLM picks the event's startIso/endIso/symbol
+  //    a) Phase A bracket from above (LLM result, may have errored)
   //    b) Server fetches REAL daily closes from Yahoo for that range
-  //    c) LLM generates the replay JSON using the real numbers (no hallucination)
+  //    c) LLM generates the replay JSON using the real numbers
   let lastErr = null;
 
-  // Phase A: pick dates + symbol
-  let bracket;
-  try {
-    bracket = await callLlmForBracket(description);
-  } catch (e) {
+  // Phase A result. Was kicked off in parallel with the cache-get above
+  // and is already settled by the time we get here.
+  const bracket = bracketResult && !bracketResult._err ? bracketResult : null;
+  if (!bracket) {
     throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
   }
   // LLM's off-topic flag — catches adult/vulgar/zero-market queries that the
@@ -403,7 +442,10 @@ function pickRandomExample() {
 }
 
 // Phase A: ask Gemini for the event's date range + target symbol.
-async function callLlmForBracket(description) {
+// Optional AbortSignal lets the caller cancel a redundant LLM round-trip
+// when the cross-user cache wins the race in generateCustomCrash (PERF #3).
+// Aborted fetches throw an AbortError; the caller .catch()s it as _err.
+async function callLlmForBracket(description, signal) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -417,6 +459,7 @@ async function callLlmForBracket(description) {
       response_format: { type: "json_object" },
       profile: "json",
     }),
+    signal,
   });
   if (!res.ok) throw new Error(`phase1_http_${res.status}`);
   const body = await res.json();
