@@ -933,6 +933,62 @@ const GEN_STAGES = [
   { id: "phaseB", label: "Fetching real prices from Yahoo Finance" },
   { id: "phaseC", label: "Writing narrative" },
 ];
+// Mark a stage row as pending|active|done|error with optional detail text.
+// Updates the icon glyph + state attribute + progress bar to reflect
+// completion. Idempotent — safe to call repeatedly with the same state.
+function advanceGeneratingStage(main, stageId, state, detail) {
+  const row = main.querySelector(`.gen-stage-row[data-stage="${stageId}"]`);
+  if (!row) return;
+  row.dataset.state = state;
+  const icon = row.querySelector(".gen-stage-icon");
+  const detailEl = row.querySelector(".gen-stage-detail");
+  if (icon) icon.textContent = state === "done" ? "✓" : state === "active" ? "" : state === "error" ? "!" : "";
+  if (detailEl && detail != null) detailEl.textContent = detail;
+  // Recompute progress bar based on completed stages.
+  const allRows = main.querySelectorAll(".gen-stage-row");
+  let doneCount = 0;
+  allRows.forEach((r) => {
+    if (r.dataset.state === "done") doneCount += 1;
+    if (r.dataset.state === "active") doneCount += 0.5;
+  });
+  const bar = main.querySelector("#gen-progress-bar");
+  if (bar) bar.style.width = (doneCount / allRows.length * 100).toFixed(1) + "%";
+}
+
+// Append a row to the live feed area. Used to stream Phase B prices
+// as they arrive (one row per ~10 days of real Yahoo data) so the user
+// sees a tape ticker effect. Auto-scrolls to keep the latest visible.
+function appendGenFeedRow(main, html) {
+  const feed = main.querySelector("#gen-feed");
+  if (!feed) return;
+  // Clear empty placeholder on first append.
+  const empty = feed.querySelector(".gen-feed-empty");
+  if (empty) empty.remove();
+  const row = document.createElement("div");
+  row.className = "gen-feed-row";
+  row.innerHTML = html;
+  feed.appendChild(row);
+  // Trim if overflow (keep last ~12 rows).
+  const rows = feed.querySelectorAll(".gen-feed-row");
+  if (rows.length > 12) rows[0].remove();
+  // Scroll to bottom to keep the latest visible.
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// Replace the live feed with a single narrative-streaming text block.
+// Called when Phase C starts. Caller updates .textContent as SSE chunks
+// arrive — caret is via CSS ::after so no JS animation needed.
+function startGenFeedNarrative(main) {
+  const feed = main.querySelector("#gen-feed");
+  if (!feed) return;
+  feed.innerHTML = `<div class="gen-feed-narrative" id="gen-feed-narrative"></div>`;
+}
+function updateGenFeedNarrative(main, text) {
+  const el = main.querySelector("#gen-feed-narrative");
+  if (!el) return;
+  el.textContent = text;
+}
+
 function renderGeneratingStage(main, queryText) {
   const safeQuery = escapeHtml(queryText);
   main.innerHTML = `
