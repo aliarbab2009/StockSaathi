@@ -2,7 +2,7 @@
 // STOCKS — Browse markets. Real-time prices via Yahoo Finance when possible.
 // =============================================================================
 
-import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, getInstrument, ensureUniverseLoaded, ensureMfUniverseLoaded, getMfCategoryBuckets } from "../data/universe.js";
+import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, getInstrument, ensureUniverseLoaded, ensureMfUniverseLoaded, getMfCategoryBuckets, getCanonicalCategory, getCanonicalCategoryCounts } from "../data/universe.js";
 import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getFreshCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
@@ -837,7 +837,13 @@ export function renderStocks(main) {
     const list = fullList.slice(0, visibleCount);
     const truncated = fullList.length > list.length;
     const src = getDataSource();
-    const allSectorsList = getAllSectors();
+    // Hotfix63a: replaced raw NSE-derived sectors (30 fragmentary
+    // buckets — Energy, NBFC, Services, Other, Conglomerate,
+    // Internet, Fintech, Exchange, etc.) with Groww-aligned canonical
+    // categories. Each entry carries a count so the pill row reads
+    // like Groww's: 'Banking 42', 'Oil & Gas 37', 'IT 186', etc.
+    const canonicalCats = getCanonicalCategoryCounts();
+    const totalEquityForPills = canonicalCats.reduce((s, c) => s + c.count, 0);
     // Tab counts — derived from the full universe (all kinds), not the
     // filtered list. Shows "..." until Tier-2 lands.
     const equityCount = universeReady ? allInst.filter(i => i.kind === KIND_EQUITY).length : null;
@@ -926,8 +932,8 @@ export function renderStocks(main) {
              ships in a follow-up. -->
       ` : `
         <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: auto;">
-          <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors</button>
-          ${allSectorsList.map(s => `<button class="filter-pill ${filter.sector === s ? "active" : ""}" data-sector="${escapeAttr(s)}">${escapeHtml(s)}</button>`).join("")}
+          <button class="filter-pill ${filter.sector === "all" ? "active" : ""}" data-sector="all">All sectors${totalEquityForPills ? ` <span class="pill-count">${totalEquityForPills}</span>` : ""}</button>
+          ${canonicalCats.map(c => `<button class="filter-pill ${filter.sector === c.name ? "active" : ""}" data-sector="${escapeAttr(c.name)}">${escapeHtml(c.name)} <span class="pill-count">${c.count}</span></button>`).join("")}
         </div>
       `}
 
@@ -1835,7 +1841,11 @@ function applyFilters(all, f, state, quoteCache) {
       const wl = new Set(state.watchlist);
       list = list.filter(i => wl.has(i.symbol));
     }
-    if (f.sector !== "all") list = list.filter(i => i.sector === f.sector);
+    // Hotfix63a: pill row now feeds canonical Groww categories,
+    // so filter.sector holds a canonical name (e.g. "Oil & Gas")
+    // rather than the raw NSE bucket. Map each instrument through
+    // getCanonicalCategory and compare.
+    if (f.sector !== "all") list = list.filter(i => getCanonicalCategory(i) === f.sector);
     list.sort((a, b) => orderMap.get(a.symbol) - orderMap.get(b.symbol));
     return list;
   }
@@ -1865,7 +1875,10 @@ function applyFilters(all, f, state, quoteCache) {
     list = list.filter(i => wl.has(i.symbol));
   }
   // Sector filter only applies outside MF mode (MFs use mfBucket).
-  if (f.kind !== "MF" && f.sector !== "all") list = list.filter(i => i.sector === f.sector);
+  // Hotfix63a: filter.sector is now a canonical Groww category — map
+  // each instrument's raw .sector through getCanonicalCategory before
+  // comparing.
+  if (f.kind !== "MF" && f.sector !== "all") list = list.filter(i => getCanonicalCategory(i) === f.sector);
   if (f.q) {
     const q = f.q.toLowerCase();
     list = list.filter(i =>

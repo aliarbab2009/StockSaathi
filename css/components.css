@@ -1445,6 +1445,29 @@
   color: var(--text-strong);
   border-color: var(--border-strong);
 }
+/* Hotfix63a: tasteful count badge inside every category pill so users
+   see "Banking 42" / "Oil & Gas 37" / "IT 186" upfront — same as
+   Groww's screener. Slightly dimmer + smaller than the pill label so
+   it reads as metadata, not as part of the name. On the active pill
+   the badge inverts to white-on-translucent so it stays legible. */
+.filter-pill .pill-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  border-radius: var(--r-full);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 18px;
+  text-align: center;
+}
+.filter-pill.active .pill-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: white;
+}
 
 .risk-pill {
   font-size: 10px;
