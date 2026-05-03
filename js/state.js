@@ -446,7 +446,15 @@ import { getCachedQuotes } from "./data/marketData.js";
 //      no live quote has been observed yet (genuine cold first paint).
 function _bestKnownPxPaise(sym) {
   const cached = getCachedQuotes([sym])[sym];
-  if (cached && Number.isFinite(cached.pricePaise) && cached.pricePaise > 0) {
+  // Hotfix66b: skip cached entries flagged stale during market hours.
+  // localStorage hydration force-flags every persisted quote stale (in
+  // marketData.loadPersistedQuotes), so a hard reload during market
+  // hours can otherwise feed 48-hour-old prices into portfolio totals
+  // until the first /api/live-quote tick lands. User's mum reported
+  // ₹5-20 drift vs Groww — this is one of the contributing leaks. MFs
+  // are exempt (NAV is daily, "stale" is meaningless for them).
+  if (cached && Number.isFinite(cached.pricePaise) && cached.pricePaise > 0
+      && !(cached.stale && !sym.startsWith("MF_"))) {
     return cached.pricePaise;
   }
   const px = getPriceAt(sym, 0);

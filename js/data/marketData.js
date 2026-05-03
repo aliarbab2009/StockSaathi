@@ -169,12 +169,18 @@ function normalizeFromApi(payload, symbol) {
   const ts = payload.ts_ms || Date.now();
   // Staleness detection. Yahoo's free NSE feed is officially 15 min delayed
   // but in practice can fall hours behind during busy sessions. If the
-  // quote's own timestamp is more than 5 min old DURING MARKET HOURS, flip
+  // quote's own timestamp is more than 90 s old DURING MARKET HOURS, flip
   // the "LIVE" badge to "DELAYED" so we don't lie to users. Outside market
   // hours the old timestamp is expected (market is closed).
+  //
+  // Hotfix66b: was 5 min — too generous. User's mum reported ₹5-20 drift
+  // vs Groww. A 4m59s-old quote rendered as fresh "LIVE" while really
+  // being nearly 5 min behind. 90 s is tight enough that any real lag
+  // surfaces as a DELAYED chip, but loose enough that ordinary network
+  // jitter doesn't constantly false-flag.
   const marketOpenNow = _isNseOpen(Date.now());
   const ageMinutes = (Date.now() - ts) / 60000;
-  const stale = marketOpenNow && ageMinutes > 5;
+  const stale = marketOpenNow && ageMinutes > 1.5;
   const pricePaise = Math.round(payload.price * 100);
   _appendIntraday(symbol, ts, pricePaise);
   return {
