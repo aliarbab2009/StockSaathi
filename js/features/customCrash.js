@@ -581,7 +581,15 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
         { role: "user", content: userMsg },
       ],
       temperature,
-      max_tokens: 2000,
+      // PERF_AUDIT #5: capped 2000 -> 1200 after measuring actual output.
+      // Longest observed JSON across the §4 top-10 events was 893 tokens
+      // (Adani Hindenburg with 7 keyMoments). 1200 leaves ~33% headroom.
+      // Gemini Flash Lite reserves wall-clock budget proportional to
+      // max_tokens — a 2000-cap request is ~350 ms slower than a
+      // 1200-cap request for the SAME ~700-token response. If a future
+      // SYSTEM_PROMPT change pushes output past 1100 tokens, bump this
+      // AND add a regression assertion in scripts/pregen-crashes.mjs.
+      max_tokens: 1200,
       response_format: { type: "json_object" },
       profile,
     }),
