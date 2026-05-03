@@ -14,38 +14,32 @@
 // returned JSON through a shape validator before accepting.
 // =============================================================================
 
-// Phase 1: pick the event's date range + target index. Tiny prompt, tiny
-// response, ~500ms. The server then fetches REAL historical daily closes
-// from Yahoo for that range in phase 2, which get fed back into phase 3
-// so the final replay is grounded in real data — no hallucinated Nifty
-// levels ever again.
-const PHASE1_PROMPT = `You are Saathi's historical-event-date picker for Indian markets. Given a free-form description of any Indian market event — even COLLOQUIAL, MIS-SPELT, or HINDI-INFLECTED references — identify the real event and return ONLY JSON:
+// Phase 1: pick the event's date range + target index. PERF_AUDIT #6
+// trimmed this from ~1.7KB to ~700B once the deterministic router (#2)
+// began catching the well-known events. The verbose colloquial-to-formal
+// example block was the bulk of the trim — the router handles canonical
+// phrasings without ever calling the LLM, so examples here only steered
+// queries the router already missed (i.e. genuinely novel ones, where
+// world-knowledge inference works fine without examples).
+//
+// PRECONDITION: this PR ASSUMES PERF #2 (router) is merged. Without the
+// router, queries like 'demonetisation' or 'note band' would lose the
+// colloquial-translation guidance. If #2 reverts, restore the examples
+// block from git history (commit before this one).
+const PHASE1_PROMPT = `You are Saathi's historical-event-date picker for Indian markets. Identify the event in the user's description and return ONLY JSON:
 {
-  "startIso": "<YYYY-MM-DD — first trading day of the event>",
-  "endIso":   "<YYYY-MM-DD — last day of the recovery/stabilisation window to plot, max 140 trading days after startIso>",
-  "symbol":   "^NSEI" | "^BSESN" | "<any NSE ticker>.NS",
-  "hint":     "<one-sentence identification of which actual event this refers to, INCLUDING the colloquial-to-formal mapping if relevant>",
-  "offTopic": <true only if the query is adult content, vulgar, or has absolutely zero connection to Indian markets/business/policy>
+  "startIso": "<YYYY-MM-DD, first trading day>",
+  "endIso":   "<YYYY-MM-DD, end of recovery window, max 140 trading days from startIso>",
+  "symbol":   "^NSEI" | "^BSESN" | "<NSE ticker>.NS",
+  "hint":     "<one-sentence event identification>",
+  "offTopic": <true only for adult/vulgar content or zero-market-relevance queries>
 }
-
-Colloquial → formal examples (use these, and handle similar):
-- "the waterball / golgappa / pani puri thingy" / "that fuchka vendor story" → Tamil Nadu pani puri vendor GST notice, June 2023 (set symbol "^NSEI", startIso 2023-06-01, endIso 2023-07-31)
-- "that telecom guy" / "Jio launch" → Reliance Jio launch, Sep 2016
-- "demon" / "demonetization" / "note band" → Demonetisation, 8 Nov 2016
-- "the soap guy scam" / "Nirav Modi" → Nirav Modi / PNB fraud, 14 Feb 2018
-- "lockdown crash" / "covid" / "corona" → COVID March 2020
-- "the short seller thing" / "hindenburg" → Adani Hindenburg report, 24 Jan 2023
-- "IL&FS" / "the NBFC thing" → IL&FS collapse, Sep 2018
-- "Satyam" / "computer scam" → Satyam fraud, 7 Jan 2009
-- "yes bank" / "yes guy" / "yes" → YES Bank moratorium, 5 Mar 2020
-- "Paytm IPO flop" → Paytm listing, 18 Nov 2021 (symbol PAYTM.NS)
-- "Adani board thing" / "Adani Enterprises FPO" → Adani FPO cancellation, 1 Feb 2023 (symbol ADANIENT.NS)
 
 Rules:
 - startIso MUST be before endIso. Window 10-140 trading days.
-- If the event affected a specific stock more than the index, set symbol to that ticker (e.g. "PAYTM.NS", "ADANIENT.NS", "YESBANK.NS", "RELIANCE.NS"). Otherwise default to ^NSEI.
-- For rallies/booms/IPO-pops, still pick a range — we'll judge downstream whether the real move was down.
-- offTopic:true ONLY for adult content (porn/sex/nudity), vulgarity with no market angle, personal life, sports scores, recipes, weather. When offTopic:true, use a throwaway recent date range (we'll refuse downstream).
+- If the event hit a specific stock harder than the index, set symbol to that ticker (PAYTM.NS, ADANIENT.NS, YESBANK.NS, etc.). Otherwise ^NSEI.
+- For rallies/IPO-pops, still pick a range — we judge direction downstream.
+- offTopic:true ONLY for porn/vulgarity/sports/recipes/weather. Otherwise build a range.
 - Return ONLY the JSON. No prose, no code fences.`;
 
 // Fast client-side filter for clearly inappropriate queries. We check
@@ -63,46 +57,42 @@ function isHardBlocked(text) {
   return HARD_BLOCK_PATTERNS.some(rx => rx.test(t));
 }
 
-const SYSTEM_PROMPT = `You are a financial-history reconstructor for Indian markets. You are given REAL daily closing-price data from Yahoo Finance for the event's date range. Use the real numbers — do NOT hallucinate alternatives.
+// PERF_AUDIT #6: trimmed ~500B by condensing the description spec and
+// the "closes vs opens" anti-pattern note. The shape rules and field
+// list are load-bearing (the validator rejects malformed output) so
+// they stay verbatim. The narrative-quality guidance was example-heavy
+// and the model has internalized it across thousands of generations.
+const SYSTEM_PROMPT = `You are a financial-history reconstructor for Indian markets. You are given REAL daily closing-price data from Yahoo Finance. Use the real numbers — do NOT hallucinate.
 
-YOUR DEFAULT IS TO BUILD, NOT REFUSE.
-- Identify the event the user is describing. The provided REAL market data is for the date range you picked in phase 1.
-- Use the REAL startIndex (first close), troughIndex (lowest close), endIndex (last close), and troughDay (index of lowest close). These are facts, not estimates.
-- Write narration + description that truthfully explain what happened on each key date using the real numbers.
-- If the real data shows the index WENT UP (not a crash), return: { "error": "not_a_crash", "message": "<one sentence noting the real move was positive and suggesting a related DOWN event>" }
-- ONLY refuse with "not_a_crash" if the user's query is clearly non-market (sports, recipes).
+DEFAULT IS TO BUILD. If the real data shows the index WENT UP (not a crash), return: { "error": "not_a_crash", "message": "<one sentence>" }. Only refuse for clearly non-market queries.
 
-If you're building a scenario, return a JSON object with this EXACT shape:
+Otherwise return a JSON object with this EXACT shape:
 
 {
   "title": "<short event name, ≤ 50 chars>",
-  "startLabel": "<human-readable start date, e.g. 'Mar 11, 2020'>",
+  "startLabel": "<e.g. 'Mar 11, 2020'>",
   "endLabel": "<human-readable end date>",
-  "description": "<rich 120-220 word explanation in 2-3 paragraphs: what was happening in India at the time, what actually triggered the market move, how retail investors experienced it, what the recovery path looked like. Neutral prose, no opinion, no buy/sell advice. First paragraph sets the scene; second paragraph narrates the event; third (if needed) tracks the aftermath.>",
-  "totalDays": <integer 20..120, trading days in the window>,
-  "startIndex": <number, Nifty/Sensex level at day 0>,
-  "troughIndex": <number, lowest level reached>,
-  "troughDay": <integer, day offset of trough from day 0>,
-  "endIndex": <number, index level at end of window>,
-  "indexDrop": <negative number, the % drop from start to trough>,
-  "recoveryDays": <integer, trading days from trough to a new all-time high within the event; 0 if the index didn't recover within the plotted window>,
-  "panicDay": <integer, when the panic-seller would exit — typically 3>,
+  "description": "<120-220 word neutral 2-3 paragraph explanation: scene, event, aftermath. No opinions, no advice.>",
+  "totalDays": <integer 20..120, trading days>,
+  "startIndex": <day 0 close>,
+  "troughIndex": <lowest close>,
+  "troughDay": <integer, day offset of trough>,
+  "endIndex": <last close>,
+  "indexDrop": <negative %, drop from start to trough>,
+  "recoveryDays": <integer, trough to new ATH within window; 0 if no recovery>,
+  "panicDay": <integer, typically 3>,
   "keyMoments": [
-    { "day": <integer>, "label": "<≤ 24 char tag for slider marker>", "narration": "<1-2 sentence narration shown in the replay>" },
-    ...
+    { "day": <integer>, "label": "<≤ 24 char>", "narration": "<1-2 sentence>" }
   ]
 }
 
 Rules:
-- Return ONLY the JSON object. No prose, no code fences, no commentary.
-- All numbers are plain JSON numbers, not strings.
-- startIndex, troughIndex, endIndex, troughDay MUST come from the REAL data provided — no fabrication.
-- indexDrop = ((troughIndex - startIndex) / startIndex) * 100, rounded to 1 decimal. Will be negative for real crashes.
-- totalDays = number of trading days in the provided data (== data.length).
-- Include 4 to 7 keyMoments whose "day" values map to actual indices in the provided data array (not fake dates).
-- keyMoment narrations reference the REAL price on that day where useful.
-- IMPORTANT: every price you cite is a CLOSING price (these come from daily close-price arrays). Phrase as "stock closed at â‚¹X", "closes at â‚¹X", "the close was â‚¹X". NEVER write "opens at", "opening price", "opens to" â€” you do not have intraday open prices, and writing as if you do is factually wrong. For after-hours news events (RBI moratorium, regulatory bans, results announcements) the day-0 narration must say "closes at â‚¹X" because the news broke AFTER the market close â€” the â‚¹X figure is the last clean price before the news, not an opening price.
-- REFUSE ONLY if the real data clearly shows an UP move or the query is non-market (sports/recipes).`;
+- Return ONLY the JSON. No prose, no code fences.
+- startIndex/troughIndex/endIndex/troughDay come from REAL data. No fabrication.
+- indexDrop = ((troughIndex - startIndex) / startIndex) * 100, 1 decimal, negative.
+- totalDays == data.length.
+- 4 to 7 keyMoments whose "day" maps to actual data indices.
+- Every cited price is a CLOSING price. Phrase as "closes at ₹X" / "closed at ₹X". NEVER "opens at" / "opening price" — you do NOT have intraday opens. After-hours news (RBI moratorium, results) day-0 wording is "closes at ₹X" — the figure is the last clean close BEFORE the news.`;
 
 const MAX_DAYS = 140;
 
