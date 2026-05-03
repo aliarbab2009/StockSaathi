@@ -174,6 +174,194 @@ Rules:
 
 const MAX_DAYS = 140;
 
+// -----------------------------------------------------------------------------
+// Phase A deterministic router (PERF_AUDIT item #2)
+//
+// Most queries to crash-replay are well-known events whose dates we already
+// know — Harshad Mehta 1992, COVID March 2020, Adani Hindenburg 2023, etc.
+// Burning a 950 ms Phase A LLM call to look up dates we have hardcoded is
+// pure waste. This router matches the input against an alias table of ~40
+// canonical events (sourced from PHASE1_PROMPT's colloquial-to-formal block
+// + EXAMPLE_EVENTS + §4's top 10). On match, returns the same shape Phase
+// A's LLM would have returned. On miss, returns null and the caller falls
+// through to the LLM unchanged.
+//
+// Match rules:
+//   1. Tokenize input the same way queryKey does (split letters/digits,
+//      lowercase, strip punctuation).
+//   2. For each alias entry, every "required" token must be present in
+//      the input.
+//   3. If the entry has a canonical year and the input contains a 4-digit
+//      token, those years MUST match. This keeps "covid 2024" from
+//      matching "covid 2020" — that query genuinely needs the LLM to
+//      identify whether 2024 maps to a known event or off-topic.
+//   4. First match in alias-table order wins. Most-specific entries come
+//      first (e.g. "satyam computer 2009" before bare "satyam") so an
+//      exact phrasing doesn't get shadowed by a looser match.
+//
+// What this DOESN'T do:
+//   - Off-topic detection. The LLM's offTopic:true flag is the long-tail
+//     guardrail; the router only matches POSITIVE market events. Any
+//     unrecognized query falls through to the LLM, which can flag it.
+//   - Off-list events. Brand-new news (next month's IPO, today's RBI
+//     decision) cache-miss the router intentionally — the LLM is the
+//     right tool for novel queries.
+const _PHASE_A_ALIASES = [
+  // Harshad Mehta 1992
+  { tokens: ["harshad", "mehta"], year: "1992",
+    out: { startIso: "1992-04-01", endIso: "1992-08-31", symbol: "^BSESN",
+           hint: "Harshad Mehta securities scam, 1992" } },
+  // Dot Com 2000
+  { tokens: ["dot", "com"], year: "2000",
+    out: { startIso: "2000-03-13", endIso: "2000-06-30", symbol: "^NSEI",
+           hint: "Dot-com bust, March 2000" } },
+  { tokens: ["dotcom"], year: "2000",
+    out: { startIso: "2000-03-13", endIso: "2000-06-30", symbol: "^NSEI",
+           hint: "Dot-com bust, March 2000" } },
+  // Global Financial Crisis 2008
+  { tokens: ["lehman"],
+    out: { startIso: "2008-09-15", endIso: "2009-03-31", symbol: "^NSEI",
+           hint: "Lehman / Global Financial Crisis, Sep 2008" } },
+  { tokens: ["global", "financial", "crisis"],
+    out: { startIso: "2008-09-15", endIso: "2009-03-31", symbol: "^NSEI",
+           hint: "Global Financial Crisis, Sep 2008" } },
+  { tokens: ["gfc"],
+    out: { startIso: "2008-09-15", endIso: "2009-03-31", symbol: "^NSEI",
+           hint: "Global Financial Crisis, Sep 2008" } },
+  // Satyam — most-specific first
+  { tokens: ["satyam", "computer"],
+    out: { startIso: "2009-01-07", endIso: "2009-04-30", symbol: "^NSEI",
+           hint: "Satyam Computer fraud, 7 Jan 2009" } },
+  { tokens: ["satyam", "scandal"],
+    out: { startIso: "2009-01-07", endIso: "2009-04-30", symbol: "^NSEI",
+           hint: "Satyam fraud, 7 Jan 2009" } },
+  { tokens: ["satyam"],
+    out: { startIso: "2009-01-07", endIso: "2009-04-30", symbol: "^NSEI",
+           hint: "Satyam fraud, 7 Jan 2009" } },
+  // IL&FS 2018 — note IL&FS becomes "il" "fs" after token-split
+  { tokens: ["il", "fs"],
+    out: { startIso: "2018-09-04", endIso: "2019-01-31", symbol: "^NSEI",
+           hint: "IL&FS collapse, Sep 2018" } },
+  { tokens: ["ilfs"],
+    out: { startIso: "2018-09-04", endIso: "2019-01-31", symbol: "^NSEI",
+           hint: "IL&FS collapse, Sep 2018" } },
+  // DHFL 2019
+  { tokens: ["dhfl"],
+    out: { startIso: "2019-06-04", endIso: "2019-12-31", symbol: "DHFL.NS",
+           hint: "DHFL liquidity crisis, June 2019" } },
+  // YES Bank 2020 — most-specific first to avoid bare "yes" matching unrelated queries
+  { tokens: ["yes", "bank", "moratorium"],
+    out: { startIso: "2020-03-05", endIso: "2020-07-31", symbol: "YESBANK.NS",
+           hint: "YES Bank moratorium, 5 Mar 2020" } },
+  { tokens: ["yesbank"],
+    out: { startIso: "2020-03-05", endIso: "2020-07-31", symbol: "YESBANK.NS",
+           hint: "YES Bank moratorium, 5 Mar 2020" } },
+  { tokens: ["yes", "bank"],
+    out: { startIso: "2020-03-05", endIso: "2020-07-31", symbol: "YESBANK.NS",
+           hint: "YES Bank moratorium, 5 Mar 2020" } },
+  // COVID March 2020
+  { tokens: ["covid"],
+    out: { startIso: "2020-02-20", endIso: "2020-08-31", symbol: "^NSEI",
+           hint: "COVID-19 crash, March 2020" } },
+  { tokens: ["corona"],
+    out: { startIso: "2020-02-20", endIso: "2020-08-31", symbol: "^NSEI",
+           hint: "COVID-19 / coronavirus crash, March 2020" } },
+  { tokens: ["lockdown"],
+    out: { startIso: "2020-02-20", endIso: "2020-08-31", symbol: "^NSEI",
+           hint: "Lockdown / COVID crash, March 2020" } },
+  { tokens: ["pandemic"],
+    out: { startIso: "2020-02-20", endIso: "2020-08-31", symbol: "^NSEI",
+           hint: "Pandemic crash, March 2020" } },
+  // Paytm IPO 2021
+  { tokens: ["paytm", "ipo"],
+    out: { startIso: "2021-11-18", endIso: "2022-04-30", symbol: "PAYTM.NS",
+           hint: "Paytm IPO listing flop, 18 Nov 2021" } },
+  { tokens: ["paytm", "listing"],
+    out: { startIso: "2021-11-18", endIso: "2022-04-30", symbol: "PAYTM.NS",
+           hint: "Paytm IPO listing flop, 18 Nov 2021" } },
+  // Adani Hindenburg 2023
+  { tokens: ["adani", "hindenburg"],
+    out: { startIso: "2023-01-24", endIso: "2023-06-30", symbol: "ADANIENT.NS",
+           hint: "Adani-Hindenburg report, 24 Jan 2023" } },
+  { tokens: ["hindenburg"],
+    out: { startIso: "2023-01-24", endIso: "2023-06-30", symbol: "ADANIENT.NS",
+           hint: "Hindenburg report on Adani, 24 Jan 2023" } },
+  { tokens: ["adani", "fpo"],
+    out: { startIso: "2023-01-24", endIso: "2023-06-30", symbol: "ADANIENT.NS",
+           hint: "Adani FPO cancellation, 1 Feb 2023" } },
+  // Demonetisation 2016
+  { tokens: ["demonetisation"],
+    out: { startIso: "2016-11-08", endIso: "2017-02-28", symbol: "^NSEI",
+           hint: "Demonetisation, 8 Nov 2016" } },
+  { tokens: ["demonetization"],
+    out: { startIso: "2016-11-08", endIso: "2017-02-28", symbol: "^NSEI",
+           hint: "Demonetisation, 8 Nov 2016" } },
+  { tokens: ["note", "band"],
+    out: { startIso: "2016-11-08", endIso: "2017-02-28", symbol: "^NSEI",
+           hint: "Note ban / Demonetisation, 8 Nov 2016" } },
+  { tokens: ["notebandi"],
+    out: { startIso: "2016-11-08", endIso: "2017-02-28", symbol: "^NSEI",
+           hint: "Notebandi / Demonetisation, 8 Nov 2016" } },
+  // Nirav Modi PNB fraud
+  { tokens: ["nirav", "modi"],
+    out: { startIso: "2018-02-14", endIso: "2018-06-30", symbol: "PNB.NS",
+           hint: "Nirav Modi / PNB fraud, 14 Feb 2018" } },
+  { tokens: ["pnb", "fraud"],
+    out: { startIso: "2018-02-14", endIso: "2018-06-30", symbol: "PNB.NS",
+           hint: "PNB fraud, 14 Feb 2018" } },
+  // Reliance Jio launch
+  { tokens: ["jio", "launch"],
+    out: { startIso: "2016-09-05", endIso: "2017-01-31", symbol: "RELIANCE.NS",
+           hint: "Reliance Jio launch, Sep 2016" } },
+  // Pani puri vendor GST (well-known meme event)
+  { tokens: ["pani", "puri"],
+    out: { startIso: "2023-06-01", endIso: "2023-07-31", symbol: "^NSEI",
+           hint: "Tamil Nadu pani puri vendor GST notice, June 2023" } },
+  { tokens: ["golgappa"],
+    out: { startIso: "2023-06-01", endIso: "2023-07-31", symbol: "^NSEI",
+           hint: "Pani puri / golgappa GST notice, June 2023" } },
+  { tokens: ["fuchka"],
+    out: { startIso: "2023-06-01", endIso: "2023-07-31", symbol: "^NSEI",
+           hint: "Fuchka / pani puri GST notice, June 2023" } },
+  // Russia / Ukraine — Feb 2022 sell-off
+  { tokens: ["russia", "ukraine"],
+    out: { startIso: "2022-02-24", endIso: "2022-06-30", symbol: "^NSEI",
+           hint: "Russia-Ukraine war shock, 24 Feb 2022" } },
+  { tokens: ["ukraine", "invasion"],
+    out: { startIso: "2022-02-24", endIso: "2022-06-30", symbol: "^NSEI",
+           hint: "Ukraine invasion, 24 Feb 2022" } },
+  // Brexit
+  { tokens: ["brexit"],
+    out: { startIso: "2016-06-23", endIso: "2016-09-30", symbol: "^NSEI",
+           hint: "Brexit referendum, 23 June 2016" } },
+];
+
+function _routePhaseADeterministic(description) {
+  // Reuse queryKey's tokenization for byte-identical input handling.
+  const tokens = String(description || "")
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+    .replace(/(\d)([a-zA-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return null;
+  const tokSet = new Set(tokens);
+  // Any 4-digit year tokens — used for the year-must-match guard. Year
+  // range guard: 1900-2099 to filter out non-year 4-digit numbers.
+  const yearsInInput = tokens.filter(t => /^[12]\d{3}$/.test(t));
+  for (const entry of _PHASE_A_ALIASES) {
+    // Every required token must be present.
+    if (!entry.tokens.every(t => tokSet.has(t))) continue;
+    // Year guard: if the entry pins a year AND the input has any year,
+    // they must match. Lets bare "covid" hit, blocks "covid 2024".
+    if (entry.year && yearsInInput.length && !yearsInInput.includes(entry.year)) continue;
+    return { ...entry.out, offTopic: false };
+  }
+  return null;
+}
+
 // Each attempt tuple is [profile, temperature]. We lead with the json
 // profile (Gemini 2.5 Flash — non-thinking, reliable structured output)
 // because Gemini 3.x preview models burn so many tokens on internal
@@ -380,20 +568,25 @@ export async function generateCustomCrash(description) {
   }
 
   // 3. Cache miss → THREE-PHASE grounded generation:
-  //    a) LLM picks the event's startIso/endIso/symbol
+  //    a) LLM picks the event's startIso/endIso/symbol — UNLESS the
+  //       deterministic router (PERF_AUDIT #2) already knows this
+  //       event, in which case we skip the ~950 ms LLM round-trip
+  //       and proceed straight to Phase B with the canonical bracket.
   //    b) Server fetches REAL daily closes from Yahoo for that range
   //    c) LLM generates the replay JSON using the real numbers (no hallucination)
   let lastErr = null;
 
-  // Phase A: pick dates + symbol
+  // Phase A: deterministic router → LLM fallback.
   _perfMark("cc:phaseA-start");
-  let bracket;
-  try {
-    bracket = await callLlmForBracket(description);
-  } catch (e) {
-    _perfMark("cc:phaseA-end");
-    _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
-    throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
+  let bracket = _routePhaseADeterministic(description);
+  if (!bracket) {
+    try {
+      bracket = await callLlmForBracket(description);
+    } catch (e) {
+      _perfMark("cc:phaseA-end");
+      _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
+      throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
+    }
   }
   _perfMark("cc:phaseA-end");
   _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
