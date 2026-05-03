@@ -52,8 +52,19 @@ function cors(origin, noStore = true) {
   if (a) { h.set("Access-Control-Allow-Origin", a); h.set("Vary", "Origin"); }
   return h;
 }
-function j(status, body, origin, noStore = true) {
-  return new Response(JSON.stringify(body), { status, headers: cors(origin, noStore) });
+function j(status, body, origin, noStore = true, extraHeaders = null) {
+  const h = cors(origin, noStore);
+  if (extraHeaders) {
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      if (v != null) h.set(k, String(v));
+    }
+    // Make Server-Timing readable cross-origin so devtools shows it on
+    // .vercel.app preview deployments and future split-origin setups.
+    if ("Server-Timing" in extraHeaders) {
+      h.set("Access-Control-Expose-Headers", "Server-Timing");
+    }
+  }
+  return new Response(JSON.stringify(body), { status, headers: h });
 }
 
 // -----------------------------------------------------------------------------
@@ -256,9 +267,15 @@ async function opCacheGet(req, origin, url) {
   const bucket = normalizeKey(url.searchParams.get("bucket"));
   const key = normalizeKey(url.searchParams.get("key"));
   if (!bucket || !key) return j(400, { error: "bad_params" }, origin);
+  // PERF — Server-Timing for cross-user cache lookup. Lets the client
+  // decide whether the bottleneck is the Supabase RTT vs the LLM. See
+  // PERF_AUDIT §1.
+  const t0 = performance.now();
   const payload = await cacheGet(bucket, key);
-  if (!payload) return j(200, { payload: null, hit: false }, origin);
-  return j(200, { payload, hit: true }, origin);
+  const dur = Math.round(performance.now() - t0);
+  const st = { "Server-Timing": `cache;dur=${dur};desc="${payload ? "hit" : "miss"}"` };
+  if (!payload) return j(200, { payload: null, hit: false }, origin, true, st);
+  return j(200, { payload, hit: true }, origin, true, st);
 }
 
 async function opCachePut(req, origin) {
@@ -766,22 +783,38 @@ async function opHistory(req, origin, url) {
   if (toDate < fromDate) return j(400, { error: "bad_range" }, origin);
 
   const cacheKey = `${symbol}|${fromStr}|${toStr}`;
+  // PERF — split cache vs Yahoo timing so client can see whether a slow
+  // phaseB leg was network-bound on Yahoo or our cache lookup. See
+  // PERF_AUDIT §1.
+  const tCache0 = performance.now();
   const hit = await cacheGet("history", cacheKey);
-  if (hit?.points?.length) return j(200, { ...hit, source: "cache" }, origin, false);
+  const cacheMs = Math.round(performance.now() - tCache0);
+  if (hit?.points?.length) {
+    return j(200, { ...hit, source: "cache" }, origin, false, {
+      "Server-Timing": `cache;dur=${cacheMs};desc="hit"`,
+    });
+  }
 
   const p1 = Math.floor(fromDate.getTime() / 1000);
   const p2 = Math.floor(toDate.getTime() / 1000) + 86400;   // include toDate
   const yurl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&period1=${p1}&period2=${p2}`;
   try {
+    const tYahoo0 = performance.now();
     const res = await fetch(yurl, {
       headers: { "User-Agent": "Mozilla/5.0 StockSaathi-Edge/1.0" },
     });
-    if (!res.ok) return j(502, { error: "yahoo_http", status: res.status }, origin);
+    const yahooTtft = Math.round(performance.now() - tYahoo0);
+    if (!res.ok) return j(502, { error: "yahoo_http", status: res.status }, origin, true, {
+      "Server-Timing": `cache;dur=${cacheMs};desc="miss", yahoo;dur=${yahooTtft};desc="error"`,
+    });
     const data = await res.json();
+    const yahooMs = Math.round(performance.now() - tYahoo0);
     const result = data?.chart?.result?.[0];
     const ts = result?.timestamp;
     const q = result?.indicators?.quote?.[0];
-    if (!Array.isArray(ts) || !q) return j(502, { error: "no_data" }, origin);
+    if (!Array.isArray(ts) || !q) return j(502, { error: "no_data" }, origin, true, {
+      "Server-Timing": `cache;dur=${cacheMs};desc="miss", yahoo;dur=${yahooMs};desc="no-data"`,
+    });
     const points = [];
     for (let i = 0; i < ts.length; i++) {
       const c = q.close?.[i];
@@ -802,7 +835,9 @@ async function opHistory(req, origin, url) {
       points,
     };
     cachePut("history", cacheKey, null, out);
-    return j(200, { ...out, source: "fresh" }, origin, false);
+    return j(200, { ...out, source: "fresh" }, origin, false, {
+      "Server-Timing": `cache;dur=${cacheMs};desc="miss", yahoo;dur=${yahooMs};desc="fresh"`,
+    });
   } catch (e) {
     return j(502, { error: "yahoo_fetch_failed", detail: String(e.message).slice(0, 120) }, origin);
   }

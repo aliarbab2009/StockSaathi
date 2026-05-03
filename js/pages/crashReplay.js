@@ -395,6 +395,25 @@ function renderReplay(main, scenario) {
 
   renderAt(0);
 
+  // PERF — first-paint mark closes the cold-start clock that customCrash.js
+  // started with cc:start. Only fired for genuinely-fresh generations
+  // (cc:start exists in the perf buffer); cached scenarios skip the report.
+  // The report is gated on ?perf or localStorage["ss.perf"]; see PERF_AUDIT §1.
+  try {
+    const startMark = performance.getEntriesByName("cc:start", "mark").pop();
+    if (startMark) {
+      performance.mark("cc:first-paint");
+      try { performance.measure("cc:total", "cc:start", "cc:first-paint"); } catch {}
+      // Defer the report so it lands AFTER the browser commits the paint —
+      // requestAnimationFrame fires before paint, so chain a microtask.
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          try { window.__ccPerfReport && window.__ccPerfReport(); } catch {}
+        }, 0);
+      });
+    }
+  } catch {}
+
   scrubber.addEventListener("input", (e) => {
     const idx = parseInt(e.target.value, 10);
     renderAt(idx);

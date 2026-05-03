@@ -218,16 +218,22 @@ async function callUpstream(desc, payload) {
   const modelForApi = isVertex && !desc.model.includes("/")
     ? `google/${desc.model}`
     : desc.model;
+  // PERF — capture TTFT (time-to-first-byte). The fetch promise resolves
+  // when response HEADERS arrive, not when the body finishes. So
+  // tHeaders - t0 ≈ TTFT for the upstream LLM. Surfaced to the client as
+  // a Server-Timing header in the success branch below. See PERF_AUDIT §1.
+  const t0 = performance.now();
   const res = await fetch(desc.url, {
     method: "POST",
     headers,
     body: JSON.stringify({ ...payload, model: modelForApi }),
   });
+  const ttftMs = Math.round(performance.now() - t0);
   // Return the Response object unread so the handler can either pipe the
   // body through (streaming) or read it as text (non-streaming). For
   // fallover decisions we only need the status + a peek at error bodies
   // which we read lazily below.
-  return { status: res.status, res, upstream: desc.label };
+  return { status: res.status, res, upstream: desc.label, t0, ttftMs };
 }
 
 export default async function handler(req) {
@@ -312,14 +318,38 @@ export default async function handler(req) {
           ...Object.fromEntries(corsHeaders(origin)),
           "X-Chat-Upstream": desc.label,
         });
+        // Same-origin clients can read Server-Timing without exposure
+        // headers, but Vercel preview deployments and any future split-
+        // origin setup need this — make it explicit so devtools always
+        // sees the LLM timings.
+        outHeaders.set("Access-Control-Expose-Headers", "Server-Timing, X-Chat-Upstream");
         if (wantsStream) {
+          // Streaming path — TTFT is the only number we know yet; total
+          // generation time isn't available until the stream ends, which
+          // is past our return point. Emit ttft only.
           outHeaders.set("Content-Type", "text/event-stream");
           outHeaders.set("Cache-Control", "no-store");
           outHeaders.set("X-Accel-Buffering", "no");  // disable proxy buffering
+          outHeaders.set("Server-Timing", `ttft;dur=${r.ttftMs};desc="${desc.label}"`);
           return new Response(r.res.body, { status: r.status, headers: outHeaders });
         }
         outHeaders.set("Content-Type", "application/json");
         const text = await r.res.text();
+        const llmMs = Math.round(performance.now() - r.t0);
+        // Best-effort: extract completion_tokens from upstream usage so the
+        // client can correlate generation time with output size.
+        let tokOut = null;
+        try {
+          const parsed = JSON.parse(text);
+          const u = parsed?.usage?.completion_tokens;
+          if (Number.isFinite(u)) tokOut = u;
+        } catch {}
+        const stParts = [
+          `ttft;dur=${r.ttftMs};desc="${desc.label}"`,
+          `llm;dur=${llmMs};desc="${desc.label}"`,
+        ];
+        if (tokOut != null) stParts.push(`tokens-out;dur=0;desc="${tokOut}"`);
+        outHeaders.set("Server-Timing", stParts.join(", "));
         return new Response(text, { status: r.status, headers: outHeaders });
       }
       // Non-2xx: read the error body (text) so we can return it or log it.

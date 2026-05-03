@@ -14,6 +14,74 @@
 // returned JSON through a shape validator before accepting.
 // =============================================================================
 
+// -----------------------------------------------------------------------------
+// PROFILING — landed first per PERF_AUDIT §1. Performance API marks cost ~µs
+// each so they are always on. The console.table report is gated on
+//   ?perf  query param  OR  localStorage["ss.perf"] = "1"
+// so normal users never see log spam. When the gate is open you get a
+// single grouped table per generation:
+//   SEGMENT                 | ms
+//   cc:local-cache          |   2
+//   cc:cache-get            | 180
+//   cc:phaseA               | 950
+//   ...
+// Server-Timing headers from /api/chat and /api/ai are parsed and folded
+// into the same buffer so the table includes both client- and server-side
+// numbers. Backed by the §1 timing-hook list — keep both in sync.
+// -----------------------------------------------------------------------------
+const _perfBuf = [];
+function _perfMark(name) {
+  try { performance.mark(name); } catch {}
+}
+function _perfMeasure(name, startMark, endMark) {
+  try {
+    performance.measure(name, startMark, endMark);
+    const m = performance.getEntriesByName(name, "measure").pop();
+    if (m) _perfBuf.push({ seg: name, ms: Math.round(m.duration) });
+  } catch {}
+}
+function _perfServerTiming(res, label) {
+  try {
+    const st = res?.headers?.get?.("server-timing");
+    if (!st) return;
+    // Parse "ttft;dur=420, llm;dur=3200;desc=\"gemini_json\""
+    for (const part of st.split(",").map(s => s.trim())) {
+      const toks = part.split(";").map(t => t.trim());
+      const name = toks[0];
+      let dur = null, desc = null;
+      for (const t of toks.slice(1)) {
+        if (t.startsWith("dur=")) dur = Number(t.slice(4));
+        else if (t.startsWith("desc=")) desc = t.slice(5).replace(/^"|"$/g, "");
+      }
+      if (name && Number.isFinite(dur)) {
+        _perfBuf.push({ seg: `${label}:${name}`, ms: Math.round(dur), upstream: desc || "" });
+      }
+    }
+  } catch {}
+}
+function _perfReport() {
+  let enabled = false;
+  try {
+    enabled = /[?&]perf\b/.test(location.search) || localStorage.getItem("ss.perf") === "1";
+  } catch {}
+  if (!enabled) { _perfBuf.length = 0; return; }
+  try {
+    console.groupCollapsed("[crash-replay perf]");
+    console.table(_perfBuf);
+    const total = performance.getEntriesByName("cc:total", "measure").pop();
+    if (total) console.log(`TOTAL ${Math.round(total.duration)} ms (cc:start → cc:first-paint)`);
+    console.groupEnd();
+  } catch {}
+  _perfBuf.length = 0;
+}
+// Expose so crashReplay.js can call it after first paint, and so devtools
+// users can poke at the buffer manually.
+if (typeof window !== "undefined") {
+  window.__ccPerfReport = _perfReport;
+  window.__ccPerfBuf = _perfBuf;
+}
+// =============================================================================
+
 // Phase 1: pick the event's date range + target index. Tiny prompt, tiny
 // response, ~500ms. The server then fetches REAL historical daily closes
 // from Yahoo for that range in phase 2, which get fed back into phase 3
@@ -204,6 +272,7 @@ async function queryHash(desc) {
 async function cacheReplayGet(hash) {
   try {
     const res = await fetch(`/api/ai?op=cache-get&bucket=crash_replay&key=${encodeURIComponent(hash)}`);
+    _perfServerTiming(res, "cache");
     if (!res.ok) return null;
     const data = await res.json();
     return data && data.hit ? data.payload : null;
@@ -226,6 +295,11 @@ function cacheReplayPut(hash, description, payload) {
 }
 
 export async function generateCustomCrash(description) {
+  // PERF — start of cold-start clock. cc:first-paint is fired by
+  // crashReplay.js after the chart renders; cc:total measures the wall
+  // clock between them. See PERF_AUDIT §1.
+  _perfMark("cc:start");
+
   // 0. Hard content filter — reject adult / vulgar / slur queries BEFORE
   //    any LLM call. These would either burn Gemini credits on junk or
   //    surface an inappropriate-looking replay. Rejection is friendly —
@@ -242,7 +316,10 @@ export async function generateCustomCrash(description) {
   const hash = await queryHash(description);
 
   // 1. Local dedup (same-browser instant reuse, survives cache-miss too).
+  _perfMark("cc:local-start");
   const cachedId = existingScenarioForQuery(description);
+  _perfMark("cc:local-end");
+  _perfMeasure("cc:local-cache", "cc:local-start", "cc:local-end");
   if (cachedId) {
     try {
       const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
@@ -254,7 +331,10 @@ export async function generateCustomCrash(description) {
   //    pulls for free. We DO NOT cache refusals — a refusal is often a
   //    model-mood mistake (overzealous not_a_crash), and re-querying should
   //    be free to produce a real replay. Only successful scenarios are cached.
+  _perfMark("cc:cache-start");
   const cached = await cacheReplayGet(hash);
+  _perfMark("cc:cache-end");
+  _perfMeasure("cc:cache-get", "cc:cache-start", "cc:cache-end");
   if (cached && cached.id && !cached.error) {
     // Hydrate localStorage so subsequent loads hit the local path first.
     try {
@@ -273,12 +353,17 @@ export async function generateCustomCrash(description) {
   let lastErr = null;
 
   // Phase A: pick dates + symbol
+  _perfMark("cc:phaseA-start");
   let bracket;
   try {
     bracket = await callLlmForBracket(description);
   } catch (e) {
+    _perfMark("cc:phaseA-end");
+    _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
     throw new Error("Couldn't figure out the event's dates. Try a more specific phrasing, like 'Adani Hindenburg Jan 2023' or 'COVID March 2020'.");
   }
+  _perfMark("cc:phaseA-end");
+  _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
   // LLM's off-topic flag — catches adult/vulgar/zero-market queries that the
   // regex blocklist missed. Reject cleanly.
   if (bracket?.offTopic === true) {
@@ -297,11 +382,14 @@ export async function generateCustomCrash(description) {
   // and don't block rendering if they fail.
   const primary = bracket.symbol || "^NSEI";
   const companions = pickCompanionSymbols(primary, description);
+  _perfMark("cc:phaseB-start");
   const fetches = [
     fetchHistory(primary, bracket.startIso, bracket.endIso).catch(() => null),
     ...companions.map(sym => fetchHistory(sym, bracket.startIso, bracket.endIso).catch(() => null)),
   ];
   const results = await Promise.all(fetches);
+  _perfMark("cc:phaseB-end");
+  _perfMeasure("cc:phaseB", "cc:phaseB-start", "cc:phaseB-end");
   let history = results[0];
   const companionHistory = results.slice(1).filter(h => h && h.points && h.points.length >= 5);
   // Fallback: if the LLM picked a specific ticker and Yahoo returned too little
@@ -339,7 +427,10 @@ export async function generateCustomCrash(description) {
   // Phase C: generate narrative with real data in context
   for (const { profile, temperature } of ATTEMPTS) {
     try {
+      _perfMark("cc:phaseC-start");
       const meta = await callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile);
+      _perfMark("cc:phaseC-end");
+      _perfMeasure("cc:phaseC", "cc:phaseC-start", "cc:phaseC-end");
       if (meta && meta.error === "not_a_crash") {
         const msg = typeof meta.message === "string" && meta.message.trim()
           ? meta.message.trim()
@@ -350,6 +441,7 @@ export async function generateCustomCrash(description) {
       }
       // Overwrite any hallucinated numbers with the REAL ones. The LLM's
       // numbers are a sanity cross-check; the real-data numbers are truth.
+      _perfMark("cc:parse-start");
       if (meta && typeof meta === "object") {
         meta.startIndex = Math.round(startIdx * 100) / 100;
         meta.troughIndex = Math.round(troughIdx * 100) / 100;
@@ -362,12 +454,17 @@ export async function generateCustomCrash(description) {
       }
       reshape(meta);
       const valid = validate(meta);
+      _perfMark("cc:parse-end");
+      _perfMeasure("cc:parse-validate", "cc:parse-start", "cc:parse-end");
       if (!valid.ok) { lastErr = valid.error; continue; }
       // Attach real daily closes so buildScenario can use them for the
       // day-by-day curve instead of interpolating.
       meta._realCloses = closes;
       meta._startIso = bracket.startIso;
+      _perfMark("cc:build-start");
       const scenario = buildScenario(meta, hash);
+      _perfMark("cc:build-end");
+      _perfMeasure("cc:buildScenario", "cc:build-start", "cc:build-end");
       rememberQuery(queryKey(description), scenario.id);
       cacheReplayPut(hash, description, scenario);
       return scenario;
@@ -418,6 +515,7 @@ async function callLlmForBracket(description) {
       profile: "json",
     }),
   });
+  _perfServerTiming(res, "phaseA");
   if (!res.ok) throw new Error(`phase1_http_${res.status}`);
   const body = await res.json();
   const text = body?.choices?.[0]?.message?.content;
@@ -457,6 +555,7 @@ async function callLlmForBracket(description) {
 async function fetchHistory(symbol, fromIso, toIso) {
   const qs = `symbol=${encodeURIComponent(symbol)}&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
   const res = await fetch(`/api/ai?op=history&${qs}`);
+  _perfServerTiming(res, "phaseB");
   if (!res.ok) throw new Error(`history_http_${res.status}`);
   return await res.json();
 }
@@ -586,6 +685,7 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
       profile,
     }),
   });
+  _perfServerTiming(res, "phaseC");
   if (!res.ok) {
     // Translate HTTP failures into user-facing, jargon-free messages.
     // The UI never mentions API, keys, tokens, settings, or providers —
