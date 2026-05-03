@@ -2942,6 +2942,24 @@ async function opClearCrashCache(req, origin) {
   try { listJson = JSON.parse(listText); } catch {}
   const total = Array.isArray(listJson) ? listJson.length : 0;
   if (total === 0) {
+    // Diagnostic: try a direct write to crash_replay and capture the
+    // Supabase response so we can see why cache-put silently fails.
+    const writeRes = await fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache`, {
+      method: "POST",
+      headers: {
+        "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify({
+        bucket: "crash_replay",
+        cache_key: "diag_test_key",
+        display_key: "diagnostic write",
+        payload: { hello: "world" },
+      }),
+    });
+    const writeText = await writeRes.text();
     return j(200, {
       ok: true,
       deleted: 0,
@@ -2950,6 +2968,8 @@ async function opClearCrashCache(req, origin) {
         listBody: listText.slice(0, 500),
         allBucketsStatus: allRes.status,
         allBucketsBody: allText.slice(0, 800),
+        writeStatus: writeRes.status,
+        writeBody: writeText.slice(0, 800),
       },
     }, origin);
   }
