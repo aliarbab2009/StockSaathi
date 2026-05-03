@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { STOCKS, MUTUAL_FUNDS, SECTORS, INSTRUMENTS, getAllInstruments, getAllSectors, getInstrument, ensureUniverseLoaded, ensureMfUniverseLoaded, getMfCategoryBuckets, getCanonicalCategory, getCanonicalCategoryCounts } from "../data/universe.js";
-import { getTodayChange, getCloses, marketStatus } from "../data/prices.js";
+import { getTodayChange, getCloses, marketStatus, get52wRange } from "../data/prices.js";
 import { getQuoteBatch, getDataSource, subscribeToQuotes, getCachedQuotes, getFreshCachedQuotes, getIntradaySparkline } from "../data/marketData.js";
 import { sparkline } from "../components/charts.js";
 import { formatRupees, formatPct, deltaClass } from "../money.js";
@@ -969,7 +969,7 @@ export function renderStocks(main) {
 
       <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-        : `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubRow(inst, viewMode)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
+        : `${viewMode === "tiles" ? _tileHeaderHtml() : ""}<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubRow(inst, viewMode)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
     `;
 
     const searchEl = main.querySelector("#stocks-search");
@@ -1134,15 +1134,16 @@ export function renderStocks(main) {
         </div>`
       : "";
 
+    const headerHtml = viewMode === "tiles" ? _tileHeaderHtml() : "";
     if (list.length <= CHUNK_THRESHOLD) {
       // Synchronous path — small lists render in one shot.
-      host.innerHTML = `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubRow(inst, viewMode)).join("")}</div>${pagerHtml}`;
+      host.innerHTML = `${headerHtml}<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubRow(inst, viewMode)).join("")}</div>${pagerHtml}`;
       attachGridDelegation(host);
       attachCardObserver(host);
     } else {
       // Chunked path — render the first batch immediately so users see
       // SOMETHING within ~20 ms of clicking, then progressively fill.
-      host.innerHTML = `<div class="stocks-grid stocks-grid--${viewMode}"></div><div id="stocks-loading-indicator" class="dim text-xs center" style="margin: var(--sp-4) 0; padding: var(--sp-3);">Loading ${list.length.toLocaleString("en-IN")} stubs…</div>`;
+      host.innerHTML = `${headerHtml}<div class="stocks-grid stocks-grid--${viewMode}"></div><div id="stocks-loading-indicator" class="dim text-xs center" style="margin: var(--sp-4) 0; padding: var(--sp-3);">Loading ${list.length.toLocaleString("en-IN")} stubs…</div>`;
       const grid = host.querySelector(".stocks-grid");
       // Wire the click delegation + create the IO once UP FRONT (with no
       // cards yet — observe-list starts empty). Then we incrementally
@@ -2202,6 +2203,62 @@ function renderStubRow(inst, mode) {
   return mode === "tiles" ? renderStubTile(inst) : renderStubCard(inst);
 }
 
+// Header strip for the tile-view grid. Renders ABOVE the grid so users
+// can scan the column meaning. Hidden + omitted in card mode. CSS hides
+// volume + 52W headers below their respective viewport breakpoints in
+// lockstep with the row cells (same media queries).
+function _tileHeaderHtml() {
+  return `
+    <div class="stocks-grid--tiles-header" role="row">
+      <div>Company</div>
+      <div class="col-spark"></div>
+      <div class="col-num">Market price</div>
+      <div class="col-num">1D change</div>
+      <div class="col-num col-vol">1D volume</div>
+      <div class="col-center col-52w">52W performance</div>
+    </div>
+  `;
+}
+
+// Compact volume formatter — "23.4M" / "1.2L" / "847" / "—" for nullish.
+// Used in tile view's volume column.
+function _compactVol(n) {
+  if (n == null || !Number.isFinite(n) || n <= 0) return "—";
+  if (n >= 1e7) return (n / 1e7).toFixed(2).replace(/\.?0+$/, "") + "Cr";
+  if (n >= 1e5) return (n / 1e5).toFixed(2).replace(/\.?0+$/, "") + "L";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.?0+$/, "") + "K";
+  return String(Math.round(n));
+}
+
+// Compact rupee for 52W bar end labels — "₹1.2K" / "₹3.4L" / "₹128".
+function _compactRupees(rupees) {
+  if (rupees == null || !Number.isFinite(rupees)) return "—";
+  if (rupees >= 1e5) return "₹" + (rupees / 1e5).toFixed(1).replace(/\.0$/, "") + "L";
+  if (rupees >= 1e3) return "₹" + (rupees / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  return "₹" + Math.round(rupees);
+}
+
+// 52W performance bar — "L ──●── H" with current price as a marker.
+// Returns "" when range or price are unavailable. Pass currentPaise
+// from the price var (paise); range is rupees from get52wRange.
+function _render52wBar(currentPaise) {
+  let r = null;
+  try { r = get52wRange(arguments[1] || "") || null; } catch {}
+  if (!r || !Number.isFinite(r.hi) || !Number.isFinite(r.lo) || r.hi <= r.lo || currentPaise == null) {
+    return `<div class="tile-52w tile-52w-empty"><span class="dim">—</span></div>`;
+  }
+  const cur = currentPaise / 100;
+  const clamped = Math.max(r.lo, Math.min(r.hi, cur));
+  const pct = ((clamped - r.lo) / (r.hi - r.lo)) * 100;
+  return `
+    <div class="tile-52w" title="52W range ₹${r.lo.toFixed(2)} – ₹${r.hi.toFixed(2)} · now ₹${cur.toFixed(2)}">
+      <span class="tile-52w-end">L</span>
+      <div class="tile-52w-track"><div class="tile-52w-marker" style="left: ${pct.toFixed(1)}%"></div></div>
+      <span class="tile-52w-end">H</span>
+    </div>
+  `;
+}
+
 function renderStubTile(inst) {
   return `<div class="stock-card stock-card-stub stock-tile" data-sym="${inst.symbol}" data-stub="1" role="button" tabindex="0" aria-label="${escapeAttr(inst.name)}">
     <div class="tile-head">
@@ -2212,10 +2269,10 @@ function renderStubTile(inst) {
       </div>
     </div>
     <div class="stock-sparkline tile-spark"><div class="skeleton" style="width: 100%; height: 100%;"></div></div>
-    <div class="tile-price-col">
-      <div class="skeleton" style="width: 70px; height: 14px;" aria-label="Loading price"></div>
-      <div class="skeleton" style="width: 50px; height: 11px; margin-top: 4px;" aria-label="Loading change"></div>
-    </div>
+    <div class="tile-price-cell"><div class="skeleton" style="width: 60px; height: 14px;"></div></div>
+    <div class="tile-change-cell"><div class="skeleton" style="width: 70px; height: 14px;"></div></div>
+    <div class="tile-vol-cell"><div class="skeleton" style="width: 50px; height: 11px;"></div></div>
+    <div class="tile-52w-cell"><div class="skeleton" style="width: 90px; height: 14px;"></div></div>
   </div>`;
 }
 
@@ -2227,14 +2284,17 @@ function renderStockBodyForView(inst, state, wlSet, opts, mode) {
 
 function renderStockTileBody(inst, state, wlSet, opts = null) {
   // Mirror renderStockCardBody's data fork — same fields, just laid out
-  // for a single horizontal row instead of a card.
+  // for a Groww-style multi-column row: name | spark | price | change |
+  // volume | 52W bar.
   let closes, hasLive, price, change, isWatched, liveBadge;
+  let quote = null;
   if (opts) {
     ({ closes, hasLive, price, change, isWatched, liveBadge } = opts);
+    quote = (typeof window !== "undefined" && window.__ssQuoteCache) ? window.__ssQuoteCache[inst.symbol] : null;
   } else {
     const seededCloses = getCloses(inst.symbol, SPARKLINE_SEED_LENGTH);
     closes = getIntradaySparkline(inst.symbol, seededCloses);
-    const quote = (typeof window !== "undefined" && window.__ssQuoteCache) ? window.__ssQuoteCache[inst.symbol] : null;
+    quote = (typeof window !== "undefined" && window.__ssQuoteCache) ? window.__ssQuoteCache[inst.symbol] : null;
     hasLive = quote?.pricePaise != null;
     price = hasLive ? quote.pricePaise : null;
     change = quote?.changePct ?? getTodayChange(inst.symbol);
@@ -2257,6 +2317,36 @@ function renderStockTileBody(inst, state, wlSet, opts = null) {
     ? sparkline(closes, { width: 88, height: 28, strokeWidth: 1.5 })
     : `<div class="skeleton" style="width: 100%; height: 100%;"></div>`;
   const sparkFp = closes && closes.length > 1 ? ` data-spark-fp="${closes.length}:${closes[closes.length - 1]}"` : "";
+  // Absolute 1D change in rupees: pricePaise - prevClosePaise (if known).
+  // Falls back to deriving from changePct: change * prevClose.
+  let absChangeStr = "";
+  if (hasLive && quote && Number.isFinite(quote.prevClosePaise) && quote.prevClosePaise > 0) {
+    const deltaPaise = price - quote.prevClosePaise;
+    const deltaR = Math.abs(deltaPaise / 100);
+    absChangeStr = (deltaPaise >= 0 ? "+" : "−") + "₹" + (deltaR < 100 ? deltaR.toFixed(2) : deltaR.toFixed(1));
+  }
+  // Volume — from quote when present.
+  const volStr = quote && Number.isFinite(quote.volume) ? _compactVol(quote.volume) : "—";
+  // 52W bar — uses prices.js seeded series. Best-effort; non-blocking.
+  let bar52 = "";
+  try {
+    const r = get52wRange(inst.symbol);
+    if (r && Number.isFinite(r.hi) && Number.isFinite(r.lo) && r.hi > r.lo && price != null) {
+      const cur = price / 100;
+      const clamped = Math.max(r.lo, Math.min(r.hi, cur));
+      const pct = ((clamped - r.lo) / (r.hi - r.lo)) * 100;
+      bar52 = `<div class="tile-52w" title="52W range ${_compactRupees(r.lo)} – ${_compactRupees(r.hi)} · now ${_compactRupees(cur)}">
+        <span class="tile-52w-end">L</span>
+        <div class="tile-52w-track"><div class="tile-52w-marker" style="left: ${pct.toFixed(1)}%"></div></div>
+        <span class="tile-52w-end">H</span>
+      </div>`;
+    } else {
+      bar52 = `<div class="tile-52w tile-52w-empty"><span class="dim">—</span></div>`;
+    }
+  } catch {
+    bar52 = `<div class="tile-52w tile-52w-empty"><span class="dim">—</span></div>`;
+  }
+  const changeFpAttr = opts?.changeFp ? ` data-change-fp="${escapeAttr(opts.changeFp)}"` : "";
   return `
     <div class="tile-head">
       <div class="stock-avatar tile-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
@@ -2266,18 +2356,18 @@ function renderStockTileBody(inst, state, wlSet, opts = null) {
       </div>
     </div>
     <div class="stock-sparkline tile-spark"${sparkFp}>${sparkSvg}</div>
-    <div class="tile-price-col">
-      ${hasLive || inst.kind === KIND_MF ? `
-        <div class="stock-price tabular tile-price">${formatRupees(price)}</div>
-        <div class="stock-change ${deltaClass(change)} tile-change"${opts?.changeFp ? ` data-change-fp="${escapeAttr(opts.changeFp)}"` : ""}>${hasLive ? formatPct(change, { sign: true }) : `<span class="dim">NAV</span>`} ${liveBadge}</div>
-      ` : `
-        <div class="skeleton" style="width: 70px; height: 14px;"></div>
-        <div class="stock-change" style="display:flex; align-items:center; gap:4px; justify-content:flex-end;">
-          <span class="skeleton" style="width: 50px; height: 11px;"></span>
-          ${liveBadge}
-        </div>
-      `}
+    <div class="tile-price-cell">
+      ${hasLive || inst.kind === KIND_MF
+        ? `<div class="stock-price tabular tile-price">${formatRupees(price)}</div>`
+        : `<div class="skeleton" style="width: 60px; height: 14px;"></div>`}
     </div>
+    <div class="tile-change-cell">
+      <div class="stock-change ${deltaClass(change)} tile-change"${changeFpAttr}>
+        ${hasLive ? `<span class="tile-change-abs">${escapeHtml(absChangeStr || "")}</span><span class="tile-change-pct">${formatPct(change, { sign: true })}</span>` : `<span class="dim">—</span>`}
+      </div>
+    </div>
+    <div class="tile-vol-cell tabular dim" title="Today's traded volume">${escapeHtml(volStr)}</div>
+    <div class="tile-52w-cell">${bar52}</div>
   `;
 }
 

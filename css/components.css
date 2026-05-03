@@ -1543,15 +1543,23 @@
   overflow: hidden;
 }
 
-/* Each tile row — 3-column grid that matches the 3 direct children of
-   both stub (.tile-head + .stock-sparkline + .tile-price-col) and
-   hydrated body (same 3 children). Auto-place fills in source order.
-   No flex-order trickery needed — same children, same order, both
-   modes. min-width:0 on the head so the name truncates instead of
-   forcing horizontal scroll. */
+/* Each tile row — 6-column grid matching Groww's screener layout:
+     Company | Sparkline | Market price | 1D change | 1D volume | 52W bar
+   Both stub and hydrated body emit the SAME 6 direct children in this
+   exact order (.tile-head + .stock-sparkline + .tile-price-cell +
+   .tile-change-cell + .tile-vol-cell + .tile-52w-cell), so auto-place
+   slots them in column order without flex tricks. min-width:0 on the
+   head column lets the name truncate with ellipsis instead of forcing
+   horizontal scroll. */
 .stocks-grid--tiles .stock-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px minmax(96px, max-content);
+  grid-template-columns:
+    minmax(0, 1.5fr)   /* Company */
+    96px               /* Sparkline */
+    96px               /* Market price */
+    minmax(110px, max-content) /* 1D change */
+    72px               /* 1D volume */
+    minmax(110px, 130px); /* 52W bar */
   align-items: center;
   gap: 12px;
   padding: 10px var(--sp-3);
@@ -1568,6 +1576,36 @@
   background: var(--bg-soft);
   border-bottom-color: var(--border);
   box-shadow: none;
+}
+
+/* Header row — column titles above the grid. Sticky-style label strip
+   matching the screener's "Company | Market price | 1D price change |
+   1D volume | 52W performance" headers. */
+.stocks-grid--tiles-header {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.5fr) 96px 96px minmax(110px, max-content) 72px minmax(110px, 130px);
+  gap: 12px;
+  padding: 10px var(--sp-3);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  border-bottom: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  align-items: center;
+}
+.stocks-grid--tiles-header > .col-spark { /* spark column is unlabeled */ }
+.stocks-grid--tiles-header > .col-num { text-align: right; font-variant-numeric: tabular-nums; }
+.stocks-grid--tiles-header > .col-center { text-align: center; }
+/* When tiles-header is rendered, drop the top border-radius from the
+   .stocks-grid--tiles wrapper since the header now caps it. */
+.stocks-grid--tiles-header + .stocks-grid--tiles {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* Tile head: avatar + name/ticker stacked. Min-width 0 so flex/grid
@@ -1622,16 +1660,12 @@
   height: 100% !important;
 }
 
-/* Price + change column — right-aligned vertical stack. */
-.tile-price-col {
+/* Price cell — right-aligned, mono, bold. */
+.tile-price-cell {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
+  align-items: center;
+  justify-content: flex-end;
   text-align: right;
-  min-width: 96px;
-  flex-shrink: 0;
-  gap: 2px;
 }
 .tile-price {
   font-size: var(--text-sm);
@@ -1641,35 +1675,121 @@
   line-height: 1.2;
   letter-spacing: -0.01em;
 }
+
+/* 1D change cell — shows absolute (₹X.XX) + percentage on the same line,
+   coloured by direction. Mono. Right-aligned. */
+.tile-change-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
 .tile-change {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   font-family: var(--font-mono);
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 4px;
   white-space: nowrap;
+  text-align: right;
 }
-/* Hide the LIVE/CLOSED/SYNCING pill at narrow desktop — color of
-   change-text already conveys live state. */
-@media (max-width: 1100px) {
-  .tile-change > .pill { display: none; }
+.tile-change-abs {
+  font-size: 11px;
+  font-weight: 700;
+}
+.tile-change-pct {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.85;
 }
 
-/* Tablet ≤960px */
-@media (max-width: 960px) {
+/* Volume cell — compact "23.4M" / "1.2L" / "847", dim text. */
+.tile-vol-cell {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+/* 52W performance bar cell — gradient track with the current price as
+   a marker. Matches Groww's "L ──●── H" indicator. */
+.tile-52w-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tile-52w {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.tile-52w-end {
+  font-size: 9px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.tile-52w-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 4px;
+  background: linear-gradient(to right,
+    var(--negative-soft, rgba(235, 87, 87, 0.18)) 0%,
+    var(--bg-soft) 50%,
+    var(--positive-soft, rgba(0, 179, 134, 0.18)) 100%);
+  border-radius: var(--r-full);
+  overflow: visible;
+}
+.tile-52w-marker {
+  position: absolute;
+  top: 50%;
+  width: 8px; height: 8px;
+  background: var(--text-strong);
+  border: 1.5px solid var(--surface);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 0.5px var(--border);
+}
+.tile-52w-empty {
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Tablet ≤1100px: drop the 52W bar column (low value at this width) */
+@media (max-width: 1100px) {
+  .stocks-grid--tiles-header,
   .stocks-grid--tiles .stock-card {
-    grid-template-columns: minmax(0, 1fr) 76px minmax(88px, max-content);
+    grid-template-columns:
+      minmax(0, 1.5fr) 88px 96px minmax(110px, max-content) 72px;
+  }
+  .tile-52w-cell,
+  .stocks-grid--tiles-header .col-52w { display: none; }
+}
+
+/* Smaller tablet ≤900px: drop the volume column too */
+@media (max-width: 900px) {
+  .stocks-grid--tiles-header,
+  .stocks-grid--tiles .stock-card {
+    grid-template-columns:
+      minmax(0, 1.5fr) 76px 88px minmax(110px, max-content);
     padding: 9px 10px;
     gap: 10px;
   }
+  .tile-vol-cell,
+  .stocks-grid--tiles-header .col-vol { display: none; }
   .tile-spark { width: 76px; }
 }
 
-/* Mobile ≤640px */
+/* Mobile ≤640px: name + sparkline + price + change only */
 @media (max-width: 640px) {
+  .stocks-grid--tiles-header,
   .stocks-grid--tiles .stock-card {
-    grid-template-columns: minmax(0, 1fr) 60px minmax(80px, max-content);
+    grid-template-columns:
+      minmax(0, 1fr) 60px 80px minmax(86px, max-content);
     padding: 8px 10px;
     gap: 8px;
   }
@@ -1678,15 +1798,18 @@
   .tile-name { font-size: 12px; }
   .tile-sym  { font-size: 9px; }
   .tile-price { font-size: 13px; }
+  .tile-change-abs { display: none; }   /* keep just the % on phones */
 }
 
 /* Very narrow ≤380px: drop the sparkline column entirely (Galaxy Z
    Flip folded mode) so price/change has breathing room. */
 @media (max-width: 380px) {
+  .stocks-grid--tiles-header,
   .stocks-grid--tiles .stock-card {
-    grid-template-columns: minmax(0, 1fr) minmax(80px, max-content);
+    grid-template-columns: minmax(0, 1fr) 76px minmax(80px, max-content);
   }
-  .tile-spark { display: none; }
+  .tile-spark,
+  .stocks-grid--tiles-header .col-spark { display: none; }
 }
 
 .risk-pill {
