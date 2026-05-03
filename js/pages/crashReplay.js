@@ -10,7 +10,7 @@ import { formatRupees, formatPct, deltaClass } from "../money.js";
 import { coach } from "../coach/orchestrator.js";
 import { recordCoachMessage, setState, getState } from "../state.js";
 import { navigate } from "../router.js";
-import { generateCustomCrash } from "../features/customCrash.js";
+import { generateCustomCrash, existingScenarioForQuery } from "../features/customCrash.js";
 
 // Featured replays — canonical phrasings that scripts/pregen-crashes.mjs
 // has populated into the cross-user cache. Clicking any of these calls
@@ -163,6 +163,18 @@ function renderSelector(main) {
     if (!q) {
       status.textContent = "Type a crash or event to replay.";
       input.focus();
+      return;
+    }
+    // FAST PATH: local-cache hit. existingScenarioForQuery returns a
+    // scenario id only when the user has previously generated this exact
+    // query AND the cached payload's _promptVersion still matches the
+    // current code's CURRENT_PROMPT_VERSION. In that case, navigation is
+    // instant — there is genuinely zero work to visualise. Skip the
+    // generating-stage entirely so we don't show a fake "loading" UI
+    // for ~250ms when the user could have been on the replay page.
+    const localId = existingScenarioForQuery(q);
+    if (localId) {
+      location.hash = "#/crash-replay/" + localId;
       return;
     }
     // REVAMP: replace the entire selector main with the generating-stage
