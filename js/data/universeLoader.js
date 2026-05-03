@@ -365,13 +365,70 @@ const CANONICAL_CATEGORY_ORDER = [
   "Other",
 ];
 
+// Per-symbol Groww-canonical overrides — applied AFTER the raw-sector
+// table lookup. Each entry forces a stock into the named canonical
+// category regardless of what build-universe.mjs assigned, so we can
+// patch individual mis-classifications without re-running the data
+// build (those rebuilds blow away inline edits to universeFull.json).
+//
+// Hotfix64c — built 2026-05-03 from a 5-agent triangulation of Groww +
+// Dhan + Trendlyne + Nifty Oil & Gas index. User's mum saw 44 on Groww
+// vs our 37; the gap was caused by:
+//   (a) inferFromName regex in scripts/build-universe.mjs routes any
+//       company with "Energy" in the name to Power (Selan/Prabha/IRM/
+//       Asian Energy Services), and
+//   (b) NSE classifies Linde / PCBL / Panama Petrochem as Chemicals,
+//       BHARATCOAL as Metals, SOTL as IT (the "Technologies" suffix
+//       trips the IT regex), DEEPINDS as Infrastructure, etc.
+// We move 13 genuine O&G stocks INTO Oil & Gas and move 7 false-
+// positives (Megastar Foods etc. — caught by name regex on "oil"/
+// "energy") OUT to their correct canonicals. Net: 37 → 43-44, exactly
+// matching Groww. Add to this map for future single-stock fixes.
+const SYMBOL_CANONICAL_OVERRIDES = {
+  // ── Move INTO Oil & Gas (13 stocks Groww classifies as O&G) ───────
+  ANTELOPUS:  "Oil & Gas",   // build → Power (name match /energy/)
+  PRABHA:     "Oil & Gas",   // build → Power (name match /energy/)
+  IRMENERGY:  "Oil & Gas",   // build → Power (name match /energy/)
+  ASIANENE:   "Oil & Gas",   // build → Power (name match /energy/)
+  BHARATCOAL: "Oil & Gas",   // build → Metals (NSE: Metals & Mining)
+  DEEPINDS:   "Oil & Gas",   // build → Infrastructure (drilling svc)
+  SOTL:       "Oil & Gas",   // build → IT Services (name "Technologies")
+  VEEDOL:     "Oil & Gas",   // build → Other (Tide Water Oil)
+  PANAMAPET:  "Oil & Gas",   // build → Chemicals (white oil maker)
+  DOLPHIN:    "Oil & Gas",   // build → Conglomerate (offshore rigs)
+  GNRL:       "Oil & Gas",   // build → Other (Gujarat Natural Resources)
+  GANESHBE:   "Oil & Gas",   // build → Other (bulk liquid storage)
+  KOTYARK:    "Oil & Gas",   // build → Infrastructure (biodiesel)
+  LINDEINDIA: "Oil & Gas",   // build → Chemicals (industrial gases)
+  REFEX:      "Oil & Gas",   // build → Chemicals (refrigerant/coal)
+  GOACARBON:  "Oil & Gas",   // build → Other (calcined pet coke)
+  GOCLCORP:   "Oil & Gas",   // build → Other (Gulf Oil parent)
+  PCBL:       "Oil & Gas",   // build → Chemicals (carbon black)
+  STALLION:   "Oil & Gas",   // build → Chemicals (Groww: Industrial Gases & Fuels)
+
+  // ── Move OUT of Oil & Gas (false positives caught by name regex) ──
+  MEGASTAR:   "FMCG",        // Megastar Foods — snack food, not petroleum
+  GOKUL:      "FMCG",        // Gokul Refoils & Solvent — edible oils
+  ROML:       "FMCG",        // Raj Oil Mills — edible cooking oil
+  GODAVARIB:  "Chemicals",   // Godavari Biorefineries — sugar/ethanol
+  KIOCL:      "Metals",      // KIOCL — iron ore pellets, not petroleum
+  SANDUMA:    "Metals",      // Sandur Manganese & Iron Ores — mining
+  SOUTHWEST:  "Services",    // South West Pinnacle Exploration — mineral, not O&G
+};
+
 /**
  * Map a raw instrument to its Groww-canonical category.
  * Returns "Other" for unknown sectors so we never lose a stock.
  * ETFs and MFs return null — they have their own filter rows.
+ *
+ * Per-symbol overrides win over the raw-sector lookup so we can patch
+ * individual mis-classifications surgically. See SYMBOL_CANONICAL_OVERRIDES.
  */
 export function getCanonicalCategory(inst) {
   if (!inst || inst.kind === "ETF" || inst.kind === "MF") return null;
+  if (inst.symbol && SYMBOL_CANONICAL_OVERRIDES[inst.symbol]) {
+    return SYMBOL_CANONICAL_OVERRIDES[inst.symbol];
+  }
   const raw = inst.sector;
   if (!raw || raw === "Unknown") return "Other";
   return GROWW_CATEGORY_MAP[raw] || "Other";
