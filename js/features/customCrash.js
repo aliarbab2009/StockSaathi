@@ -665,6 +665,16 @@ export async function generateCustomCrash(description, opts = {}) {
   const primary = bracket.symbol || "^NSEI";
   _perfMark("cc:phaseB-start");
   let history = await fetchHistory(primary, bracket.startIso, bracket.endIso).catch(() => null);
+  // Surface which source served Phase B (yahoo / fallback / cache) so the
+  // generating-stage UI can show "via fallback" or similar in the stage
+  // row's detail line. PERF_AUDIT #2 multi-source addition.
+  if (history?.source) {
+    onProgress("phase-b-source", {
+      source: history.source,
+      sources_tried: history.sources_tried || [],
+      fallback_reason: history.fallback_reason || null,
+    });
+  }
   _perfMark("cc:phaseB-end");
   _perfMeasure("cc:phaseB", "cc:phaseB-start", "cc:phaseB-end");
   const companionHistory = [];

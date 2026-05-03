@@ -209,6 +209,17 @@ function renderSelector(main) {
       } else if (stage === "phase-c-streaming") {
         // First byte arrived — placeholder swap to indicate streaming
         // has begun. The actual text will arrive via phase-c-chunk.
+      } else if (stage === "phase-b-source" && payload && typeof payload === "object") {
+        // Surface which data source served Phase B in the stage detail.
+        const src = payload.source;
+        const tried = Array.isArray(payload.sources_tried) ? payload.sources_tried : [];
+        let label = "";
+        if (src === "cache") label = "via cache";
+        else if (src === "fallback") label = `via curated (${payload.fallback_reason || "yahoo failed"})`;
+        else if (tried.length > 1) label = `via ${tried.join(" → ")}`;
+        else label = "via Yahoo";
+        const node = main.querySelector(`.gen-flow-node[data-stage="phaseB"] .gen-flow-detail`);
+        if (node) node.textContent = label;
       } else if (stage === "phase-c-chunk" && typeof payload === "string") {
         // Extract the in-flight description value (regex matches the
         // closed string OR the open one we're still streaming into).
