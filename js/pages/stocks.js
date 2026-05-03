@@ -19,6 +19,22 @@ import { toast } from "../components/toast.js";
 // Power users can still flip to "Top by size" / Gainers / Losers via the
 // dropdown — sticky across pill clicks like before.
 let filter = { q: "", sector: "all", kind: "EQUITY", sort: "name", mfBucket: "all", mfPlan: "all" };
+
+// Hotfix65a: view mode for /stocks grid. "tiles" (Groww-style compact
+// rows, default) or "cards" (the original detailed cards). Persisted in
+// localStorage so user preference survives reloads. Single-className
+// flip on the grid container — preserves IntersectionObserver hydration
+// + live-tick patching + click delegation since the row HTML and
+// .stock-card[data-sym] selector are identical in both modes.
+const VIEW_MODE_KEY = "ss.stocks-view";
+function loadViewMode() {
+  try { return localStorage.getItem(VIEW_MODE_KEY) === "cards" ? "cards" : "tiles"; }
+  catch { return "tiles"; }
+}
+function saveViewMode(m) {
+  try { localStorage.setItem(VIEW_MODE_KEY, m); } catch {}
+}
+let viewMode = loadViewMode();
 let quoteCache = {};
 let marketMood = null;       // { narrative, temperature } | null
 let _moodFetched = false; // true after first /api/market-mood resolves
@@ -785,7 +801,7 @@ export function renderStocks(main) {
       <div class="filter-pills" style="margin-bottom: var(--sp-5); max-height: 88px; overflow-y: hidden;">
         ${[80, 60, 90, 75, 100, 65, 85, 70, 95, 80, 105, 70].map(skelSectorPill).join("")}
       </div>
-      <div class="stocks-grid">
+      <div class="stocks-grid stocks-grid--${viewMode}">
         ${Array(12).fill(skelCard).join("")}
       </div>
     `;
@@ -910,6 +926,16 @@ export function renderStocks(main) {
         </div>
         <button class="btn btn-ghost btn-sm" id="ask-saathi-btn" title="Filter the universe with natural language" ${aiSearchLoading ? "disabled" : ""}>${aiSearchLoading ? "…" : "✨ Ask Saathi"}</button>
         <div id="stocks-sort" style="min-width: 200px;"></div>
+        <div class="view-toggle" role="tablist" aria-label="View mode" title="Switch list density">
+          <button class="view-toggle-btn ${viewMode === "tiles" ? "active" : ""}" data-view="tiles" role="tab" aria-selected="${viewMode === "tiles"}" title="Compact list (Groww-style)">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="2" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="6.8" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="11.6" width="14" height="2.4" rx="1" fill="currentColor"/></svg>
+            <span class="view-label">Tiles</span>
+          </button>
+          <button class="view-toggle-btn ${viewMode === "cards" ? "active" : ""}" data-view="cards" role="tab" aria-selected="${viewMode === "cards"}" title="Detailed cards with sparkline">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="1" width="6.5" height="6.5" rx="1.2" fill="currentColor"/><rect x="8.5" y="1" width="6.5" height="6.5" rx="1.2" fill="currentColor"/><rect x="1" y="8.5" width="6.5" height="6.5" rx="1.2" fill="currentColor"/><rect x="8.5" y="8.5" width="6.5" height="6.5" rx="1.2" fill="currentColor"/></svg>
+            <span class="view-label">Cards</span>
+          </button>
+        </div>
       </div>
 
       <div class="filter-pills" style="margin-bottom: var(--sp-3);">
@@ -943,7 +969,7 @@ export function renderStocks(main) {
 
       <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-        : `<div class="stocks-grid">${list.map(inst => renderStubCard(inst)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
+        : `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubCard(inst)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
     `;
 
     const searchEl = main.querySelector("#stocks-search");
@@ -997,6 +1023,27 @@ export function renderStocks(main) {
       });
     });
     main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; visibleCount = PAGE_SIZE; render(); }));
+    // Hotfix65a: view toggle (Tiles / Cards). Single-className flip on
+    // the grid host preserves all hydrated cards + IO observation +
+    // live-tick patching since .stock-card[data-sym] selectors are
+    // unchanged in both modes. No full render() needed.
+    main.querySelectorAll(".view-toggle-btn[data-view]").forEach(btn => btn.addEventListener("click", () => {
+      const next = btn.dataset.view;
+      if (next === viewMode) return;
+      viewMode = next;
+      saveViewMode(next);
+      const host = main.querySelector("#stocks-grid-host");
+      const grid = host && host.querySelector(".stocks-grid");
+      if (grid) {
+        grid.classList.toggle("stocks-grid--tiles", next === "tiles");
+        grid.classList.toggle("stocks-grid--cards", next === "cards");
+      }
+      main.querySelectorAll(".view-toggle-btn").forEach(b => {
+        const active = b.dataset.view === next;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-selected", String(active));
+      });
+    }));
     main.querySelectorAll("[data-mfbucket]").forEach(btn => btn.addEventListener("click", () => { filter.mfBucket = btn.dataset.mfbucket; visibleCount = PAGE_SIZE; render(); }));
     main.querySelectorAll("[data-mfplan]").forEach(btn => btn.addEventListener("click", () => { filter.mfPlan = btn.dataset.mfplan; visibleCount = PAGE_SIZE; render(); }));
     main.querySelectorAll("[data-kind]").forEach(btn => btn.addEventListener("click", () => {
@@ -1090,13 +1137,13 @@ export function renderStocks(main) {
 
     if (list.length <= CHUNK_THRESHOLD) {
       // Synchronous path — small lists render in one shot.
-      host.innerHTML = `<div class="stocks-grid">${list.map(inst => renderStubCard(inst)).join("")}</div>${pagerHtml}`;
+      host.innerHTML = `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubCard(inst)).join("")}</div>${pagerHtml}`;
       attachGridDelegation(host);
       attachCardObserver(host);
     } else {
       // Chunked path — render the first batch immediately so users see
       // SOMETHING within ~20 ms of clicking, then progressively fill.
-      host.innerHTML = `<div class="stocks-grid"></div><div id="stocks-loading-indicator" class="dim text-xs center" style="margin: var(--sp-4) 0; padding: var(--sp-3);">Loading ${list.length.toLocaleString("en-IN")} stubs…</div>`;
+      host.innerHTML = `<div class="stocks-grid stocks-grid--${viewMode}"></div><div id="stocks-loading-indicator" class="dim text-xs center" style="margin: var(--sp-4) 0; padding: var(--sp-3);">Loading ${list.length.toLocaleString("en-IN")} stubs…</div>`;
       const grid = host.querySelector(".stocks-grid");
       // Wire the click delegation + create the IO once UP FRONT (with no
       // cards yet — observe-list starts empty). Then we incrementally
