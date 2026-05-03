@@ -329,36 +329,39 @@ const GROWW_CATEGORY_MAP = {
   "Textiles":      "Textiles",
 };
 
-// Display order for the pill row. Most-recognisable / largest first;
-// "Other" pinned to the end. Any canonical not in this list still
-// appears, sorted alphabetically after the named ones (defensive
-// against future map additions).
+// Display order for the pill row. Alphabetical (A–Z) so users can
+// scan-and-find by name; "Other" pinned to the end since it's a
+// catch-all bucket users almost never want first. Any canonical not
+// in this list still appears, sorted alphabetically after the named
+// ones (defensive against future map additions). Hotfix64a — was
+// recognisability-ordered before, but the user wanted Groww-style
+// scanability.
 const CANONICAL_CATEGORY_ORDER = [
-  "Banking",
-  "IT",
-  "Oil & Gas",
-  "Pharma",
   "Auto",
-  "FMCG",
-  "Financial Services",
-  "NBFC",
-  "Power",
-  "Metals",
+  "Aviation",
+  "Banking",
+  "Cement",
   "Chemicals",
+  "Conglomerate",
+  "Construction",
+  "Consumer Durables",
+  "Financial Services",
+  "FMCG",
   "Healthcare",
   "Infrastructure",
-  "Real Estate",
-  "Cement",
-  "Consumer Durables",
-  "Telecom",
   "Insurance",
-  "Construction",
-  "Textiles",
+  "IT",
+  "Jewellery",
+  "Metals",
+  "NBFC",
+  "Oil & Gas",
+  "Pharma",
+  "Power",
+  "Real Estate",
   "Retail",
   "Services",
-  "Jewellery",
-  "Conglomerate",
-  "Aviation",
+  "Telecom",
+  "Textiles",
   "Other",
 ];
 
