@@ -225,7 +225,16 @@ function cacheReplayPut(hash, description, payload) {
   } catch {}
 }
 
-export async function generateCustomCrash(description) {
+export async function generateCustomCrash(description, opts = {}) {
+  // PERF_AUDIT #4: optional onProgress callback for perceived-time wins.
+  // Caller (crashReplay.js trigger) updates the status text as we move
+  // through phases — so the user sees "Pulling 3 months of history..."
+  // instead of staring at a static "~8-15 s" message. Real wall-clock
+  // unchanged; perceived improvement comes from the page feeling alive.
+  // Stages emitted in order: cache-check, phase-a, phase-b, phase-c,
+  // phase-c-streaming (first byte), parse, build, done.
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
+
   // 0. Hard content filter — reject adult / vulgar / slur queries BEFORE
   //    any LLM call. These would either burn Gemini credits on junk or
   //    surface an inappropriate-looking replay. Rejection is friendly —
@@ -254,6 +263,7 @@ export async function generateCustomCrash(description) {
   //    pulls for free. We DO NOT cache refusals — a refusal is often a
   //    model-mood mistake (overzealous not_a_crash), and re-querying should
   //    be free to produce a real replay. Only successful scenarios are cached.
+  onProgress("cache-check");
   const cached = await cacheReplayGet(hash);
   if (cached && cached.id && !cached.error) {
     // Hydrate localStorage so subsequent loads hit the local path first.
@@ -273,6 +283,7 @@ export async function generateCustomCrash(description) {
   let lastErr = null;
 
   // Phase A: pick dates + symbol
+  onProgress("phase-a");
   let bracket;
   try {
     bracket = await callLlmForBracket(description);
@@ -295,6 +306,7 @@ export async function generateCustomCrash(description) {
   // for bank events, Nifty IT for tech events, etc.). The primary symbol
   // is the source of truth for the chart; companions are context-only
   // and don't block rendering if they fail.
+  onProgress("phase-b");
   const primary = bracket.symbol || "^NSEI";
   const companions = pickCompanionSymbols(primary, description);
   const fetches = [
@@ -337,9 +349,10 @@ export async function generateCustomCrash(description) {
   }
 
   // Phase C: generate narrative with real data in context
+  onProgress("phase-c");
   for (const { profile, temperature } of ATTEMPTS) {
     try {
-      const meta = await callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile);
+      const meta = await callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile, onProgress);
       if (meta && meta.error === "not_a_crash") {
         const msg = typeof meta.message === "string" && meta.message.trim()
           ? meta.message.trim()
@@ -529,7 +542,8 @@ function pickCompanionSymbols(primary, description) {
   return Array.from(want).slice(0, 3);
 }
 
-async function callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile) {
+async function callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile, onProgress) {
+  const _progress = typeof onProgress === "function" ? onProgress : () => {};
   // Compose a compact, LLM-readable table of the real daily closes.
   const closes = history.points.map(p => p.c);
   const dates = history.points.map(p => p.d);
@@ -572,6 +586,15 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
     }).join("\n");
   }
   const userMsg = `Event description from user: "${String(description).trim().slice(0, 400)}"\n\nREAL MARKET DATA (use these exact numbers, not your memory):\n${factsBlock}${companionBlock}`;
+  // PERF_AUDIT #4: Phase C uses SSE streaming so we can fire a progress
+  // callback the moment the upstream starts emitting tokens (TTFT,
+  // typically ~700 ms before the full response). The UI uses this to
+  // change the status text from "Building scenario..." to "Writing
+  // narrative..." — a perceived-time win even though wall-clock to
+  // valid JSON is unchanged. The accumulated text is parsed AFTER the
+  // stream ends with the same parseJsonLoose path as before; no
+  // incremental parsing (incremental would need a streaming JSON
+  // parser, which is out of scope for this PR).
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -584,6 +607,7 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
       max_tokens: 2000,
       response_format: { type: "json_object" },
       profile,
+      stream: true,
     }),
   });
   if (!res.ok) {
@@ -601,12 +625,67 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
     }
     throw new Error("The coach couldn't build that one. Try a different phrasing or a curated replay.");
   }
-  const body = await res.json();
-  const text = body?.choices?.[0]?.message?.content;
+  // SSE stream consumer. Each chunk is a "data: {json}\n\n" line in
+  // OpenAI-compat format. We accumulate the .delta.content fragments
+  // into a single string. Fires the progress callback on first byte
+  // (perceived-time win) and on every chunk after (currently unused
+  // by the UI but available for future incremental parse).
+  const text = await _consumeSseStream(res, () => _progress("phase-c-streaming"));
   if (!text) throw new Error("The coach returned an empty answer. Try again.");
   const meta = parseJsonLoose(text);
   if (!meta) throw new Error("The coach's answer didn't parse cleanly. Try again or rephrase.");
   return meta;
+}
+
+// Read an SSE "data: ..." stream from /api/chat and accumulate the
+// concatenated content. Calls onFirstByte exactly once when the first
+// non-empty data: chunk is seen — this is the TTFT-equivalent signal
+// for perceived-time updates. Falls back gracefully if the response
+// turns out to be plain JSON (chat.js can't always honour stream=true
+// — when tools are present it silently disables streaming).
+async function _consumeSseStream(res, onFirstByte) {
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  // Non-streaming fallback: chat.js returned JSON despite stream:true.
+  if (!ct.includes("text/event-stream")) {
+    const body = await res.json();
+    return body?.choices?.[0]?.message?.content || "";
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let firstSent = false;
+  let buf = "";
+  let acc = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE framing: events separated by blank lines. Each event has
+    // one or more "field: value" lines. We only care about "data:".
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const event = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      for (const line of event.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const obj = JSON.parse(payload);
+          const delta = obj?.choices?.[0]?.delta?.content;
+          if (typeof delta === "string" && delta) {
+            if (!firstSent) {
+              firstSent = true;
+              try { onFirstByte && onFirstByte(); } catch {}
+            }
+            acc += delta;
+          }
+        } catch {
+          // Ignore malformed chunks — the next one usually parses.
+        }
+      }
+    }
+  }
+  return acc;
 }
 
 function validate(m) {

@@ -123,8 +123,24 @@ function renderSelector(main) {
     input.disabled = true;
     button.textContent = "Generating…";
     status.textContent = "Gathering historical context and synthesising the day-by-day trajectory. ~8–15 s.";
+    // PERF_AUDIT #4: progress callback drives the perceived-time feel.
+    // generateCustomCrash emits stage names as it moves through the
+    // three phases; we map each to a friendly status string. The page
+    // feels alive instead of frozen for ~5 s on a static line. Real
+    // wall-clock unchanged.
+    const STAGES = {
+      "cache-check":        "Looking for a cached replay…",
+      "phase-a":            "Picking dates and the right index…",
+      "phase-b":            "Pulling historical price data…",
+      "phase-c":            "Building the day-by-day narrative…",
+      "phase-c-streaming":  "Writing the story now…",
+    };
+    const onProgress = (stage) => {
+      const msg = STAGES[stage];
+      if (msg) status.textContent = msg;
+    };
     try {
-      const scenario = await generateCustomCrash(q);
+      const scenario = await generateCustomCrash(q, { onProgress });
       registerCustomCrash(scenario);
       status.textContent = `Ready — ${scenario.title}. Loading replay…`;
       location.hash = "#/crash-replay/" + scenario.id;
