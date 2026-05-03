@@ -2920,6 +2920,15 @@ async function opClearCrashCache(req, origin) {
     return j(501, { error: "supabase_not_configured" }, origin);
   }
   const baseUrl = `${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache?bucket=eq.crash_replay`;
+  // Diagnostic: also fetch ALL buckets to confirm the table itself is
+  // populated and the bucket name is what we expect.
+  const allRes = await fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache?select=bucket,cache_key,display_key&limit=20`, {
+    headers: {
+      "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+      "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  });
+  const allText = await allRes.text();
   // Diagnostic: list cache_keys present so we can verify the bucket is
   // populated. Returns first 50 keys to keep the response small.
   const listRes = await fetch(`${baseUrl}&select=cache_key,display_key&limit=50`, {
@@ -2938,10 +2947,9 @@ async function opClearCrashCache(req, origin) {
       deleted: 0,
       diag: {
         listStatus: listRes.status,
-        listHeaders: Object.fromEntries(listRes.headers),
         listBody: listText.slice(0, 500),
-        supabase_url_set: !!env.SUPABASE_URL,
-        service_key_set: !!env.SUPABASE_SERVICE_ROLE_KEY,
+        allBucketsStatus: allRes.status,
+        allBucketsBody: allText.slice(0, 800),
       },
     }, origin);
   }
