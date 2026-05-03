@@ -14,6 +14,18 @@
 
 import { getSeries as synthSeries, getPriceAt as synthPriceAt } from "./prices.js";
 import { getInstrument } from "./universe.js";
+
+// Hotfix68a: BSE-only stocks need ".BO" suffix when forwarded to Yahoo via
+// /api/live-quote etc. The server's existing logic (`ticker = symbol if "."
+// in symbol else f"{symbol}.NS"`) already trusts dot-suffixed symbols, so the
+// client just appends .BO for BSE rows. NSE rows pass through bare. Returns
+// null for unknown symbols so callers fall back to default.
+function _wireSym(symbol) {
+  const inst = getInstrument(symbol);
+  if (!inst) return symbol;
+  if (inst.exchange === "BSE" && !symbol.includes(".")) return `${symbol}.BO`;
+  return symbol;
+}
 // Hotfix57a: dropped `import { getState } from "../state.js"` — it was
 // unused (search showed only one false-positive in a comment) and was
 // the only thing blocking state.js from importing from this module.
@@ -274,7 +286,9 @@ export async function getQuote(symbol, opts = {}) {
   // edge cache via the no-store header the server adds when it sees
   // nocache=1) — otherwise the server might hand back its own cached
   // value that's still seconds old.
-  const qs = bustCache ? `?symbol=${encodeURIComponent(symbol)}&nocache=1&_=${Date.now()}` : `?symbol=${encodeURIComponent(symbol)}`;
+  // Hotfix68a: route BSE-only symbols via .BO suffix.
+  const wireSym = _wireSym(symbol);
+  const qs = bustCache ? `?symbol=${encodeURIComponent(wireSym)}&nocache=1&_=${Date.now()}` : `?symbol=${encodeURIComponent(wireSym)}`;
   const apiRes = await fetchJsonWithTimeout(`/api/quote${qs}`);
   const apiQuote = normalizeFromApi(apiRes, symbol);
   if (apiQuote) {
@@ -350,18 +364,28 @@ async function _getQuoteBatchInner(uniq) {
     return inst && inst.kind !== "MF";
   });
   if (liveTargets.length) {
-    const liveUrl = `/api/live-quote?symbols=${encodeURIComponent(liveTargets.join(","))}`;
+    // Hotfix68a: wire-form per symbol (.BO for BSE-only). Build a map back
+    // to our internal symbol so the response keyed on the wire symbol can
+    // be reconciled to our cache (which uses the unsuffixed symbol).
+    const wireToOurs = {};
+    const wireSyms = liveTargets.map(s => {
+      const w = _wireSym(s);
+      wireToOurs[w] = s;
+      return w;
+    });
+    const liveUrl = `/api/live-quote?symbols=${encodeURIComponent(wireSyms.join(","))}`;
     const live = await fetchJsonWithTimeout(liveUrl).catch(() => null);
     if (live?.ok && live.quotes) {
       let any = false;
-      for (const s of liveTargets) {
-        const q = live.quotes[s];
+      for (const w of wireSyms) {
+        const q = live.quotes[w];
         if (q) {
-          const norm = normalizeFromApi({ ok: true, ...q }, s);
+          const ourSym = wireToOurs[w];
+          const norm = normalizeFromApi({ ok: true, ...q }, ourSym);
           if (norm) {
-            out[s] = norm;
-            _quoteCache.set(s, { data: norm, ts: Date.now() });
-            _touchQuote(s);
+            out[ourSym] = norm;
+            _quoteCache.set(ourSym, { data: norm, ts: Date.now() });
+            _touchQuote(ourSym);
             any = true;
           }
         }
@@ -381,12 +405,20 @@ async function _getQuoteBatchInner(uniq) {
   if (!need.length) return out;
 
   // Try batch endpoint — fetches all missing symbols in parallel server-side
-  const batchUrl = `/api/quotes?symbols=${encodeURIComponent(need.join(","))}`;
+  // Hotfix68a: same .BO wire mapping for the legacy /api/quotes path.
+  const batchWireToOurs = {};
+  const batchWireSyms = need.map(s => {
+    const w = _wireSym(s);
+    batchWireToOurs[w] = s;
+    return w;
+  });
+  const batchUrl = `/api/quotes?symbols=${encodeURIComponent(batchWireSyms.join(","))}`;
   const batch = await fetchJsonWithTimeout(batchUrl);
   if (batch?.ok && batch.quotes) {
     let any = false;
-    for (const s of need) {
-      const q = batch.quotes[s];
+    for (const w of batchWireSyms) {
+      const s = batchWireToOurs[w];
+      const q = batch.quotes[w];
       if (q) {
         const norm = normalizeFromApi({ ok: true, ...q }, s);
         if (norm) {
@@ -456,8 +488,10 @@ export async function getHistory(symbol, range = "1y", interval = "1d", opts = {
       const customQs = (opts.from && opts.to)
         ? `&from=${encodeURIComponent(opts.from)}&to=${encodeURIComponent(opts.to)}`
         : "";
+      // Hotfix68a: route BSE-only symbols via .BO suffix.
+      const wireHist = _wireSym(symbol);
       const res = await fetchJsonWithTimeout(
-        `/api/history?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}${customQs}`,
+        `/api/history?symbol=${encodeURIComponent(wireHist)}&range=${range}&interval=${interval}${customQs}`,
         { signal: sig }
       );
       if (sig?.aborted) {
@@ -651,7 +685,8 @@ const FUND_TTL_MS = 5 * 60_000;
 export async function getFundamentals(symbol) {
   const cached = _fundamentalsCache.get(symbol);
   if (cached && Date.now() - cached.ts < FUND_TTL_MS) return cached.data;
-  const res = await fetchJsonWithTimeout(`/api/fundamentals?symbol=${encodeURIComponent(symbol)}`);
+  // Hotfix68a: route BSE-only symbols via .BO suffix.
+  const res = await fetchJsonWithTimeout(`/api/fundamentals?symbol=${encodeURIComponent(_wireSym(symbol))}`);
   if (res?.ok) {
     _fundamentalsCache.set(symbol, { data: res, ts: Date.now() });
     return res;

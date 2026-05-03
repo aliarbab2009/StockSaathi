@@ -518,20 +518,182 @@ async function fetchNseEtfList() {
   }
 }
 
+// ─── NSE Emerge SME platform fetcher (Hotfix68a) ─────────────────────────────
+// URL verified working 2026-05-03: returns ~543 SME rows (series SM/ST/SZ).
+// CSV schema differs from main board: underscores not spaces, no MARKET LOT,
+// trailing comma. We remap to the main-board key shape so the merge step
+// downstream treats both row sets identically. Lot defaults to 1.
+async function fetchNseEmergeAllEquity() {
+  console.log("[nse-sme] fetching Emerge SME_EQUITY_L.csv…");
+  try {
+    await warmHost("www.nseindia.com");
+    const text = await fetchText(
+      "https://nsearchives.nseindia.com/emerge/corporates/content/SME_EQUITY_L.csv",
+      { referer: "https://www.nseindia.com/market-data/sme-market" },
+    );
+    const rawRows = parseCsv(text);
+    if (rawRows.length < 50) {
+      console.warn(`[nse-sme] only ${rawRows.length} rows — looks like a stale stub. Skipping.`);
+      return [];
+    }
+    const rows = [];
+    for (const r of rawRows) {
+      const symbol = (r.SYMBOL || "").trim();
+      const isin   = (r.ISIN_NUMBER || r["ISIN NUMBER"] || "").trim();
+      const series = (r.SERIES || "").trim();
+      if (!symbol || !isin || symbol.toUpperCase() === "SYMBOL") continue;
+      // Series gate: SM = Emerge main, ST = ITP, SZ = surveillance. Skip SZ.
+      if (!["SM", "ST"].includes(series)) continue;
+      rows.push({
+        SYMBOL:                symbol,
+        "NAME OF COMPANY":     (r.NAME_OF_COMPANY || r["NAME OF COMPANY"] || "").trim(),
+        SERIES:                series,
+        "DATE OF LISTING":     (r.DATE_OF_LISTING || r["DATE OF LISTING"] || "").trim(),
+        "PAID UP VALUE":       (r.PAID_UP_VALUE || r["PAID UP VALUE"] || "").trim(),
+        "MARKET LOT":          (r.MARKET_LOT || r["MARKET LOT"] || "1").trim(),
+        "ISIN NUMBER":         isin,
+        "FACE VALUE":          (r.FACE_VALUE || r["FACE VALUE"] || "").trim(),
+        _source:               "nse-sme",
+      });
+    }
+    console.log(`[nse-sme] parsed ${rows.length} Emerge equity rows`);
+    return rows;
+  } catch (e) {
+    console.warn("[nse-sme] fetch failed, continuing without SME:", e.message);
+    return [];
+  }
+}
+
+// ─── BSE main-board fetcher (Hotfix68a) ──────────────────────────────────────
+// Returns ~4,843 active BSE equities. Verified URL 2026-05-03.
+// Required: User-Agent + Referer headers (bare curl 302s to error_Bse.html).
+// Filters: status=Active in URL, plus client-side drop of Group X/Z (illiquid
+// /surveillance — same call as the agent recommendation).
+//
+// Returns rows in the same shape as fetchNseEquityMaster but with bse_scrip_cd
+// preserved. The dedup step keys on ISIN to merge dual-listed names; pure-BSE
+// rows survive as standalone instruments.
+async function fetchBseAllEquity() {
+  console.log("[bse] fetching BSE main-board equity master…");
+  try {
+    const url = "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active";
+    // Warm bseindia.com so Akamai sees an in-flow GET first; then fetch.
+    await warmHost("www.bseindia.com");
+    const text = await fetchText(url, {
+      referer: "https://www.bseindia.com/",
+    });
+    if (text.trim().startsWith("<")) {
+      console.warn("[bse] response is HTML — bot challenge or redirect. Skipping.");
+      return [];
+    }
+    const arr = JSON.parse(text);
+    if (!Array.isArray(arr)) {
+      console.warn("[bse] response wasn't an array. Skipping.");
+      return [];
+    }
+    const rows = [];
+    let dropX = 0, dropZ = 0, dropNoIsin = 0, dropEtf = 0;
+    // BSE's "segment=Equity" filter still leaks ETFs (BeES, GoldBees, etc.) —
+    // they're equity-segment instruments. Detect by name pattern so they
+    // don't shadow NSE ETF rows in the downstream seenSym dedup. The ETF
+    // iteration adds them with kind="ETF" via the NSE ETF endpoint; we
+    // shouldn't double-count them as BSE equities.
+    // ETF markers live in Scrip_Name (e.g. "Nippon India ETF Nifty 50 BeES")
+    // not Issuer_Name (which is the AMC). Also catch "Mutual Fund-Permitted"
+    // in Issuer_Name as a strong AMC-instrument signal.
+    const ETF_NAME_RE = /\b(ETF|BeES|iShares|Bharat\s+Bond|FOF\b|Index Fund)\b/i;
+    const AMC_ISSUER_RE = /\bMutual Fund\b/i;
+    for (const r of arr) {
+      const scripCd   = String(r.SCRIP_CD || "").trim();
+      const scripId   = String(r.scrip_id || "").trim().toUpperCase();
+      const issuer    = String(r.Issuer_Name || "").trim();
+      const scripName = String(r.Scrip_Name || issuer).trim();
+      const isin      = String(r.ISIN_NUMBER || "").trim().toUpperCase();
+      const group     = String(r.GROUP || "").trim().toUpperCase();
+      const faceVal   = String(r.FACE_VALUE || "10").trim();
+      // Skip Group X (illiquid) + Group Z (surveillance/non-compliance).
+      if (group === "X") { dropX++; continue; }
+      if (group === "Z") { dropZ++; continue; }
+      if (!isin) { dropNoIsin++; continue; }
+      if (!scripCd && !scripId) continue;
+      // Skip ETFs / mutual-fund instruments masquerading as equity rows.
+      // Check BOTH Scrip_Name (contains "ETF" / "BeES") and Issuer_Name
+      // (contains "Mutual Fund-Permitted" for AMC-issued instruments).
+      if (ETF_NAME_RE.test(scripName) || AMC_ISSUER_RE.test(issuer)) { dropEtf++; continue; }
+      // Symbol: prefer scrip_id (alphabetic ticker, e.g. "SPICEJET"), else
+      // numeric scrip code prefixed with BSE_ (matches the MF_ pattern for
+      // disambiguation against NSE alpha tickers).
+      const symbol = scripId || `BSE_${scripCd}`;
+      rows.push({
+        SYMBOL:                symbol,
+        "NAME OF COMPANY":     scripName,
+        SERIES:                group || "",
+        "DATE OF LISTING":     "",
+        "PAID UP VALUE":       faceVal,
+        "MARKET LOT":          "1",
+        "ISIN NUMBER":         isin,
+        "FACE VALUE":          faceVal,
+        _source:               "bse-main",
+        _bseScripCd:           scripCd,
+      });
+    }
+    console.log(`[bse] parsed ${rows.length} BSE rows; dropped GroupX=${dropX} GroupZ=${dropZ} no-isin=${dropNoIsin} etf-by-name=${dropEtf}`);
+    return rows;
+  } catch (e) {
+    console.warn("[bse] fetch failed, continuing without BSE:", e.message);
+    return [];
+  }
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 async function main() {
   const checkMode = process.argv.includes("--check");
   const startTs = Date.now();
 
-  // 1. Fetch NSE equity master
-  let equities;
+  // 1. Fetch NSE main + NSE Emerge SME + BSE main equity masters in parallel.
+  // Hotfix68a: previously NSE main only (2,364 stocks). User: "include
+  // EVERYTHING ever in the Indian stock market". SpiceJet etc. are BSE-only;
+  // adding BSE main (~4,800) closes that gap. NSE Emerge SME (~543) captures
+  // recent IPOs not on the main board. BSE SME deliberately excluded —
+  // microcap noise inappropriate for a teen-investor app per agent audit.
+  let nseMain;
   try {
-    equities = await fetchNseEquityMaster();
+    const raw = await fetchNseEquityMaster();
+    nseMain = raw.map(r => ({ ...r, _source: "nse-main" }));
   } catch (e) {
     console.error("[fatal] NSE EQUITY_L.csv fetch failed:", e.message);
-    console.error("[fatal] Without this, there's nothing to build. Check network / IP block.");
+    console.error("[fatal] Without NSE main, there's nothing to build. Check network / IP block.");
     process.exit(2);
   }
+  // NSE Emerge + BSE are soft-fail — main build proceeds without them.
+  const [nseSme, bseMain] = await Promise.all([
+    fetchNseEmergeAllEquity().catch(e => { console.warn("[nse-sme] failed:", e.message); return []; }),
+    fetchBseAllEquity().catch(e => { console.warn("[bse] failed:", e.message); return []; }),
+  ]);
+  console.log(`[fetch] NSE main ${nseMain.length}, NSE SME ${nseSme.length}, BSE main ${bseMain.length}`);
+
+  // ISIN-based dedup. NSE main wins > NSE SME > BSE main. The losing
+  // exchange's identifier is preserved (bse_scrip_cd) so /api/live-quote
+  // can fall back to .BO when needed. Rows without an ISIN pass through
+  // standalone (rare — usually rights/partly-paid that we skip elsewhere).
+  const SOURCE_PRIORITY = { "nse-main": 0, "nse-sme": 1, "bse-main": 2 };
+  const allRaw = [...nseMain, ...nseSme, ...bseMain];
+  const byIsin = new Map();
+  const noIsin = [];
+  for (const r of allRaw) {
+    const isin = (r["ISIN NUMBER"] || "").trim().toUpperCase();
+    if (!isin) { noIsin.push(r); continue; }
+    const existing = byIsin.get(isin);
+    if (!existing) { byIsin.set(isin, r); continue; }
+    const winner = SOURCE_PRIORITY[r._source] < SOURCE_PRIORITY[existing._source] ? r : existing;
+    const loser  = winner === r ? existing : r;
+    // Carry the BSE scrip code from whichever source had it — needed for
+    // /api/live-quote BSE fallback queries when Yahoo NSE feed is down.
+    if (loser._bseScripCd && !winner._bseScripCd) winner._bseScripCd = loser._bseScripCd;
+    byIsin.set(isin, winner);
+  }
+  const equities = [...byIsin.values(), ...noIsin];
+  console.log(`[merge] ${equities.length} unique stocks after ISIN dedup (${allRaw.length - equities.length} duplicates collapsed)`);
 
   // 2. Fetch Nifty index constituents (for idx bitmask + cap bucket)
   await warmHost("niftyindices.com");
@@ -614,11 +776,22 @@ async function main() {
   // Normalize equities. NSE EQUITY_L columns:
   // SYMBOL, NAME OF COMPANY, SERIES, DATE OF LISTING, PAID UP VALUE, MARKET LOT, ISIN NUMBER, FACE VALUE
   let dropped = 0;
+  // Accepted series: NSE main (EQ/BE/BZ) + NSE SME (SM/ST) + BSE Group A/B/T
+  // (active mainboard) + ZP/MT/etc. (active small variants from BSE).
+  // Hotfix68a: previously only NSE EQ/BE/BZ — narrow to those for NSE-source
+  // rows but accept anything from BSE (their own filter already excluded
+  // Group X/Z surveillance).
+  const NSE_SERIES_OK = new Set(["EQ", "BE", "BZ", "SM", "ST"]);
   for (const r of equities) {
     const symbol = (r.SYMBOL || "").trim();
     const series = (r.SERIES || "").trim();
-    // Main-board only for v1 — EQ/BE/BZ. SME (series SM/ST) excluded per plan.
-    if (!symbol || !["EQ", "BE", "BZ"].includes(series)) { dropped++; continue; }
+    const source = r._source || "nse-main";
+    if (!symbol) { dropped++; continue; }
+    // NSE rows: gate on series. BSE rows: trust the upstream filter (already
+    // dropped Group X/Z); their "series" field carries the BSE Group letter.
+    if (source.startsWith("nse-") && series && !NSE_SERIES_OK.has(series)) {
+      dropped++; continue;
+    }
     if (seenSym.has(symbol)) { dropped++; continue; }
 
     const name = (r["NAME OF COMPANY"] || r["NAME OF COMPANY "] || "").trim().replace(/^"|"$/g, "");
@@ -626,6 +799,9 @@ async function main() {
     const lotStr = (r["MARKET LOT"] || r[" MARKET LOT"] || "1").trim();
     const lot = parseInt(lotStr, 10) || 1;
 
+    // Index bitmask is NSE-keyed; BSE-only rows get idx=0 → capBucket "micro"
+    // → risk "high". That's defensible for BSE-only small/microcaps that
+    // aren't tracked by Nifty.
     let idx = 0;
     if (nifty50.syms.has(symbol)) idx |= IDX_NIFTY50;
     if (nifty100.syms.has(symbol)) idx |= IDX_NIFTY100;
@@ -634,11 +810,6 @@ async function main() {
     if (niftySmall250.syms.has(symbol)) idx |= IDX_NIFTYSMALL250;
 
     const nseIndustry = industryBySym[symbol] || "";
-    // Sectoral overlay wins over the Total Market industry lookup ONLY when
-    // the latter would land in "Other" — Total Market gives more specific
-    // sub-industry data when it has the symbol; the overlays exist to
-    // backstop the long tail. mapSector still runs the symbol-override +
-    // refinement chain so SBIN/RELIANCE/etc. keep their hand-pinned values.
     let sector = mapSector(nseIndustry, symbol, name);
     if ((!sector || sector === "Other") && sectoralBySym[symbol]) {
       sector = sectoralBySym[symbol];
@@ -646,7 +817,16 @@ async function main() {
     const capBucket = classifyCapBucket(idx);
     const risk = classifyRisk({ idx, series });
 
-    out.push({
+    // Exchange routing: where the *winning* row came from. NSE main + NSE SME
+    // both route to .NS (Yahoo); BSE main routes to .BO. Yahoo ticker resolver
+    // in /api/live-quote consumes this field plus optional bseScripCd.
+    const exchange =
+      source === "bse-main" ? "BSE" :
+      source === "nse-sme"  ? "NSE_SME" :
+      "NSE";
+    const tier = source.endsWith("-sme") ? "SME" : "MAIN";
+
+    const row = {
       symbol,
       name,
       sector,
@@ -657,7 +837,11 @@ async function main() {
       risk,
       lot,
       kind: "EQUITY",
-    });
+      exchange,
+      tier,
+    };
+    if (r._bseScripCd) row.bseScripCd = r._bseScripCd;
+    out.push(row);
     seenSym.add(symbol);
   }
 
@@ -676,6 +860,8 @@ async function main() {
       risk: "med",
       lot: 1,
       kind: "ETF",
+      exchange: "NSE",
+      tier: "MAIN",
     });
     seenSym.add(symbol);
   }
@@ -685,8 +871,8 @@ async function main() {
   // 6. Sanity gates
   if (checkMode) {
     const eqCount = out.filter(r => r.kind === "EQUITY").length;
-    if (eqCount < 1800) {
-      console.error(`[check] FAIL: only ${eqCount} equities (expected ≥1800)`);
+    if (eqCount < 4000) {
+      console.error(`[check] FAIL: only ${eqCount} equities (expected ≥4000 post-Hotfix68a NSE+BSE+SME merge)`);
       process.exit(3);
     }
     // Every row must have non-empty symbol + sector + risk + capBucket + kind.
