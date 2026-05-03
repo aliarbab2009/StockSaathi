@@ -748,9 +748,9 @@ export function renderStocks(main) {
       // after this rehydrate is a fingerprint hit in patchHydratedCards
       // (no innerHTML rebuild on identical content). Mirrors data-spark-fp.
       const changeFp = inst.kind === KIND_MF ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
-      card.innerHTML = renderStockCardBody(inst, state, wlSet, {
+      card.innerHTML = renderStockBodyForView(inst, state, wlSet, {
         closes, hasLive, price, change, isWatched, liveBadge, changeFp,
-      });
+      }, viewMode);
       card.dataset.stub = "";
       card.dataset.rendered = "1";
       card.classList.remove("stock-card-stub");
@@ -969,7 +969,7 @@ export function renderStocks(main) {
 
       <div id="stocks-grid-host">${list.length === 0
         ? `<div class="empty-state"><span class="emoji">🔍</span><h3>No matches</h3><p>Try clearing a filter or searching differently.</p></div>`
-        : `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubCard(inst)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
+        : `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubRow(inst, viewMode)).join("")}</div>${truncated ? `<div class="flex justify-center stocks-pager" style="margin-top: var(--sp-4); gap: 8px; flex-wrap: wrap;"><button class="btn btn-ghost" id="stocks-show-more">Show ${Math.min(PAGE_SIZE, fullList.length - list.length)} more (${fullList.length - list.length} remaining)</button><button class="btn btn-ghost" id="stocks-show-all">Show all ${fullList.length}</button></div>` : ""}`}</div>
     `;
 
     const searchEl = main.querySelector("#stocks-search");
@@ -1023,26 +1023,25 @@ export function renderStocks(main) {
       });
     });
     main.querySelectorAll("[data-sector]").forEach(btn => btn.addEventListener("click", () => { filter.sector = btn.dataset.sector; visibleCount = PAGE_SIZE; render(); }));
-    // Hotfix65a: view toggle (Tiles / Cards). Single-className flip on
-    // the grid host preserves all hydrated cards + IO observation +
-    // live-tick patching since .stock-card[data-sym] selectors are
-    // unchanged in both modes. No full render() needed.
+    // Hotfix65a: view toggle (Tiles / Cards). renderList() rebuilds the
+    // grid host with the new mode's stub HTML; the IO re-fires for
+    // visible rows and hydrates them with renderStockTileBody (or
+    // renderStockCardBody) per viewMode. Toolbar stays put — no full
+    // render(). Hotfix65b: was a className-only flip, but tile + card
+    // bodies are different HTML structures so the flip alone left
+    // hydrated cards mismatched with the parent layout.
     main.querySelectorAll(".view-toggle-btn[data-view]").forEach(btn => btn.addEventListener("click", () => {
       const next = btn.dataset.view;
       if (next === viewMode) return;
       viewMode = next;
       saveViewMode(next);
-      const host = main.querySelector("#stocks-grid-host");
-      const grid = host && host.querySelector(".stocks-grid");
-      if (grid) {
-        grid.classList.toggle("stocks-grid--tiles", next === "tiles");
-        grid.classList.toggle("stocks-grid--cards", next === "cards");
-      }
       main.querySelectorAll(".view-toggle-btn").forEach(b => {
         const active = b.dataset.view === next;
         b.classList.toggle("active", active);
         b.setAttribute("aria-selected", String(active));
       });
+      visibleCount = PAGE_SIZE;   // collapse pagination on view switch
+      renderList();
     }));
     main.querySelectorAll("[data-mfbucket]").forEach(btn => btn.addEventListener("click", () => { filter.mfBucket = btn.dataset.mfbucket; visibleCount = PAGE_SIZE; render(); }));
     main.querySelectorAll("[data-mfplan]").forEach(btn => btn.addEventListener("click", () => { filter.mfPlan = btn.dataset.mfplan; visibleCount = PAGE_SIZE; render(); }));
@@ -1137,7 +1136,7 @@ export function renderStocks(main) {
 
     if (list.length <= CHUNK_THRESHOLD) {
       // Synchronous path — small lists render in one shot.
-      host.innerHTML = `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubCard(inst)).join("")}</div>${pagerHtml}`;
+      host.innerHTML = `<div class="stocks-grid stocks-grid--${viewMode}">${list.map(inst => renderStubRow(inst, viewMode)).join("")}</div>${pagerHtml}`;
       attachGridDelegation(host);
       attachCardObserver(host);
     } else {
@@ -1162,7 +1161,7 @@ export function renderStocks(main) {
         if (mySeq !== _renderListSeq || cancelled) return;
         const slice = list.slice(rendered, rendered + CHUNK_SIZE);
         const tmp = document.createElement("div");
-        tmp.innerHTML = slice.map(inst => renderStubCard(inst)).join("");
+        tmp.innerHTML = slice.map(inst => renderStubRow(inst, viewMode)).join("");
         const frag = document.createDocumentFragment();
         const newCards = [];
         while (tmp.firstChild) {
@@ -1302,9 +1301,9 @@ export function renderStocks(main) {
               // no-op (mirrors data-spark-fp). MFs skip — patchHydratedCards
               // never patches MF change lines (MFs aren't in symbolsToPoll).
               const changeFp = inst.kind === KIND_MF ? null : computeChangeFp(change, quote?.source, quote?.stale, ms.state);
-              card.innerHTML = renderStockCardBody(inst, state, wlSet, {
+              card.innerHTML = renderStockBodyForView(inst, state, wlSet, {
                 closes, hasLive, price, change, isWatched, liveBadge, changeFp,
-              });
+              }, viewMode);
               card.dataset.stub = "";
               card.dataset.rendered = "1";
               card.classList.remove("stock-card-stub");
@@ -2179,6 +2178,106 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
       <span class="risk-pill ${inst.risk || "med"}">${(inst.risk || "MED").toUpperCase()}</span>
     </div>
     <div class="stock-sparkline"${closes && closes.length > 1 ? ` data-spark-fp="${closes.length}:${closes[closes.length - 1]}"` : ""}>${closes && closes.length > 1 ? sparkline(closes) : `<div class="skeleton" style="width: 100%; height: 40px;" aria-label="Loading sparkline"></div>`}</div>
+  `;
+}
+
+// =============================================================================
+// TILE VIEW (Hotfix65b) — alternative compact row layout for /stocks.
+// Same data, different markup. Rendered when viewMode === "tiles". Each
+// tile keeps the .stock-card[data-sym], .stock-price, .stock-change,
+// .stock-sparkline contracts so:
+//   - The live-tick patcher (patchHydratedCards) updates tiles in place.
+//   - The IntersectionObserver finds + hydrates tile stubs the same way.
+//   - The grid click delegation works (.stock-card[data-sym]).
+//   - data-spark-fp / data-change-fp guards still work.
+// We deliberately render different INNER HTML for tile vs card so the
+// layout fits the row form factor — name + ticker visible, smaller
+// sparkline, compact price+change stack on the right. The toggle
+// handler calls renderList() to redo the whole grid host with the
+// new mode's bodies (cheap; <50ms even for 2,400 stocks since stubs
+// only).
+// =============================================================================
+
+function renderStubRow(inst, mode) {
+  return mode === "tiles" ? renderStubTile(inst) : renderStubCard(inst);
+}
+
+function renderStubTile(inst) {
+  return `<div class="stock-card stock-card-stub stock-tile" data-sym="${inst.symbol}" data-stub="1" role="button" tabindex="0" aria-label="${escapeAttr(inst.name)}">
+    <div class="tile-head">
+      <div class="stock-avatar tile-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
+      <div class="tile-title">
+        <div class="tile-name">${escapeHtml(inst.name)}</div>
+        <div class="tile-sym">${_stubSubLine(inst)}</div>
+      </div>
+    </div>
+    <div class="stock-sparkline tile-spark"><div class="skeleton" style="width: 100%; height: 100%;"></div></div>
+    <div class="tile-price-col">
+      <div class="skeleton" style="width: 70px; height: 14px;" aria-label="Loading price"></div>
+      <div class="skeleton" style="width: 50px; height: 11px; margin-top: 4px;" aria-label="Loading change"></div>
+    </div>
+  </div>`;
+}
+
+function renderStockBodyForView(inst, state, wlSet, opts, mode) {
+  return mode === "tiles"
+    ? renderStockTileBody(inst, state, wlSet, opts)
+    : renderStockCardBody(inst, state, wlSet, opts);
+}
+
+function renderStockTileBody(inst, state, wlSet, opts = null) {
+  // Mirror renderStockCardBody's data fork — same fields, just laid out
+  // for a single horizontal row instead of a card.
+  let closes, hasLive, price, change, isWatched, liveBadge;
+  if (opts) {
+    ({ closes, hasLive, price, change, isWatched, liveBadge } = opts);
+  } else {
+    const seededCloses = getCloses(inst.symbol, SPARKLINE_SEED_LENGTH);
+    closes = getIntradaySparkline(inst.symbol, seededCloses);
+    const quote = (typeof window !== "undefined" && window.__ssQuoteCache) ? window.__ssQuoteCache[inst.symbol] : null;
+    hasLive = quote?.pricePaise != null;
+    price = hasLive ? quote.pricePaise : null;
+    change = quote?.changePct ?? getTodayChange(inst.symbol);
+    isWatched = wlSet ? wlSet.has(inst.symbol) : (state?.watchlist || []).includes(inst.symbol);
+    const ms = marketStatus();
+    if (inst.kind === KIND_MF) {
+      liveBadge = `<span class="pill" style="font-size: 8px; padding: 0 5px; background: var(--bg-subtle); color: var(--text-dim);" title="MF NAV">NAV</span>`;
+    } else if (ms.state !== "open") {
+      const lbl = ms.state === "pre-open" ? "PRE-OPEN" : "CLOSED";
+      liveBadge = `<span class="pill stock-card-ms-pill market-status" tabindex="0" data-ms-state="${ms.state}" style="font-size: 8px; padding: 0 5px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
+    } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
+      liveBadge = quote.stale
+        ? `<span class="pill pill-yellow" style="font-size: 8px; padding: 0 5px;">DELAYED</span>`
+        : `<span class="pill pill-green" style="font-size: 8px; padding: 0 5px;" title="NSE · Live">LIVE</span>`;
+    } else {
+      liveBadge = `<span class="pill" style="font-size: 8px; padding: 0 5px; background: var(--bg-subtle); color: var(--text-dim);" title="Syncing">SYNCING</span>`;
+    }
+  }
+  const sparkSvg = closes && closes.length > 1
+    ? sparkline(closes, { width: 88, height: 28, strokeWidth: 1.5 })
+    : `<div class="skeleton" style="width: 100%; height: 100%;"></div>`;
+  const sparkFp = closes && closes.length > 1 ? ` data-spark-fp="${closes.length}:${closes[closes.length - 1]}"` : "";
+  return `
+    <div class="tile-head">
+      <div class="stock-avatar tile-avatar">${escapeHtml(inst.logo || inst.symbol.slice(0, 3))}</div>
+      <div class="tile-title">
+        <div class="tile-name">${escapeHtml(inst.name)}</div>
+        <div class="tile-sym">${_stubSubLine(inst)}</div>
+      </div>
+    </div>
+    <div class="stock-sparkline tile-spark"${sparkFp}>${sparkSvg}</div>
+    <div class="tile-price-col">
+      ${hasLive || inst.kind === KIND_MF ? `
+        <div class="stock-price tabular tile-price">${formatRupees(price)}</div>
+        <div class="stock-change ${deltaClass(change)} tile-change"${opts?.changeFp ? ` data-change-fp="${escapeAttr(opts.changeFp)}"` : ""}>${hasLive ? formatPct(change, { sign: true }) : `<span class="dim">NAV</span>`} ${liveBadge}</div>
+      ` : `
+        <div class="skeleton" style="width: 70px; height: 14px;"></div>
+        <div class="stock-change" style="display:flex; align-items:center; gap:4px; justify-content:flex-end;">
+          <span class="skeleton" style="width: 50px; height: 11px;"></span>
+          ${liveBadge}
+        </div>
+      `}
+    </div>
   `;
 }
 

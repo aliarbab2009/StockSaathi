@@ -1512,18 +1512,18 @@
 }
 
 /* ============================== STOCKS TILE VIEW ===================== */
-/* Hotfix65a: alternative compact list view for /stocks. Same .stock-card
-   children — only the parent grid container's class flips. Card →
-   horizontal row, tighter padding, smaller sparkline, no risk pill,
-   row-highlight hover. Preserves IO hydration + live-tick patcher
-   because .stock-card[data-sym] selectors are unchanged.
-   Mobile: rows compact further (smaller avatar, narrower sparkline)
-   instead of collapsing to multi-line — this is the Groww default
-   experience the user asked for. */
+/* Hotfix65a/65b: alternative compact list view for /stocks. Tile mode
+   uses its OWN stub + body HTML (renderStubTile + renderStockTileBody)
+   so the layout matches the row form factor — name + ticker visible
+   on the left, sparkline middle, price+change on the right. The CSS
+   wraps each tile in a 3-col grid: head | sparkline | price-col.
+   Card mode keeps the original detailed cards. Toggle via
+   localStorage["ss.stocks-view"]; switching calls renderList() to
+   rebuild stubs in the new mode. */
 
-/* Card view container — explicit .stocks-grid--cards alias for the
-   base .stocks-grid behaviour. Both selectors do the same thing so
-   legacy callers without the modifier still get card-grid layout. */
+/* Card-view container — explicit alias for the base behaviour. Both
+   selectors map to the same auto-fill grid so legacy callers without
+   the modifier still get card-grid layout. */
 .stocks-grid,
 .stocks-grid--cards {
   display: grid;
@@ -1531,8 +1531,8 @@
   gap: var(--sp-4);
 }
 
-/* Tile container override. Single column of full-width rows with a
-   shared 1px border + rounded outer corners so it reads as a panel. */
+/* Tile-view container — single column of full-width rows wrapped in a
+   shared border + rounded outer corners (panel feel, like Groww). */
 .stocks-grid--tiles {
   display: flex;
   flex-direction: column;
@@ -1542,19 +1542,25 @@
   background: var(--surface);
   overflow: hidden;
 }
+
+/* Each tile row — 3-column grid that matches the 3 direct children of
+   both stub (.tile-head + .stock-sparkline + .tile-price-col) and
+   hydrated body (same 3 children). Auto-place fills in source order.
+   No flex-order trickery needed — same children, same order, both
+   modes. min-width:0 on the head so the name truncates instead of
+   forcing horizontal scroll. */
 .stocks-grid--tiles .stock-card {
-  /* Reset card look — flat row, no individual border, dim hover. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px minmax(96px, max-content);
+  align-items: center;
+  gap: 12px;
+  padding: 10px var(--sp-3);
+  margin: 0;
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
-  padding: 10px var(--sp-3);
-  margin: 0;
-  min-height: auto !important;     /* override the inline 172px stub style */
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1.3fr) minmax(80px, 88px) minmax(110px, max-content);
-  align-items: center;
-  gap: 10px;
+  min-height: auto !important;     /* defeat the inline 172px stub style */
 }
 .stocks-grid--tiles .stock-card:last-child { border-bottom: 0; }
 .stocks-grid--tiles .stock-card:hover {
@@ -1564,135 +1570,123 @@
   box-shadow: none;
 }
 
-/* Cell layout */
-.stocks-grid--tiles .stock-head {
-  /* Was column-flex with avatar above title; flip to inline row. */
+/* Tile head: avatar + name/ticker stacked. Min-width 0 so flex/grid
+   shrinks let ellipsis kick in. */
+.tile-head {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
-.stocks-grid--tiles .stock-avatar {
+.tile-avatar {
   width: 32px; height: 32px;
   font-size: 10px;
   flex-shrink: 0;
 }
-.stocks-grid--tiles .stock-title {
+.tile-title {
   min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
-.stocks-grid--tiles .stock-title .name {
+.tile-name {
   font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
-.stocks-grid--tiles .stock-title .sym {
+.tile-sym {
   font-size: 10px;
-  margin-top: 0;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
-/* Sparkline cell — fixed width, smaller height. Order via flex-order
-   so the existing source order (head, price-row, sparkline) renders
-   in tile-friendly order: head | sparkline | price-row. */
-.stocks-grid--tiles .stock-sparkline {
-  height: 28px;
+/* Tile sparkline cell — fixed 88x28 wrapper. Inner SVG fills 100% via
+   the existing .chart-svg rule. */
+.tile-spark {
   width: 88px;
+  height: 28px;
   margin-top: 0;
   flex-shrink: 0;
-  order: 2;     /* between head (default 0) and price-row (3) */
 }
-.stocks-grid--tiles .stock-sparkline .chart-svg {
+.tile-spark .chart-svg {
   width: 100% !important;
   height: 100% !important;
 }
 
-/* Price+change cell — collapse to right-aligned vertical stack. The
-   existing .flex.items-center.justify-between rendered by
-   renderStockCardBody is what we're targeting. */
-.stocks-grid--tiles .stock-card > .flex.items-center.justify-between {
+/* Price + change column — right-aligned vertical stack. */
+.tile-price-col {
+  display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 0;
-  flex-shrink: 0;
+  justify-content: center;
   text-align: right;
-  order: 3;
-  min-width: 110px;
+  min-width: 96px;
+  flex-shrink: 0;
+  gap: 2px;
 }
-.stocks-grid--tiles .stock-price {
-  font-size: var(--text-md);
+.tile-price {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-strong);
   line-height: 1.2;
-  margin: 0;
+  letter-spacing: -0.01em;
 }
-.stocks-grid--tiles .stock-change {
+.tile-change {
   font-size: 10px;
-  flex-wrap: nowrap;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   white-space: nowrap;
 }
-/* Hide the LIVE/CLOSED/SYNCING pill in tile mode at narrow desktop —
-   color of change-text already conveys live state. */
+/* Hide the LIVE/CLOSED/SYNCING pill at narrow desktop — color of
+   change-text already conveys live state. */
 @media (max-width: 1100px) {
-  .stocks-grid--tiles .stock-change > .pill { display: none; }
-}
-.stocks-grid--tiles .risk-pill { display: none; }
-.stocks-grid--tiles .watchlist-toggle {
-  font-size: 14px;
-  padding: 2px;
+  .tile-change > .pill { display: none; }
 }
 
-/* Skeleton placeholders inside stub cards in tile mode — re-shape to
-   row-friendly small bars. Targets the inline-styled .skeleton divs in
-   renderStubCard without any HTML change. */
-.stocks-grid--tiles .stock-card-stub > .skeleton:nth-of-type(1) {
-  /* price slot */
-  width: 70px !important; height: 14px !important; margin-top: 0 !important;
-  order: 3; justify-self: end;
-}
-.stocks-grid--tiles .stock-card-stub > .skeleton:nth-of-type(2) {
-  /* change slot */
-  width: 50px !important; height: 11px !important; margin-top: 0 !important;
-  order: 3; justify-self: end;
-}
-.stocks-grid--tiles .stock-card-stub > .skeleton:nth-of-type(3) {
-  /* sparkline slot */
-  width: 88px !important; height: 28px !important; margin-top: 0 !important;
-  order: 2;
-}
-
-/* Tablet ≤960px: tighter columns */
+/* Tablet ≤960px */
 @media (max-width: 960px) {
   .stocks-grid--tiles .stock-card {
-    grid-template-columns: 36px minmax(0, 1.5fr) 76px minmax(96px, max-content);
+    grid-template-columns: minmax(0, 1fr) 76px minmax(88px, max-content);
     padding: 9px 10px;
-    gap: 8px;
+    gap: 10px;
   }
-  .stocks-grid--tiles .stock-sparkline { width: 76px; }
+  .tile-spark { width: 76px; }
 }
 
-/* Mobile ≤640px: even tighter; keep all 4 columns visible (Groww does
-   the same — no collapse to 2 rows; row stays single-line). */
+/* Mobile ≤640px */
 @media (max-width: 640px) {
   .stocks-grid--tiles .stock-card {
-    grid-template-columns: 32px minmax(0, 1fr) 60px minmax(86px, max-content);
+    grid-template-columns: minmax(0, 1fr) 60px minmax(80px, max-content);
     padding: 8px 10px;
-    gap: 6px;
+    gap: 8px;
   }
-  .stocks-grid--tiles .stock-avatar { width: 28px; height: 28px; font-size: 9px; }
-  .stocks-grid--tiles .stock-sparkline { width: 60px; height: 24px; }
-  .stocks-grid--tiles .stock-title .name { font-size: 12px; }
-  .stocks-grid--tiles .stock-title .sym  { font-size: 9px; }
-  .stocks-grid--tiles .stock-price { font-size: 13px; }
+  .tile-avatar { width: 28px; height: 28px; font-size: 9px; }
+  .tile-spark { width: 60px; height: 24px; }
+  .tile-name { font-size: 12px; }
+  .tile-sym  { font-size: 9px; }
+  .tile-price { font-size: 13px; }
 }
 
-/* Very narrow ≤380px: drop sparkline column entirely so price+change
-   has room to breathe on a Galaxy Z Flip folded screen. */
+/* Very narrow ≤380px: drop the sparkline column entirely (Galaxy Z
+   Flip folded mode) so price/change has breathing room. */
 @media (max-width: 380px) {
   .stocks-grid--tiles .stock-card {
-    grid-template-columns: 28px minmax(0, 1fr) minmax(80px, max-content);
+    grid-template-columns: minmax(0, 1fr) minmax(80px, max-content);
   }
-  .stocks-grid--tiles .stock-sparkline { display: none; }
+  .tile-spark { display: none; }
 }
 
 .risk-pill {
