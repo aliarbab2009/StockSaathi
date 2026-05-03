@@ -273,3 +273,136 @@ export function getMfCategoryBuckets() {
   _categoriesCache = order.filter(b => present.has(b));
   return _categoriesCache;
 }
+
+// =============================================================================
+// GROWW-CANONICAL EQUITY CATEGORIES
+//
+// Built 2026-05-03 after user reported "my mum wants to see Oil and Gas
+// on /stocks but there are just random categories." Our raw NSE-derived
+// sector strings include 30 fragmentary buckets (Energy, NBFC, Services,
+// Other, Conglomerate, Internet, Fintech, Exchange, etc.) that no
+// Indian retail investor recognises by those names. Groww + Zerodha +
+// 5paisa all use a smaller, recognisable set aligned with the NSE
+// Sectoral Indices nomenclature: Banking, Oil & Gas, IT, Pharma, FMCG,
+// Auto, Power, Realty, etc.
+//
+// This map re-bins each raw sector onto a Groww-aligned canonical
+// category. Conflict policy per the user's instruction: Groww wins.
+// "Energy" in our raw data is overwhelmingly upstream/midstream
+// petroleum (Reliance, ONGC, BPCL, IOC, GAIL) so it maps to "Oil &
+// Gas" — Power gets its own bucket since NSE separates them too.
+//
+// The pill list shown to users is just the values present after
+// mapping (unique + count > 0), ordered by getCanonicalCategoryOrder
+// below. Any future raw sector that doesn't appear in the map falls
+// through to "Other" via getCanonicalCategory's default branch.
+const GROWW_CATEGORY_MAP = {
+  "Auto":          "Auto",
+  "Aviation":      "Aviation",
+  "Banking":       "Banking",
+  "Cement":        "Cement",
+  "Chemicals":     "Chemicals",
+  "Conglomerate":  "Conglomerate",
+  "Construction":  "Construction",
+  "Consumer":      "Consumer Durables",
+  "Consumer Elec": "Consumer Durables",
+  "Energy":        "Oil & Gas",
+  "Exchange":      "Financial Services",
+  "Fintech":       "NBFC",
+  "FMCG":          "FMCG",
+  "Food":          "FMCG",
+  "Healthcare":    "Healthcare",
+  "Infrastructure":"Infrastructure",
+  "Insurance":     "Insurance",
+  "Internet":      "Retail",
+  "IT Services":   "IT",
+  "Jewellery":     "Jewellery",
+  "Metals":        "Metals",
+  "NBFC":          "NBFC",
+  "Other":         "Other",
+  "Pharma":        "Pharma",
+  "Power":         "Power",
+  "Real Estate":   "Real Estate",
+  "Retail":        "Retail",
+  "Services":      "Services",
+  "Telecom":       "Telecom",
+  "Textiles":      "Textiles",
+};
+
+// Display order for the pill row. Most-recognisable / largest first;
+// "Other" pinned to the end. Any canonical not in this list still
+// appears, sorted alphabetically after the named ones (defensive
+// against future map additions).
+const CANONICAL_CATEGORY_ORDER = [
+  "Banking",
+  "IT",
+  "Oil & Gas",
+  "Pharma",
+  "Auto",
+  "FMCG",
+  "Financial Services",
+  "NBFC",
+  "Power",
+  "Metals",
+  "Chemicals",
+  "Healthcare",
+  "Infrastructure",
+  "Real Estate",
+  "Cement",
+  "Consumer Durables",
+  "Telecom",
+  "Insurance",
+  "Construction",
+  "Textiles",
+  "Retail",
+  "Services",
+  "Jewellery",
+  "Conglomerate",
+  "Aviation",
+  "Other",
+];
+
+/**
+ * Map a raw instrument to its Groww-canonical category.
+ * Returns "Other" for unknown sectors so we never lose a stock.
+ * ETFs and MFs return null — they have their own filter rows.
+ */
+export function getCanonicalCategory(inst) {
+  if (!inst || inst.kind === "ETF" || inst.kind === "MF") return null;
+  const raw = inst.sector;
+  if (!raw || raw === "Unknown") return "Other";
+  return GROWW_CATEGORY_MAP[raw] || "Other";
+}
+
+/**
+ * { categoryName: count } for every Groww-canonical bucket present in
+ * the loaded equity universe. Sorted by CANONICAL_CATEGORY_ORDER, with
+ * any unmapped extras appended alphabetically. Excludes empty buckets.
+ * Used by stocks.js to render the pill row with counts.
+ *
+ * Returns [] before universeFull.json loads (pill row stays in
+ * skeleton state). Re-evaluated on every call — counts are O(n) over
+ * 2,364 stocks, sub-millisecond, no need to cache.
+ */
+export function getCanonicalCategoryCounts() {
+  if (!_fullBySymbol) return [];
+  const counts = {};
+  for (const r of Object.values(_fullBySymbol)) {
+    const c = getCanonicalCategory(r);
+    if (!c) continue;
+    counts[c] = (counts[c] || 0) + 1;
+  }
+  const present = Object.keys(counts);
+  const ordered = [];
+  for (const name of CANONICAL_CATEGORY_ORDER) {
+    if (counts[name]) ordered.push({ name, count: counts[name] });
+  }
+  // Catch any canonical that ended up in counts but wasn't in the
+  // declared order (defensive — shouldn't happen with the current map).
+  for (const name of present.sort()) {
+    if (!CANONICAL_CATEGORY_ORDER.includes(name) && counts[name]) {
+      ordered.push({ name, count: counts[name] });
+    }
+  }
+  return ordered;
+}

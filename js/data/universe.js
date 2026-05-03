@@ -17,4 +17,6 @@ export {
   getAllInstruments,
   getAllSectors,
   getMfCategoryBuckets,
+  getCanonicalCategory,
+  getCanonicalCategoryCounts,
 } from "./universeLoader.js";
