@@ -304,6 +304,50 @@ const _PHASE_A_ALIASES = [
   { tokens: ["brexit"],
     out: { startIso: "2016-06-23", endIso: "2016-09-30", symbol: "^NSEI",
            hint: "Brexit referendum, 23 June 2016" } },
+  // 2G spectrum scam — A. Raja, CAG report Nov 2010, SC cancellation Feb 2012.
+  // Hit telecom hardest. Bharti Airtel was the most-traded survivor; RCOM /
+  // Tata Tele / Idea were impacted but RCOM is delisted. Use BHARTIARTL.NS.
+  { tokens: ["2g", "scam"],
+    out: { startIso: "2010-11-10", endIso: "2011-04-30", symbol: "BHARTIARTL.NS",
+           hint: "2G spectrum scam, CAG report Nov 2010 → telecom sector wipe-out" } },
+  { tokens: ["2g", "spectrum"],
+    out: { startIso: "2010-11-10", endIso: "2011-04-30", symbol: "BHARTIARTL.NS",
+           hint: "2G spectrum allocation scandal, Nov 2010" } },
+  { tokens: ["raja", "telecom"],
+    out: { startIso: "2010-11-10", endIso: "2011-04-30", symbol: "BHARTIARTL.NS",
+           hint: "A. Raja telecom scam (2G spectrum), Nov 2010" } },
+  // Coal scam — Coalgate, CAG report 2012
+  { tokens: ["coal", "scam"],
+    out: { startIso: "2012-08-17", endIso: "2013-01-31", symbol: "COALINDIA.NS",
+           hint: "Coal allocation scam (Coalgate), CAG report Aug 2012" } },
+  { tokens: ["coalgate"],
+    out: { startIso: "2012-08-17", endIso: "2013-01-31", symbol: "COALINDIA.NS",
+           hint: "Coalgate, Aug 2012" } },
+  // Vijay Mallya / Kingfisher Airlines collapse, late 2012
+  { tokens: ["mallya"],
+    out: { startIso: "2012-10-01", endIso: "2013-03-31", symbol: "^NSEI",
+           hint: "Vijay Mallya / Kingfisher Airlines collapse, Oct 2012" } },
+  { tokens: ["kingfisher", "airlines"],
+    out: { startIso: "2012-10-01", endIso: "2013-03-31", symbol: "^NSEI",
+           hint: "Kingfisher Airlines grounded, Oct 2012" } },
+  // SVB — March 2023
+  { tokens: ["svb"],
+    out: { startIso: "2023-03-08", endIso: "2023-05-31", symbol: "^NSEI",
+           hint: "Silicon Valley Bank failure, 10 Mar 2023" } },
+  { tokens: ["silicon", "valley", "bank"],
+    out: { startIso: "2023-03-08", endIso: "2023-05-31", symbol: "^NSEI",
+           hint: "SVB collapse, Mar 2023" } },
+  // Trump tariffs — early 2025 sell-off
+  { tokens: ["trump", "tariff"], year: "2025",
+    out: { startIso: "2025-04-01", endIso: "2025-06-30", symbol: "^NSEI",
+           hint: "Trump tariff war, Apr 2025" } },
+  // Election day 2024 — June 4, NDA underperformed exit-poll → 6% intraday drop
+  { tokens: ["election", "result"], year: "2024",
+    out: { startIso: "2024-06-04", endIso: "2024-08-31", symbol: "^NSEI",
+           hint: "2024 General Election results day shock, 4 Jun 2024" } },
+  { tokens: ["election", "day"], year: "2024",
+    out: { startIso: "2024-06-04", endIso: "2024-08-31", symbol: "^NSEI",
+           hint: "2024 election results day, 4 Jun 2024" } },
 ];
 
 function _routePhaseADeterministic(description) {

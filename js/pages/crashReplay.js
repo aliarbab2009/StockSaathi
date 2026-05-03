@@ -293,8 +293,8 @@ function renderReplay(main, scenario) {
     <div class="replay-topbar">
       <a href="#/crash-replay" class="btn btn-ghost btn-sm">← Scenarios</a>
       <div class="replay-title-inline">
-        <span class="pill pill-brand">⏱ ${scenario.id.replace(/_/g, " ")}</span>
-        <strong>${scenario.title}</strong>
+        <span class="pill pill-brand">⏱ ${escapeHtml(scenario.subtitle || "Time travel")}</span>
+        <strong>${escapeHtml(scenario.title)}</strong>
         <span class="mood-indicator calm" id="mood-indicator">🧘 Calm</span>
       </div>
       <div class="replay-controls replay-controls-top">
@@ -659,13 +659,33 @@ function buildMarkers(scenario) {
   }
   // End
   markers.push({ idx: frames.length - 1, short: "End", label: scenario.endLabel });
-  // Dedupe + sort
+  // Dedupe by idx + sort by position.
   const seen = new Set();
-  return markers.filter(m => {
+  const sorted = markers.filter(m => {
     if (seen.has(m.idx)) return false;
     seen.add(m.idx);
     return true;
   }).sort((a, b) => a.idx - b.idx);
+  // Collapse markers that are too close on the slider — within 6% of total
+  // frames they'll visually overlap their labels (e.g. Bottom + Recovery
+  // when recovery happens just after the trough). Priority order keeps
+  // Start, End, and Bottom; drops Recovery and -20% when they collide.
+  const minGap = Math.max(2, Math.floor(frames.length * 0.06));
+  const PRIORITY = { Start: 5, End: 5, Bottom: 4, "−20%": 2, Recovery: 3 };
+  const out = [];
+  for (const m of sorted) {
+    const prev = out[out.length - 1];
+    if (prev && m.idx - prev.idx < minGap) {
+      // Conflict — keep the higher-priority one.
+      if ((PRIORITY[m.short] || 1) > (PRIORITY[prev.short] || 1)) {
+        out[out.length - 1] = m;
+      }
+      // Otherwise drop m by not pushing.
+    } else {
+      out.push(m);
+    }
+  }
+  return out;
 }
 
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
