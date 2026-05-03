@@ -918,7 +918,6 @@ export default async function handler(req) {
       case "history":             return await opHistory(req, origin, url);
       case "time":                return opTime(req, origin);
       case "signup-count":        return await opSignupCount(req, origin);
-      case "_clear-crash-cache":  return await opClearCrashCache(req, origin);
       case "admin-path-check":    return opAdminPathCheck(req, origin, url);
       case "admin-overview":      return await opAdminOverview(req, origin);
       case "admin-user":          return await opAdminUser(req, origin, url);
@@ -2915,42 +2914,6 @@ async function opAdminAuditLog(req, origin, url) {
 // Uses SUPABASE_SERVICE_ROLE_KEY to bypass RLS on profiles. Public-read
 // numeric count only — no PII leaked.
 // -----------------------------------------------------------------------------
-// One-shot admin clear of the crash_replay cache bucket. Only deletes
-// crash_replay rows (any other bucket request is rejected). No auth —
-// abuse cost is bounded: a malicious actor can DOS the cache, forcing
-// next user to re-pay ~5s + a few cents of LLM credits per query.
-// Acceptable for a short-lived endpoint that's removed after one use.
-// Will be deleted in a follow-up commit.
-async function opClearCrashCache(req, origin) {
-  const env = globalThis.process?.env || {};
-  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
-    return j(501, { error: "supabase_not_configured" }, origin);
-  }
-  const baseUrl = `${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/ai_response_cache?bucket=eq.crash_replay`;
-  // Count first.
-  const listRes = await fetch(`${baseUrl}&select=cache_key&limit=10000`, {
-    headers: {
-      "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
-      "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-    },
-  });
-  const listJson = await listRes.json().catch(() => []);
-  const total = Array.isArray(listJson) ? listJson.length : 0;
-  if (total === 0) return j(200, { ok: true, deleted: 0 }, origin);
-  const delRes = await fetch(baseUrl, {
-    method: "DELETE",
-    headers: {
-      "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
-      "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "Prefer": "return=minimal",
-    },
-  });
-  if (!delRes.ok) {
-    return j(502, { error: "delete_failed", status: delRes.status }, origin);
-  }
-  return j(200, { ok: true, deleted: total }, origin);
-}
-
 async function opSignupCount(req, origin) {
   const env = globalThis.process?.env || {};
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
