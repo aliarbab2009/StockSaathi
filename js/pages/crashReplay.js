@@ -805,17 +805,18 @@ function playReplayIntroAnimation(main, scenario) {
     titleEl.classList.add("ss-anim-fade");
   }, 200));
 
-  // Typewriter (t=500ms). 8ms/char chunks of 2 chars at a time so a
-  // 200-char paragraph types out in ~800ms instead of 3.6s. Three
-  // paragraphs with 100ms inter-paragraph pause = ~3s total — feels
-  // alive without testing the user's patience. Caret moves with the
-  // active paragraph so only one cursor is visible at any moment.
+  // Typewriter (t=500ms). Sized for a 1200-char description to type out
+  // in ~2s. 6ms tick × 5 chars per tick = 1.2ms/char effective.
+  // Caret moves with the active paragraph so only one cursor is visible
+  // at any moment. The key-moments stagger fires INDEPENDENTLY at t=2.2s
+  // (running parallel with the typewriter tail) so the whole experience
+  // wraps in ~3s end-to-end.
   timers.push(setTimeout(() => {
     if (cancelled || !paraEls.length) return;
     let pIdx = 0, cIdx = 0;
-    const PER_TICK_MS = 8;
-    const CHARS_PER_TICK = 2;
-    const PARA_PAUSE = 100;
+    const PER_TICK_MS = 6;
+    const CHARS_PER_TICK = 5;
+    const PARA_PAUSE = 80;
     const step = () => {
       if (cancelled) return;
       const p = paraEls[pIdx];
@@ -839,21 +840,28 @@ function playReplayIntroAnimation(main, scenario) {
     };
     const finish = () => {
       if (cancelled) return;
-      // Stagger key-moment cards.
-      timelineRows.forEach((row, i) => {
-        timers.push(setTimeout(() => {
-          if (cancelled) return;
-          row.classList.remove("ss-anim-hidden");
-          row.classList.add("ss-anim-slide-up");
-        }, i * 130));
-      });
-      // Hide skip button at end.
+      // Hide skip button when typewriter completes.
       timers.push(setTimeout(() => {
         skipBtn?.setAttribute("hidden", "");
-      }, timelineRows.length * 130 + 400));
+      }, 200));
     };
     step();
   }, 500));
+
+  // Key-moments stagger fires INDEPENDENTLY at t=2.2s — runs in parallel
+  // with the typewriter tail. By the time typing finishes (~2.5-3s) the
+  // user has already seen the bottom of the page populate. Total intro
+  // is ~3s end-to-end instead of 5-7s.
+  timers.push(setTimeout(() => {
+    if (cancelled) return;
+    timelineRows.forEach((row, i) => {
+      timers.push(setTimeout(() => {
+        if (cancelled) return;
+        row.classList.remove("ss-anim-hidden");
+        row.classList.add("ss-anim-slide-up");
+      }, i * 90));
+    });
+  }, 2200));
 }
 
 function buildMarkers(scenario) {
