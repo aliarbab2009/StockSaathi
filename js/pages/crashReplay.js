@@ -922,6 +922,40 @@ function buildMarkers(scenario) {
 
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
 
+// =============================================================================
+// GENERATING STAGE — replaces selector main during replay generation.
+// Renders 4 stage rows + a live feed area + progress bar. The caller
+// drives state transitions via advanceGeneratingStage(main, stageId, opts).
+// =============================================================================
+const GEN_STAGES = [
+  { id: "cache",  label: "Looking up cached replay" },
+  { id: "phaseA", label: "Identifying event + dates" },
+  { id: "phaseB", label: "Fetching real prices from Yahoo Finance" },
+  { id: "phaseC", label: "Writing narrative" },
+];
+function renderGeneratingStage(main, queryText) {
+  const safeQuery = escapeHtml(queryText);
+  main.innerHTML = `
+    <div class="generating-stage" id="gen-stage">
+      <h2>Generating <span class="gen-query">"${safeQuery}"</span></h2>
+      <p class="gen-sub">Building a real day-by-day replay from live market data. ~3-5 seconds.</p>
+      <div class="gen-stages">
+        ${GEN_STAGES.map((s) => `
+          <div class="gen-stage-row" data-stage="${s.id}" data-state="pending">
+            <span class="gen-stage-icon">${s.id === "cache" ? "?" : ""}</span>
+            <span class="gen-stage-label">${escapeHtml(s.label)}</span>
+            <span class="gen-stage-detail"></span>
+          </div>
+        `).join("")}
+      </div>
+      <div class="gen-feed" id="gen-feed">
+        <div class="gen-feed-empty" style="color:var(--muted); font-size:var(--text-xs);">Waiting for data…</div>
+      </div>
+      <div class="gen-progress"><div class="gen-progress-bar" id="gen-progress-bar"></div></div>
+    </div>
+  `;
+}
+
 // Extract title + description from in-flight Phase C JSON and patch
 // the live page DOM as those keys close. The partial text is mid-stream
 // JSON like `{"title":"COVID-19 Crash","startLabel":"Mar 11, 2020"...`
