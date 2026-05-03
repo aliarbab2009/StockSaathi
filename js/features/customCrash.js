@@ -197,20 +197,53 @@ async function queryHash(desc) {
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Prompt version — bump whenever PHASE1_PROMPT or SYSTEM_PROMPT changes
+// MEANINGFULLY (a new required field, a fundamentally different output
+// shape, a new colloquial map). Don't bump on comment edits or wording
+// tweaks — the cache is huge and re-running pre-gen costs LLM credits.
+//
+// On bump: pre-gen rows with the OLD version are silently rejected by
+// cacheReplayGet and the user falls through to live generation. Re-run
+// scripts/pregen-crashes.mjs after the bump (which uses this same constant)
+// to repopulate the top-10 with fresh-version rows. See PERF_AUDIT §4.
+//
+// Format: "v<major>.<YYYY-MM-DD>". Date helps debugging; major version
+// helps coordinate breaking changes across the script + live code.
+export const CURRENT_PROMPT_VERSION = "v1.2026-05-03";
+
 // Cross-user cache via /api/ai?op=cache-get|cache-put (Supabase-backed).
 // Popular prompts get generated once, ever — the first user pays the LLM
 // cost, everyone after that gets an instant hit on the same scenario, same
 // stable URL. Fire-and-forget write — the UI never blocks on cache I/O.
+//
+// Version-gated: hits whose _promptVersion differs from CURRENT_PROMPT_VERSION
+// fall through as cache misses. Lets us evolve prompts without tasting stale
+// scenarios from old versions. Pre-gen scenarios from scripts/pregen-crashes.mjs
+// stamp the same version so they hit; user-generated scenarios from a previous
+// version naturally age out as the user re-queries.
 async function cacheReplayGet(hash) {
   try {
     const res = await fetch(`/api/ai?op=cache-get&bucket=crash_replay&key=${encodeURIComponent(hash)}`);
     if (!res.ok) return null;
     const data = await res.json();
-    return data && data.hit ? data.payload : null;
+    if (!data || !data.hit) return null;
+    const payload = data.payload;
+    // Version gate. Missing _promptVersion = pre-pregen cache, treat as stale
+    // so the next request regenerates with the current prompt and stamps a
+    // version on the way back into cache. This converges naturally without
+    // a one-time migration.
+    if (payload?._promptVersion !== CURRENT_PROMPT_VERSION) return null;
+    return payload;
   } catch { return null; }
 }
 function cacheReplayPut(hash, description, payload) {
   try {
+    // Stamp the version onto the payload BEFORE writing so the next reader
+    // sees the version that produced it. Mutating in place is fine — caller
+    // returns the same object to renderReplay, which doesn't read the field.
+    if (payload && typeof payload === "object") {
+      payload._promptVersion = CURRENT_PROMPT_VERSION;
+    }
     fetch("/api/ai?op=cache-put", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
