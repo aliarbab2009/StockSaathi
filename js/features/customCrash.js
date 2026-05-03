@@ -1046,9 +1046,13 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
   // SSE stream consumer. Each chunk is a "data: {json}\n\n" line in
   // OpenAI-compat format. We accumulate the .delta.content fragments
   // into a single string. Fires the progress callback on first byte
-  // (perceived-time win) and on every chunk after (currently unused
-  // by the UI but available for future incremental parse).
-  const text = await _consumeSseStream(res, () => _progress("phase-c-streaming"));
+  // (perceived-time win) and on every chunk with the partial accumulated
+  // text (so the UI can extract title / description as JSON keys close).
+  const text = await _consumeSseStream(
+    res,
+    () => _progress("phase-c-streaming"),
+    (acc) => _progress("phase-c-chunk", acc)
+  );
   if (!text) throw new Error("The coach returned an empty answer. Try again.");
   const meta = parseJsonLoose(text);
   if (!meta) throw new Error("The coach's answer didn't parse cleanly. Try again or rephrase.");
@@ -1057,16 +1061,21 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
 
 // Read an SSE "data: ..." stream from /api/chat and accumulate the
 // concatenated content. Calls onFirstByte exactly once when the first
-// non-empty data: chunk is seen — this is the TTFT-equivalent signal
-// for perceived-time updates. Falls back gracefully if the response
-// turns out to be plain JSON (chat.js can't always honour stream=true
-// — when tools are present it silently disables streaming).
-async function _consumeSseStream(res, onFirstByte) {
+// non-empty data: chunk is seen, and onChunk(acc) on every chunk — the
+// caller can use the accumulated text to show real-time progress in the
+// UI (e.g. extract the JSON 'title' field as soon as it parses, render
+// a token counter, etc.). Falls back gracefully if the response turns
+// out to be plain JSON (chat.js can disable streaming when tools are
+// present).
+async function _consumeSseStream(res, onFirstByte, onChunk) {
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   // Non-streaming fallback: chat.js returned JSON despite stream:true.
   if (!ct.includes("text/event-stream")) {
     const body = await res.json();
-    return body?.choices?.[0]?.message?.content || "";
+    const text = body?.choices?.[0]?.message?.content || "";
+    if (text && typeof onFirstByte === "function") { try { onFirstByte(); } catch {} }
+    if (text && typeof onChunk === "function") { try { onChunk(text); } catch {} }
+    return text;
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -1080,6 +1089,7 @@ async function _consumeSseStream(res, onFirstByte) {
     // SSE framing: events separated by blank lines. Each event has
     // one or more "field: value" lines. We only care about "data:".
     let idx;
+    let accChanged = false;
     while ((idx = buf.indexOf("\n\n")) >= 0) {
       const event = buf.slice(0, idx);
       buf = buf.slice(idx + 2);
@@ -1096,11 +1106,15 @@ async function _consumeSseStream(res, onFirstByte) {
               try { onFirstByte && onFirstByte(); } catch {}
             }
             acc += delta;
+            accChanged = true;
           }
         } catch {
           // Ignore malformed chunks — the next one usually parses.
         }
       }
+    }
+    if (accChanged && typeof onChunk === "function") {
+      try { onChunk(acc); } catch {}
     }
   }
   return acc;

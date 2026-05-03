@@ -181,9 +181,21 @@ function renderSelector(main) {
       "phase-c":            "Building the day-by-day narrative…",
       "phase-c-streaming":  "Writing the story now…",
     };
-    const onProgress = (stage) => {
+    const onProgress = (stage, payload) => {
+      // Per-chunk: dispatch the partial accumulated text so the replay
+      // page can surface it as visible streaming progress (extract title
+      // / description as JSON keys close, render token counter, etc.).
+      // Replay page listens via "crash-scenario-streaming" event.
+      if (stage === "phase-c-chunk" && typeof payload === "string") {
+        try {
+          window.dispatchEvent(new CustomEvent("crash-scenario-streaming", {
+            detail: { partialText: payload }
+          }));
+        } catch {}
+        return;
+      }
       const msg = STAGES[stage];
-      if (msg) status.textContent = msg;
+      if (msg && status) status.textContent = msg;
     };
     // PERF: chart-first render. After Phase B (~1s in), customCrash gives
     // us a stub scenario with REAL chart data + placeholder narration. We
@@ -219,25 +231,48 @@ function renderSelector(main) {
       }
       registerCustomCrash(scenario);
       if (navigatedEarly) {
-        try {
-          window.dispatchEvent(new CustomEvent("crash-scenario-updated", {
-            detail: { scenarioId: scenario.id }
-          }));
-        } catch {}
+        // Defer the swap-in dispatch behind a frame so renderReplay's
+        // listener (attached during the hashchange-induced render) has
+        // definitely run. Without this defer, dispatchEvent can race
+        // ahead of listener registration when Phase C resolves quickly.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            try {
+              window.dispatchEvent(new CustomEvent("crash-scenario-updated", {
+                detail: { scenarioId: scenario.id }
+              }));
+            } catch {}
+          });
+        });
       } else {
         status.textContent = `Ready — ${scenario.title}. Loading replay…`;
         location.hash = "#/crash-replay/" + scenario.id;
       }
     } catch (e) {
       const msg = String(e?.message || "unknown error");
-      // Route quota / key errors straight through so the guidance survives.
-      // For anything else, soften with a rephrase hint.
+      // If we already navigated to the stub, the user is staring at a
+      // page that will never finish loading. Rewind to the selector and
+      // delete the stub from CUSTOM_CRASHES so it doesn't pollute future
+      // queries. Then show the error inline.
+      if (navigatedEarly && stubId) {
+        try {
+          // Evict the stub from in-memory + localStorage.
+          const all = JSON.parse(localStorage.getItem("ss.customCrashes.v1") || "{}");
+          delete all[stubId];
+          localStorage.setItem("ss.customCrashes.v1", JSON.stringify(all));
+        } catch {}
+        location.hash = "#/crash-replay";
+      }
       const isAuthIssue = /quota|key|rate-?limit/i.test(msg);
       const extra = isAuthIssue ? "" : " Try a different phrasing, or pick a curated replay below.";
-      status.innerHTML = `<span style="color:var(--negative);">${escapeHtml(msg)}${escapeHtml(extra)}</span>`;
-      button.disabled = false;
-      input.disabled = false;
-      button.textContent = "Generate replay";
+      if (status) {
+        status.innerHTML = `<span style="color:var(--negative);">${escapeHtml(msg)}${escapeHtml(extra)}</span>`;
+      }
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Generate replay";
+      }
+      if (input) input.disabled = false;
     }
   }
 
@@ -273,21 +308,34 @@ function renderSelector(main) {
 
 function renderReplay(main, scenario) {
   // PERF: chart-first render. If we navigated here with a partial scenario
-  // (Phase B done, Phase C still streaming), listen for the 'crash-scenario-
-  // updated' event that customCrash dispatches when Phase C completes, and
-  // re-render in place with the full scenario.
+  // (Phase B done, Phase C still streaming), wire two listeners:
+  //   1. 'crash-scenario-streaming' — fires on every SSE chunk with the
+  //      partial accumulated text. Extract title / description as soon
+  //      as those JSON keys close, render them in place so the user
+  //      sees the narrative being written word-by-word.
+  //   2. 'crash-scenario-updated' — fires when Phase C finishes, the
+  //      full scenario is registered, and we should re-render with the
+  //      complete data (key moments, etc.).
   if (scenario._partial) {
+    const onStreaming = (ev) => {
+      const partial = ev?.detail?.partialText;
+      if (typeof partial !== "string") return;
+      _patchPartialFromStream(main, partial);
+    };
     const onUpdated = (ev) => {
       if (ev?.detail?.scenarioId !== scenario.id) return;
       const fullScenario = getCrashById(scenario.id);
       if (fullScenario && !fullScenario._partial) {
+        window.removeEventListener("crash-scenario-streaming", onStreaming);
         window.removeEventListener("crash-scenario-updated", onUpdated);
         renderReplay(main, fullScenario);
       }
     };
+    window.addEventListener("crash-scenario-streaming", onStreaming);
     window.addEventListener("crash-scenario-updated", onUpdated);
-    // Also clear the listener if user navigates away.
+    // Also clear the listeners if user navigates away.
     window.addEventListener("hashchange", () => {
+      window.removeEventListener("crash-scenario-streaming", onStreaming);
       window.removeEventListener("crash-scenario-updated", onUpdated);
     }, { once: true });
   }
@@ -703,6 +751,59 @@ function buildMarkers(scenario) {
 }
 
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
+
+// Extract title + description from in-flight Phase C JSON and patch
+// the live page DOM as those keys close. The partial text is mid-stream
+// JSON like `{"title":"COVID-19 Crash","startLabel":"Mar 11, 2020"...`
+// We do NOT try to JSON.parse — it would fail until the closing brace.
+// Instead, simple string-search for the closed key; once we see the
+// terminating quote of the value, we render. Idempotent: re-renders
+// only when the captured text actually changes.
+const _streamPatchState = { lastTitle: "", lastDesc: "" };
+function _patchPartialFromStream(main, partialText) {
+  // Title: matches "title": "...something..."
+  const titleMatch = partialText.match(/"title"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (titleMatch && titleMatch[1] && titleMatch[1] !== _streamPatchState.lastTitle) {
+    _streamPatchState.lastTitle = titleMatch[1];
+    const titleEl = main.querySelector(".replay-title-inline strong");
+    if (titleEl) titleEl.textContent = _unescapeJsonStr(titleMatch[1]);
+  }
+  // Description: matches "description": "...long text..."
+  const descMatch = partialText.match(/"description"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (descMatch && descMatch[1] && descMatch[1] !== _streamPatchState.lastDesc) {
+    _streamPatchState.lastDesc = descMatch[1];
+    const body = main.querySelector(".replay-context-body");
+    if (body) {
+      const txt = _unescapeJsonStr(descMatch[1]);
+      // Replace just the pulse + paragraphs, leave the stats/timeline alone.
+      const pulse = body.querySelector(".replay-streaming-pulse");
+      const existingParas = body.querySelectorAll(".replay-context-para");
+      existingParas.forEach(p => p.remove());
+      const html = renderDescriptionParagraphs(txt);
+      if (pulse) {
+        pulse.insertAdjacentHTML("afterend", html);
+      } else {
+        body.insertAdjacentHTML("afterbegin", html);
+      }
+    }
+  }
+}
+function _unescapeJsonStr(s) {
+  // Minimal JSON string unescape: \\ \" \n \r \t \uXXXX
+  return String(s).replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})/g, (m, esc) => {
+    if (esc === "\"") return "\"";
+    if (esc === "\\") return "\\";
+    if (esc === "/") return "/";
+    if (esc === "b") return "\b";
+    if (esc === "f") return "\f";
+    if (esc === "n") return "\n";
+    if (esc === "r") return "\r";
+    if (esc === "t") return "\t";
+    if (esc[0] === "u") return String.fromCharCode(parseInt(esc.slice(1), 16));
+    return m;
+  });
+}
+
 
 // Render description as separate <p> tags on blank-line / double-newline
 // paragraph breaks. Tolerates single-paragraph inputs too.
