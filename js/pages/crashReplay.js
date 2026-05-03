@@ -742,11 +742,13 @@ function playReplayIntroAnimation(main, scenario) {
   const paraEls = main.querySelectorAll(".replay-context-para");
   const timelineRows = main.querySelectorAll(".replay-timeline-row");
 
-  // Snapshot final values + hide.
-  paraEls.forEach(p => {
+  // Snapshot final values + hide. Only the FIRST paragraph gets the
+  // caret — subsequent paragraphs are completely empty (no caret) so
+  // they don't visually compete with the active typing line.
+  paraEls.forEach((p, i) => {
     p.dataset.full = p.textContent;
     p.textContent = "";
-    p.classList.add("ss-typewriter-caret");
+    if (i === 0) p.classList.add("ss-typewriter-caret");
   });
   timelineRows.forEach(r => r.classList.add("ss-anim-hidden"));
   if (titleEl) titleEl.classList.add("ss-anim-hidden");
@@ -803,12 +805,17 @@ function playReplayIntroAnimation(main, scenario) {
     titleEl.classList.add("ss-anim-fade");
   }, 200));
 
-  // Typewriter (t=500ms).
+  // Typewriter (t=500ms). 8ms/char chunks of 2 chars at a time so a
+  // 200-char paragraph types out in ~800ms instead of 3.6s. Three
+  // paragraphs with 100ms inter-paragraph pause = ~3s total — feels
+  // alive without testing the user's patience. Caret moves with the
+  // active paragraph so only one cursor is visible at any moment.
   timers.push(setTimeout(() => {
     if (cancelled || !paraEls.length) return;
     let pIdx = 0, cIdx = 0;
-    const PER_CHAR = 18;
-    const PARA_PAUSE = 140;
+    const PER_TICK_MS = 8;
+    const CHARS_PER_TICK = 2;
+    const PARA_PAUSE = 100;
     const step = () => {
       if (cancelled) return;
       const p = paraEls[pIdx];
@@ -816,12 +823,14 @@ function playReplayIntroAnimation(main, scenario) {
       const full = p.dataset.full || "";
       if (cIdx <= full.length) {
         p.textContent = full.slice(0, cIdx);
-        cIdx++;
-        timers.push(setTimeout(step, PER_CHAR));
+        cIdx = Math.min(full.length + 1, cIdx + CHARS_PER_TICK);
+        timers.push(setTimeout(step, PER_TICK_MS));
       } else {
+        // Move caret from finished paragraph to next one.
         p.classList.remove("ss-typewriter-caret");
         pIdx++; cIdx = 0;
         if (paraEls[pIdx]) {
+          paraEls[pIdx].classList.add("ss-typewriter-caret");
           timers.push(setTimeout(step, PARA_PAUSE));
         } else {
           finish();
