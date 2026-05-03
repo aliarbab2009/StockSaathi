@@ -132,8 +132,15 @@ export function lineChart(values, {
   }
   const areaD = pathD + ` L${toX(values.length - 1)},${paddingTop + plotH} L${toX(0)},${paddingTop + plotH} Z`;
 
+  // Hotfix64d: explicit width/height + preserveAspectRatio="none" so the
+  // SVG actually stretches to fill its parent on mobile. Without these,
+  // iOS Safari falls back to the SVG's intrinsic 800-unit width when the
+  // parent has a fixed pixel height, overflowing the viewport. sparkline
+  // and stockChart both already do this — lineChart was the straggler
+  // and was the source of the portfolio hero "chart overflows to the
+  // right" report. dualLineChart fixed identically below.
   return `
-    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" aria-hidden="true">
+    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-hidden="true">
       ${showGrid ? `<g class="chart-grid">${gridLines}</g>` : ""}
       ${areaFill ? `<path d="${areaD}" fill="${color}" class="chart-area" opacity="0.14" />` : ""}
       <path d="${pathD.trim()}" class="chart-line" stroke="${color}" />
@@ -200,8 +207,11 @@ export function dualLineChart({ held, panic, height = 280, width = 800, currentI
   const heldEnd = held[held.length - 1];
   const panicEnd = panic[panic.length - 1];
 
+  // Hotfix64d: same SVG-fill fix as lineChart above — preserveAspectRatio
+  // none + explicit 100% width/height so the chart stretches to its
+  // parent on mobile instead of falling back to its 800-unit intrinsic.
   return `
-    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" aria-hidden="true">
+    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-hidden="true">
       <defs>
         <linearGradient id="heldFill" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="var(--positive)" stop-opacity="0.25" />
