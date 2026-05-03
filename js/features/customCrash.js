@@ -485,11 +485,15 @@ function cacheReplayPut(hash, description, payload) {
   } catch {}
 }
 
-export async function generateCustomCrash(description) {
-  // PERF — start of cold-start clock. cc:first-paint is fired by
-  // crashReplay.js after the chart renders; cc:total measures the wall
-  // clock between them. See PERF_AUDIT §1.
+export async function generateCustomCrash(description, opts = {}) {
+  // PERF — start of cold-start clock. cc:first-paint fires from crashReplay.js
+  // after the chart renders; cc:total measures the wall clock. See §1.
   _perfMark("cc:start");
+  // PERF_AUDIT #4: optional onProgress callback so the UI can update the
+  // status text as we move through phases — perceived-time win even though
+  // wall-clock is unchanged. Stages: cache-check, phase-a, phase-b, phase-c,
+  // phase-c-streaming.
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
 
   // 0. Hard content filter — reject adult / vulgar / slur queries BEFORE
   //    any LLM call. These would either burn Gemini credits on junk or
@@ -518,22 +522,16 @@ export async function generateCustomCrash(description) {
     } catch {}
   }
 
-  // 2. Supabase cross-user cache RACED against Phase A (PERF_AUDIT #2 + #3).
-  //    Two-step Phase A:
-  //      a) deterministic router (PERF #2) — instant, no fetch. If it
-  //         matches a known event we skip the LLM entirely.
-  //      b) LLM fallback for genuinely-novel queries.
-  //    Both run concurrently with the cache GET so the cache can short-
-  //    circuit either path. AbortController cancels the LLM if cache
-  //    wins. We DO NOT cache refusals.
+  // 2. Supabase cross-user cache RACED against Phase A (router → LLM).
+  //    See PERF_AUDIT items #2 (router) + #3 (race) + #4 (onProgress).
+  onProgress("cache-check");
   _perfMark("cc:cache-start");
   _perfMark("cc:phaseA-start");
+  onProgress("phase-a");
   const phaseAAbort = new AbortController();
   const cachePromise = cacheReplayGet(hash);
   const routerBracket = _routePhaseADeterministic(description);
-  // If the router matched, we don't need the LLM at all — skip the
-  // network round-trip entirely. Otherwise kick the LLM off in parallel
-  // with the cache lookup.
+  // Router hit → no LLM needed; otherwise LLM in parallel with cache.
   const llmPromise = routerBracket
     ? Promise.resolve(routerBracket)
     : callLlmForBracket(description, phaseAAbort.signal).catch(e => ({ _err: e }));
@@ -563,25 +561,18 @@ export async function generateCustomCrash(description) {
     return winner.value;
   }
 
-  // Either cache missed OR Phase A finished first. Wait for both to
-  // settle so we know the final state of the cache before committing
-  // to LLM/router output.
+  // Either cache missed OR Phase A finished first. Wait for both to settle.
   const [cached, bracketResult] = await Promise.all([cachePromise, llmPromise]);
   _perfMark("cc:cache-end");
   _perfMeasure("cc:cache-get", "cc:cache-start", "cc:cache-end");
   if (cached && cached.id && !cached.error) {
-    // Phase A won the race but cache also had a hit — prefer cache.
     phaseAAbort.abort();
     applyCacheHit(cached);
     return cached;
   }
 
-  // 3. Cache miss → THREE-PHASE grounded generation:
-  //    a) Phase A bracket from above (router OR LLM, may have errored)
-  //    b) Server fetches REAL daily closes from Yahoo for that range
-  //    c) LLM generates the replay JSON using the real numbers
+  // 3. Cache miss → continue with Phase A bracket (router OR LLM).
   let lastErr = null;
-
   const bracket = bracketResult && !bracketResult._err ? bracketResult : null;
   _perfMark("cc:phaseA-end");
   _perfMeasure("cc:phaseA", "cc:phaseA-start", "cc:phaseA-end");
@@ -604,10 +595,9 @@ export async function generateCustomCrash(description) {
   // for bank events, Nifty IT for tech events, etc.). The primary symbol
   // is the source of truth for the chart; companions are context-only
   // and don't block rendering if they fail.
-  // PERF_AUDIT #7: companions removed from the cold path. Previously
-  // we fetched 2-3 sector indices in parallel with the primary; the
-  // slowest companion (often ^NSEBANK) added 200-400 ms wall-clock for
-  // narrative colour the user rarely notices. Primary chart unaffected.
+  // PERF_AUDIT #7: companions removed from the cold path. Saves 200-400 ms
+  // by skipping sector-index fetches that only feed narrative colour.
+  onProgress("phase-b");
   const primary = bracket.symbol || "^NSEI";
   _perfMark("cc:phaseB-start");
   let history = await fetchHistory(primary, bracket.startIso, bracket.endIso).catch(() => null);
@@ -647,10 +637,11 @@ export async function generateCustomCrash(description) {
   }
 
   // Phase C: generate narrative with real data in context
+  onProgress("phase-c");
   for (const { profile, temperature } of ATTEMPTS) {
     try {
       _perfMark("cc:phaseC-start");
-      const meta = await callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile);
+      const meta = await callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile, onProgress);
       _perfMark("cc:phaseC-end");
       _perfMeasure("cc:phaseC", "cc:phaseC-start", "cc:phaseC-end");
       if (meta && meta.error === "not_a_crash") {
@@ -854,7 +845,8 @@ function pickCompanionSymbols(primary, description) {
   return Array.from(want).slice(0, 3);
 }
 
-async function callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile) {
+async function callLlmWithHistory(description, bracket, history, companionHistory, temperature, profile, onProgress) {
+  const _progress = typeof onProgress === "function" ? onProgress : () => {};
   // Compose a compact, LLM-readable table of the real daily closes.
   const closes = history.points.map(p => p.c);
   const dates = history.points.map(p => p.d);
@@ -897,6 +889,15 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
     }).join("\n");
   }
   const userMsg = `Event description from user: "${String(description).trim().slice(0, 400)}"\n\nREAL MARKET DATA (use these exact numbers, not your memory):\n${factsBlock}${companionBlock}`;
+  // PERF_AUDIT #4: Phase C uses SSE streaming so we can fire a progress
+  // callback the moment the upstream starts emitting tokens (TTFT,
+  // typically ~700 ms before the full response). The UI uses this to
+  // change the status text from "Building scenario..." to "Writing
+  // narrative..." — a perceived-time win even though wall-clock to
+  // valid JSON is unchanged. The accumulated text is parsed AFTER the
+  // stream ends with the same parseJsonLoose path as before; no
+  // incremental parsing (incremental would need a streaming JSON
+  // parser, which is out of scope for this PR).
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -917,6 +918,7 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
       max_tokens: 1200,
       response_format: { type: "json_object" },
       profile,
+      stream: true,
     }),
   });
   _perfServerTiming(res, "phaseC");
@@ -935,12 +937,67 @@ async function callLlmWithHistory(description, bracket, history, companionHistor
     }
     throw new Error("The coach couldn't build that one. Try a different phrasing or a curated replay.");
   }
-  const body = await res.json();
-  const text = body?.choices?.[0]?.message?.content;
+  // SSE stream consumer. Each chunk is a "data: {json}\n\n" line in
+  // OpenAI-compat format. We accumulate the .delta.content fragments
+  // into a single string. Fires the progress callback on first byte
+  // (perceived-time win) and on every chunk after (currently unused
+  // by the UI but available for future incremental parse).
+  const text = await _consumeSseStream(res, () => _progress("phase-c-streaming"));
   if (!text) throw new Error("The coach returned an empty answer. Try again.");
   const meta = parseJsonLoose(text);
   if (!meta) throw new Error("The coach's answer didn't parse cleanly. Try again or rephrase.");
   return meta;
+}
+
+// Read an SSE "data: ..." stream from /api/chat and accumulate the
+// concatenated content. Calls onFirstByte exactly once when the first
+// non-empty data: chunk is seen — this is the TTFT-equivalent signal
+// for perceived-time updates. Falls back gracefully if the response
+// turns out to be plain JSON (chat.js can't always honour stream=true
+// — when tools are present it silently disables streaming).
+async function _consumeSseStream(res, onFirstByte) {
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  // Non-streaming fallback: chat.js returned JSON despite stream:true.
+  if (!ct.includes("text/event-stream")) {
+    const body = await res.json();
+    return body?.choices?.[0]?.message?.content || "";
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let firstSent = false;
+  let buf = "";
+  let acc = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE framing: events separated by blank lines. Each event has
+    // one or more "field: value" lines. We only care about "data:".
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const event = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      for (const line of event.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const obj = JSON.parse(payload);
+          const delta = obj?.choices?.[0]?.delta?.content;
+          if (typeof delta === "string" && delta) {
+            if (!firstSent) {
+              firstSent = true;
+              try { onFirstByte && onFirstByte(); } catch {}
+            }
+            acc += delta;
+          }
+        } catch {
+          // Ignore malformed chunks — the next one usually parses.
+        }
+      }
+    }
+  }
+  return acc;
 }
 
 function validate(m) {
