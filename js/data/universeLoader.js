@@ -414,6 +414,504 @@ const SYMBOL_CANONICAL_OVERRIDES = {
   KIOCL:      "Metals",      // KIOCL — iron ore pellets, not petroleum
   SANDUMA:    "Metals",      // Sandur Manganese & Iron Ores — mining
   SOUTHWEST:  "Services",    // South West Pinnacle Exploration — mineral, not O&G
+
+  // =========================================================================
+  // HOTFIX67c (2026-05-03) — mass cleanup from 5-agent brute-force pass.
+  // User: "btw there's only one aviation sector in stocksaathi (INDIGO) ...
+  //        brute force for all other sectors using 5 claude opus 4.7 agents
+  //        no limits". 446 verified-in-universe overrides covering Aviation
+  //        (4), Financial Services (45), IT (16), Telecom (5+cables→Power
+  //        moved to Power section), Pharma (21), Healthcare (16), FMCG (38),
+  //        Consumer Durables (18), Auto (48), Power (37), Metals (24),
+  //        Real Estate (17), Cement (13), Chemicals (48), Textiles (31),
+  //        Construction (22), Infrastructure (13), Jewellery (5).
+  // Cross-agent conflicts resolved per Groww-aligned classification (e.g.
+  // POLYCAB/KEI/etc. → Power since most are electrical wires; specific
+  // telecom-only cables → Telecom).
+  // =========================================================================
+
+  // ── Aviation expansion (was: only INDIGO) ──────────────────────────
+  GLOBALVECT: "Aviation",         // Global Vectra Helicorp — helicopter charter
+  HAL:        "Aviation",         // Hindustan Aeronautics — defense aerospace
+  GMRAIRPORT: "Aviation",         // GMR Airports — Delhi/Hyderabad airports
+  UNIMECH:    "Aviation",         // Unimech Aerospace — aero-engine tooling
+
+  // ── Financial Services (AMCs, brokers, ratings, holdings) ──────────
+  HDFCAMC:      "Financial Services",   // HDFC Asset Management
+  "NAM-INDIA":  "Financial Services",   // Nippon Life India AMC
+  ABSLAMC:      "Financial Services",   // Aditya Birla Sun Life AMC
+  UTIAMC:       "Financial Services",   // UTI AMC
+  ANGELONE:     "Financial Services",   // Angel One — discount broker
+  MOTILALOFS:   "Financial Services",   // Motilal Oswal Financial Services
+  NUVAMA:       "Financial Services",   // Nuvama Wealth (ex-Edelweiss Wealth)
+  IIFLCAPS:     "Financial Services",   // IIFL Capital Services (broker)
+  "360ONE":     "Financial Services",   // 360 ONE WAM (ex-IIFL Wealth)
+  "5PAISA":     "Financial Services",   // 5Paisa Capital — discount broker
+  GEOJITFSL:    "Financial Services",   // Geojit Financial Services
+  SHAREINDIA:   "Financial Services",   // Share India Securities
+  MONARCH:      "Financial Services",   // Monarch Networth Capital
+  CHOICEIN:     "Financial Services",   // Choice International
+  PRUDENT:      "Financial Services",   // Prudent Corporate Advisory
+  RELIGARE:     "Financial Services",   // Religare Enterprises
+  EDELWEISS:    "Financial Services",   // Edelweiss Financial Services
+  JMFINANCIL:   "Financial Services",   // JM Financial
+  CRISIL:       "Financial Services",   // CRISIL — credit rating
+  ICRA:         "Financial Services",   // ICRA — credit rating
+  CARERATING:   "Financial Services",   // CARE Ratings
+  CAMS:         "Financial Services",   // Computer Age Mgmt Services (RTA)
+  KFINTECH:     "Financial Services",   // KFin Technologies (RTA)
+  PAYTM:        "Financial Services",   // One 97 Communications
+  POLICYBZR:    "Financial Services",   // PB Fintech (Policybazaar)
+  SBICARD:      "Financial Services",   // SBI Cards
+  BAJAJFINSV:   "Financial Services",   // Bajaj Finserv (holding)
+  ABCAPITAL:    "Financial Services",   // Aditya Birla Capital (holding)
+  CHOLAHLDNG:   "Financial Services",   // Cholamandalam Financial Holdings
+  MFSL:         "Financial Services",   // Max Financial Services (Max Life parent)
+  BAJAJHLDNG:   "Financial Services",   // Bajaj Holdings & Investment
+  TATAINVEST:   "Financial Services",   // Tata Investment Corp
+  MAHSCOOTER:   "Financial Services",   // Maharashtra Scooters (Bajaj invest holding)
+  BFINVEST:     "Financial Services",   // BF Investment (Bharat Forge holding)
+  JSWHL:        "Financial Services",   // JSW Holdings
+  KAMAHOLD:     "Financial Services",   // Kama Holdings (SRF parent)
+  PILANIINVS:   "Financial Services",   // Pilani Investment (Birla holding)
+  TVSHLTD:      "Financial Services",   // TVS Holdings
+  SUMMITSEC:    "Financial Services",   // Summit Securities (RPG investment)
+  BENGALASM:    "Financial Services",   // Bengal & Assam (CK Birla holding)
+  NIACL:        "Insurance",            // New India Assurance (was NBFC — actually insurer)
+  INDBANK:      "Financial Services",   // Indbank Merchant Banking (NOT a bank)
+  CRAMC:        "Financial Services",   // Canara Robeco AMC
+
+  // ── IT (mistagged as Other / Internet / Auto / Services) ───────────
+  NAUKRI:     "IT",         // Info Edge — Naukri/Zomato parent
+  FSL:        "IT",         // Firstsource Solutions — BPO/ITeS
+  ECLERX:     "IT",         // eClerx Services — analytics BPO
+  CMSINFO:    "IT",         // CMS Info Systems — IT-managed services
+  MATRIMONY:  "IT",         // Matrimony.com — internet portal
+  VAKRANGEE:  "IT",         // Vakrangee — IT-enabled e-gov
+  EBGNG:      "IT",         // GNG Electronics — refurbished IT hardware
+  RPTECH:     "IT",         // Rashi Peripherals — IT distribution
+  DLINKINDIA: "IT",         // D-Link India — networking hardware
+  NELCO:      "IT",         // NELCO — VSAT/satcom IT hardware
+  CONTROLPR:  "IT",         // Control Print — coding/marking IT hardware
+  SAKSOFT:    "IT",         // Saksoft — IT services
+  SUBEXLTD:   "IT",         // Subex — telecom analytics software
+  KSOLVES:    "IT",         // Ksolves India — IT services
+  NIITLTD:    "IT",         // NIIT — IT training/edtech
+  TVSELECT:   "IT",         // TVS Electronics — POS/IT peripherals (was Auto)
+
+  // ── Telecom (broadband cable distributors + telecom-only cables) ───
+  RCOM:       "Telecom",    // Reliance Communications (CIRP)
+  ONMOBILE:   "Telecom",    // OnMobile Global — telecom VAS
+  SUYOG:      "Telecom",    // Suyog Telematics — telecom tower infra
+  VINDHYATEL: "Telecom",    // Vindhya Telelinks — telecom cables
+  HATHWAY:    "Telecom",    // Hathway Cable & Datacom — broadband
+  GTPL:       "Telecom",    // GTPL Hathway — cable MSO
+  DEN:        "Telecom",    // Den Networks — cable MSO
+  SITINET:    "Telecom",    // Siti Networks — cable MSO
+  ORTEL:      "Telecom",    // Ortel Communications — cable broadband
+
+  // ── Power (cables, transformers, OEMs, renewables) ────────────────
+  POLYCAB:    "Power",      // Polycab — wires/cables/FMEG (mostly electrical)
+  KEI:        "Power",      // KEI Industries — wires/cables/EPC
+  RRKABEL:    "Power",      // R R Kabel — wires & cables
+  FINCABLES:  "Power",      // Finolex Cables — power/control cables
+  UNIVCABLES: "Power",      // Universal Cables — power cables (Birla group)
+  PARACABLES: "Power",      // Paramount Communications — power/telecom cables
+  BIRLACABLE: "Power",      // Birla Cable — power/optical cables
+  DYCL:       "Power",      // Dynamic Cables — power cables
+  PRECWIRE:   "Power",      // Precision Wires — winding wires
+  SUZLON:     "Power",      // Suzlon Energy — wind turbines
+  INOXWIND:   "Power",      // Inox Wind — wind turbines
+  INOXGREEN:  "Power",      // Inox Green — wind O&M services
+  BHEL:       "Power",      // Bharat Heavy Electricals
+  SIEMENS:    "Power",      // Siemens India — power/automation
+  ABB:        "Power",      // ABB India — electrification + motion
+  ENRIN:      "Power",      // Siemens Energy India — power eq spinoff
+  THERMAX:    "Power",      // Thermax — boilers/captive power
+  TDPOWERSYS: "Power",      // TD Power Systems — generators
+  TRITURBINE: "Power",      // Triveni Turbine — steam turbines
+  VOLTAMP:    "Power",      // Voltamp Transformers
+  TARIL:      "Power",      // Transformers And Rectifiers India
+  TARAPUR:    "Power",      // Tarapur Transformers
+  INDOTECH:   "Power",      // Indo Tech Transformers
+  ATLANTAELE: "Power",      // Atlanta Electricals — transformers
+  CGPOWER:    "Power",      // CG Power — transformers/motors
+  SCHNEIDER:  "Power",      // Schneider Electric Infra — switchgear
+  POWERINDIA: "Power",      // Hitachi Energy India — grid automation
+  APARINDS:   "Power",      // Apar Industries — transmission conductors
+  SKIPPER:    "Power",      // Skipper — transmission towers
+  RMC:        "Power",      // RMC Switchgears
+  VETO:       "Power",      // Veto Switchgears And Cables
+  QPOWER:     "Power",      // Quality Power Electrical Equipments
+  DIACABS:    "Power",      // Diamond Power Infrastructure — cables/conductors
+  BORORENEW:  "Power",      // Borosil Renewables — solar glass
+  EMMVEE:     "Power",      // Emmvee Photovoltaic — solar
+  SAATVIKGL:  "Power",      // Saatvik Green Energy — solar modules
+  UTLSOLAR:   "Power",      // Fujiyama Power — solar/inverters
+  VIKRAMSOLR: "Power",      // Vikram Solar — modules
+  WAAREERTL:  "Power",      // Waaree Renewable Technologies
+  WEBELSOLAR: "Power",      // Websol Energy — solar cells
+  SWSOLAR:    "Power",      // Sterling and Wilson Renewable — solar EPC
+  TECHNOE:    "Power",      // Techno Electric — power T&D EPC
+  POWERMECH:  "Power",      // Power Mech Projects — power EPC + O&M
+  ELECON:     "Power",      // Elecon Engineering — gears for power plants
+  HBLENGINE:  "Power",      // HBL Engineering — industrial batteries
+  URJA:       "Power",      // Urja Global — solar/power
+
+  // ── Pharma (drugs/APIs) ────────────────────────────────────────────
+  BLUEJET:    "Pharma",     // Blue Jet Healthcare — APIs/intermediates
+  SHILPAMED:  "Pharma",     // Shilpa Medicare — oncology APIs
+  BAJAJHCARE: "Pharma",     // Bajaj Healthcare — APIs
+  SAKAR:      "Pharma",     // Sakar Healthcare — formulations
+  AHCL:       "Pharma",     // Anlon Healthcare — pharma intermediates
+  AMANTA:     "Pharma",     // Amanta Healthcare — sterile injectables
+  TTKHLTCARE: "Pharma",     // TTK Healthcare — OTC pharma
+  SANOFICONR: "Pharma",     // Sanofi Consumer Healthcare
+  HIKAL:      "Pharma",     // Hikal — APIs + crop protection
+  LASA:       "Pharma",     // Lasa Supergenerics — vet APIs
+  DCAL:       "Pharma",     // Dishman Carbogen Amcis — CRAMS
+  ALEMBICLTD: "Pharma",     // Alembic Limited — pharma holding
+  NECLIFE:    "Pharma",     // Nectar Lifesciences — APIs + formulations
+  VIVIMEDLAB: "Pharma",     // Vivimed Labs — APIs + specialty
+  LYKALABS:   "Pharma",     // Lyka Labs — sterile injectables
+  WANBURY:    "Pharma",     // Wanbury — APIs + formulations
+  SHIVALIK:   "Pharma",     // Shivalik Rasayan — pharma intermediates
+  GUFICBIO:   "Pharma",     // Gufic Biosciences — sterile injectables
+  GUJTHEM:    "Pharma",     // Gujarat Themis Biosyn — pharma fermentation
+  THEMISMED:  "Pharma",     // Themis Medicare — formulations
+  "3BBLACKBIO":"Pharma",    // 3B Blackbio Dx — molecular diagnostics
+
+  // ── Healthcare (hospitals + diagnostics + medical equipment) ──────
+  MEDIASSIST: "Healthcare", // Medi Assist Healthcare — TPA services
+  MEDANTA:    "Healthcare", // Global Health = Medanta hospitals
+  PARKHOSPS:  "Healthcare", // Park Medi World — multi-specialty hospitals
+  SHALBY:     "Healthcare", // Shalby — orthopaedic hospital chain
+  ARTEMISMED: "Healthcare", // Artemis Medicare — Gurgaon hospital
+  GAUDIUMIVF: "Healthcare", // Gaudium IVF — fertility clinics
+  AGARWALEYE: "Healthcare", // Dr. Agarwal's Health Care — eye hospitals
+  MEDPLUS:    "Healthcare", // MedPlus — pharmacy retail
+  ENTERO:     "Healthcare", // Entero Healthcare — pharma distribution
+  LALPATHLAB: "Healthcare", // Dr Lal PathLabs — diagnostics
+  THYROCARE:  "Healthcare", // Thyrocare — diagnostics
+  VIMTALABS:  "Healthcare", // Vimta Labs — clinical research
+  LENSKART:   "Healthcare", // Lenskart — eyewear (Groww: medical equipment)
+  LAXMIDENTL: "Healthcare", // Laxmi Dental — dental implants
+  TARSONS:    "Healthcare", // Tarsons Products — labware
+  SYNGENE:    "Healthcare", // Syngene — CRO for pharma
+
+  // ── FMCG (food/snack/beverage/QSR/stationery/personal care) ────────
+  GLOBUSSPR:  "FMCG",       // Globus Spirits — distillery
+  GMBREW:     "FMCG",       // GM Breweries — distillery
+  ASALCBR:    "FMCG",       // Associated Alcohols & Breweries
+  RKDL:       "FMCG",       // Ravi Kumar Distilleries
+  JUBLFOOD:   "FMCG",       // Jubilant Foodworks — Domino's India
+  DEVYANI:    "FMCG",       // Devyani International — KFC/Pizza Hut
+  WESTLIFE:   "FMCG",       // Westlife Foodworld — McDonald's W&S
+  SAPPHIRE:   "FMCG",       // Sapphire Foods — KFC/Pizza Hut
+  RBA:        "FMCG",       // Restaurant Brands Asia — Burger King
+  HATSUN:     "FMCG",       // Hatsun Agro — dairy
+  DODLA:      "FMCG",       // Dodla Dairy
+  PARAGMILK:  "FMCG",       // Parag Milk Foods — Gowardhan
+  KWIL:       "FMCG",       // Kwality Wall's — ice cream
+  VADILALIND: "FMCG",       // Vadilal Industries — ice cream
+  GRMOVER:    "FMCG",       // GRM Overseas — basmati rice
+  DIAMONDYD:  "FMCG",       // Prataap Snacks — Yellow Diamond
+  HMAAGRO:    "FMCG",       // HMA Agro — frozen meat
+  APEX:       "FMCG",       // Apex Frozen Foods — shrimp
+  TASTYBITE:  "FMCG",       // Tasty Bite Eatables — ready meals
+  VENKEYS:    "FMCG",       // Venky's — poultry
+  HAWKINCOOK: "FMCG",       // Hawkins Cookers — kitchen
+  FOODSIN:    "FMCG",       // Foods & Inns — fruit/veg processing
+  HNDFDS:     "FMCG",       // Hindustan Foods — contract FMCG
+  SUNDROP:    "FMCG",       // Sundrop Brands — edible oils
+  GOLDENTOBC: "FMCG",       // Golden Tobacco — cigarettes
+  KOKUYOCMLN: "FMCG",       // Kokuyo Camlin — stationery
+  LINC:       "FMCG",       // Linc — pens/stationery
+  FLAIR:      "FMCG",       // Flair Writing — pens/stationery
+  BAJAJHIND:  "FMCG",       // Bajaj Hindusthan — sugar
+  DHAMPURSUG: "FMCG",       // Dhampur Sugar Mills
+  DALMIASUG:  "FMCG",       // Dalmia Bharat Sugar
+  VSTIND:     "FMCG",       // VST Industries — cigarettes
+  MCLEODRUSS: "FMCG",       // McLeod Russel — tea
+  JAYSREETEA: "FMCG",       // Jayshree Tea
+  BAJAJCON:   "FMCG",       // Bajaj Consumer Care — Almond Drops
+  EVEREADY:   "FMCG",       // Eveready — batteries
+  NIPPOBATRY: "FMCG",       // Indo-National (Nippo batteries)
+  SULA:       "FMCG",       // Sula Vineyards — wine
+
+  // ── Consumer Durables (appliances, ceramics, sanitaryware, watches) ─
+  TTKPRESTIG: "Consumer Durables",   // TTK Prestige — pressure cookers
+  BUTTERFLY:  "Consumer Durables",   // Butterfly Gandhimathi — kitchen
+  SYMPHONY:   "Consumer Durables",   // Symphony — air coolers
+  ORIENTELEC: "Consumer Durables",   // Orient Electric — fans/lighting
+  TIMEX:      "Consumer Durables",   // Timex Group India — watches
+  SOMANYCERA: "Consumer Durables",   // Somany Ceramics — tiles
+  HINDWAREAP: "Consumer Durables",   // Hindware — bath fittings
+  ASIANTILES: "Consumer Durables",   // Asian Granito — vitrified tiles
+  ICEMAKE:    "Consumer Durables",   // Ice Make Refrigeration
+  LAOPALA:    "Consumer Durables",   // La Opala RG — opal glassware
+  BOROLTD:    "Consumer Durables",   // Borosil Limited — glassware
+  HITECHCORP: "Consumer Durables",   // Hitech Corporation — packaging
+  NILKAMAL:   "Consumer Durables",   // Nilkamal — plastic furniture
+  MIRCELECTR: "Consumer Durables",   // MIRC Electronics — Onida
+  BPL:        "Consumer Durables",   // BPL — appliances
+  SINGERIND:  "Consumer Durables",   // Singer India — sewing/appliances
+  CARYSIL:    "Consumer Durables",   // Carysil — quartz sinks
+  EPACK:      "Consumer Durables",   // EPACK Durable — air conditioners
+
+  // ── Auto (OEMs, ancillaries, tyres, bearings, forgings) ───────────
+  ASHOKLEY:   "Auto",       // Ashok Leyland — CV/truck OEM
+  TMCV:       "Auto",       // Tata Motors CV (post-demerger)
+  ESCORTS:    "Auto",       // Escorts Kubota — tractors
+  SWARAJENG:  "Auto",       // Swaraj Engines — tractor engines
+  VSTTILLERS: "Auto",       // VST Tillers Tractors
+  GREAVESCOT: "Auto",       // Greaves Cotton — engines + 3W
+  HMT:        "Auto",       // HMT Limited — tractors heritage
+  ATLASCYCLE: "Auto",       // Atlas Cycles — bicycles
+  KIRLOSENG:  "Auto",       // Kirloskar Oil Engines — diesel/auto
+  SUNDRMFAST: "Auto",       // Sundram Fasteners — auto fasteners
+  SUPRAJIT:   "Auto",       // Suprajit Engineering — control cables
+  SUBROS:     "Auto",       // Subros — auto AC
+  TIMKEN:     "Auto",       // Timken India — bearings
+  MMFL:       "Auto",       // MM Forgings — CV components
+  HARSHA:     "Auto",       // Harsha Engineers — bearing cages
+  PAVNAIND:   "Auto",       // Pavna Industries — locksets
+  HITECHGEAR: "Auto",       // The Hi-Tech Gears
+  BHARATGEAR: "Auto",       // Bharat Gears
+  BHARATSE:   "Auto",       // Bharat Seats — Maruti supplier
+  LUMAXIND:   "Auto",       // Lumax Industries — auto lighting
+  RAJRATAN:   "Auto",       // Rajratan Global Wire — bead wire
+  ZFSTEERING: "Auto",       // ZF Steering Gear
+  GNA:        "Auto",       // GNA Axles
+  UNIPARTS:   "Auto",       // Uniparts India — precision auto
+  WHEELS:     "Auto",       // Wheels India — TVS-group wheels
+  SANDHAR:    "Auto",       // Sandhar Technologies — locks/mirrors
+  CARRARO:    "Auto",       // Carraro India — drivetrain
+  FMGOETZE:   "Auto",       // Federal-Mogul Goetze — pistons
+  JTEKTINDIA: "Auto",       // Jtekt India — steering systems
+  GOODYEAR:   "Auto",       // Goodyear India — tyres
+  MUNJALSHOW: "Auto",       // Munjal Showa — shock absorbers
+  ROLEXRINGS: "Auto",       // Rolex Rings — forged bearing rings
+  NRBBEARING: "Auto",       // NRB Bearing — needle bearings
+  MENONBE:    "Auto",       // Menon Bearings — bushings
+  SHANTIGEAR: "Auto",       // Shanthi Gears — Murugappa-group gears
+  SJS:        "Auto",       // SJS Enterprises — auto aesthetics
+  LGBBROSLTD: "Auto",       // LG Balakrishnan — Rolon chains
+  PRECAM:     "Auto",       // Precision Camshafts
+  BALUFORGE:  "Auto",       // Balu Forge — crankshafts/forgings
+  HAPPYFORGE: "Auto",       // Happy Forgings — heavy CV forgings
+  RML:        "Auto",       // Rane Madras — steering / auto components
+  UCAL:       "Auto",       // UCAL — fuel injection
+  STERTOOLS:  "Auto",       // Sterling Tools — auto fasteners
+  SINTERCOM:  "Auto",       // Sintercom India — sintered auto parts
+  HINDCOMPOS: "Auto",       // Hindustan Composites — clutch/brake friction
+  KROSS:      "Auto",       // Kross — trailer axles/forgings
+  MAYURUNIQ:  "Auto",       // Mayur Uniquoters — synthetic leather
+  LANDMARK:   "Auto",       // Landmark Cars — premium auto dealer
+
+  // ── Metals (pipes, alloys, mining, ferro alloys) ──────────────────
+  APLAPOLLO:  "Metals",     // APL Apollo Tubes — #1 steel tubes
+  WELCORP:    "Metals",     // Welspun Corp — line pipes
+  MANINDS:    "Metals",     // Man Industries — large-dia pipes
+  MAHSEAMLES: "Metals",     // Maharashtra Seamless — seamless pipes
+  JINDALSAW:  "Metals",     // Jindal SAW — pipes/tubes
+  JTLIND:     "Metals",     // JTL Industries — ERW steel tubes
+  ELECTCAST:  "Metals",     // Electrosteel Castings — DI pipes
+  SHYAMMETL:  "Metals",     // Shyam Metalics — sponge iron/billets
+  MIDHANI:    "Metals",     // Mishra Dhatu Nigam — special metals
+  MAITHANALL: "Metals",     // Maithan Alloys — ferro alloys
+  SHAHALLOYS: "Metals",     // Shah Alloys — stainless steel
+  GPIL:       "Metals",     // Godawari Power & Ispat — sponge iron
+  KIRLFER:    "Metals",     // Kirloskar Ferrous — pig iron
+  ALICON:     "Metals",     // Alicon Castalloy — aluminium die-castings
+  GRAPHITE:   "Metals",     // Graphite India — graphite electrodes
+  BANSALWIRE: "Metals",     // Bansal Wire — steel wires
+  BHARATWIRE: "Metals",     // Bharat Wire Ropes
+  RAMRAT:     "Metals",     // Ram Ratna Wires — copper winding wire
+  MUKANDLTD:  "Metals",     // Mukand — alloy steel
+  TIRUPATIFL: "Metals",     // Tirupati Forge
+  HEXATRADEX: "Metals",     // Hexa Tradex — Jindal stainless trading
+  NELCAST:    "Metals",     // Nelcast — iron castings
+  ASHOKAMET:  "Metals",     // Ashoka Metcast — castings
+  MODISONLTD: "Metals",     // Modison — copper contacts
+
+  // ── Real Estate (developers + commercial workspaces) ──────────────
+  ABREL:      "Real Estate",   // Aditya Birla Real Estate
+  HUBTOWN:    "Real Estate",   // Hubtown — Mumbai realty
+  ARVSMART:   "Real Estate",   // Arvind SmartSpaces — Ahmedabad
+  OMAXE:      "Real Estate",   // Omaxe — NCR builder
+  ARIHANTSUP: "Real Estate",   // Arihant Superstructures
+  PURVA:      "Real Estate",   // Puravankara
+  RUSTOMJEE:  "Real Estate",   // Keystone Realtors (Rustomjee)
+  KALPATARU:  "Real Estate",   // Kalpataru — Mumbai realty
+  SUNTECK:    "Real Estate",   // Sunteck Realty
+  TARC:       "Real Estate",   // TARC (ex-Anant Raj demerger)
+  PENINLAND:  "Real Estate",   // Peninsula Land
+  NIRLON:     "Real Estate",   // Nirlon — Mumbai office park
+  HLVLTD:     "Real Estate",   // HLV (ex-Leela hospitality)
+  GEECEE:     "Real Estate",   // GeeCee Ventures
+  AGIIL:      "Real Estate",   // AGI Infra — Jalandhar realty
+  EFCIL:      "Real Estate",   // EFC — flexible workspaces
+  PVP:        "Real Estate",   // PVP Ventures — Chennai realty
+
+  // ── Cement & Construction Materials (incl. tiles, sanitaryware) ────
+  KCP:         "Cement",   // KCP — Andhra cement
+  EUROBOND:    "Cement",   // Euro Panel Products — sandwich panels
+  HARDWYN:     "Cement",   // Hardwyn India — architectural hardware
+  POKARNA:     "Cement",   // Pokarna — granite + Quantra quartz
+  MADHAV:      "Cement",   // Madhav Marbles & Granites
+  BEARDSELL:   "Cement",   // Beardsell — EPS thermal panels
+  EXXARO:      "Cement",   // Exxaro Tiles
+  NITCO:       "Cement",   // Nitco — tiles
+  REGENCERAM:  "Cement",   // Regency Ceramics
+  MURUDCERA:   "Cement",   // Murudeshwar Ceramics
+  LEXUS:       "Cement",   // Lexus Granito
+  ORIENTALTL:  "Cement",   // Oriental Trimex — marble/granite
+  ORIENTBELL:  "Cement",   // Orient Bell — tiles
+
+  // ── Chemicals (specialty + bulk + petrochem + dyes/pigments + agrochem) ──
+  VINATIORGA:  "Chemicals",  // Vinati Organics — ATBS specialty
+  VALIANTORG:  "Chemicals",  // Valiant Organics
+  MOL:         "Chemicals",  // Meghmani Organics
+  CHEMPLASTS:  "Chemicals",  // Chemplast Sanmar — PVC
+  EPIGRAL:     "Chemicals",  // Epigral (ex-Meghmani Finechem)
+  BHARATRAS:   "Chemicals",  // Bharat Rasayan — agrochem
+  NOCIL:       "Chemicals",  // NOCIL — rubber chemicals
+  SADHNANIQ:   "Chemicals",  // Sadhana Nitrochem
+  INDOAMIN:    "Chemicals",  // Indo Amines — specialty amines
+  BLACKROSE:   "Chemicals",  // Black Rose Industries
+  PAUSHAKLTD:  "Chemicals",  // Paushak — phosgene specialty
+  TRANSPEK:    "Chemicals",  // Transpek Industry — acid chlorides
+  DAICHI:      "Chemicals",  // Dai-Ichi Karkaria — surfactants
+  GULPOLY:     "Chemicals",  // Gulshan Polyols — sorbitol
+  NGLFINE:     "Chemicals",  // NGL Fine-Chem
+  CAMLINFINE:  "Chemicals",  // Camlin Fine Sciences — antioxidants
+  MANORG:      "Chemicals",  // Mangalam Organics — terpene
+  DCW:         "Chemicals",  // DCW — caustic soda, PVC
+  TNPETRO:     "Chemicals",  // Tamilnadu Petroproducts — LAB
+  ULTRAMAR:    "Chemicals",  // Ultramarine & Pigments
+  PARASPETRO:  "Chemicals",  // Paras Petrofils — specialty petro chem
+  AKSHARCHEM:  "Chemicals",  // AksharChem — vinyl sulphone
+  PILITA:      "Chemicals",  // PIL Italica Lifestyle — pigments+plastics
+  ASAHISONG:   "Chemicals",  // Asahi Songwon Colors
+  DICIND:      "Chemicals",  // DIC India — printing inks
+  POLYPLEX:    "Chemicals",  // Polyplex — PET films
+  DYNPRO:      "Chemicals",  // Dynemic Products — food colors
+  PASUPTAC:    "Chemicals",  // Pasupati Acrylon — acrylic fibre
+  VARDMNPOLY:  "Chemicals",  // Vardhman Acrylics
+  OCCLLTD:     "Chemicals",  // OCCL — Oriental Carbon
+  PODDARMENT:  "Chemicals",  // Poddar Pigments — masterbatches
+  KANCHI:      "Chemicals",  // Kanchi Karpooram — camphor
+  RAMAPHO:     "Chemicals",  // Rama Phosphates — fertilizers
+  KRISHANA:    "Chemicals",  // Krishana Phoschem
+  GRAUWEIL:    "Chemicals",  // Grauer & Weil — surface finishing
+  REGAAL:      "Chemicals",  // Regaal Resources — maize starch
+  SANSTAR:     "Chemicals",  // Sanstar — maize starch
+  VIDHIING:    "Chemicals",  // Vidhi Specialty Food Ingredients
+  HALDER:      "Chemicals",  // Halder Venture — agri/chem
+  FAIRCHEMOR:  "Chemicals",  // Fairchem Organics — oleochem
+  ASTEC:       "Chemicals",  // Astec LifeSciences — agrochem
+  AVTNPL:      "Chemicals",  // AVT Natural Products
+  DBOL:        "Chemicals",  // Dhampur Bio Organics
+  GSPCROP:     "Chemicals",  // GSP Crop Science
+  DHARMAJ:     "Chemicals",  // Dharmaj Crop Guard — agrochem
+  IGCL:        "Chemicals",  // Indogulf Cropsciences
+  EMSLIMITED:  "Chemicals",  // EMS Limited — water/sewage chem + EPC
+  SHK:         "Chemicals",  // S H Kelkar — fragrances
+  RPEL:        "Chemicals",  // Raghav Productivity Enhancers — refractories
+
+  // ── Textiles (apparel, fabric, footwear, yarn) ─────────────────────
+  TRIDENT:    "Textiles",   // Trident — terry towels/yarn
+  VTL:        "Textiles",   // Vardhman Textiles — yarn/fabric
+  KPRMILL:    "Textiles",   // K.P.R. Mill — yarn + garments
+  RUPA:       "Textiles",   // Rupa & Company — innerwear
+  ARVIND:     "Textiles",   // Arvind — denim/woven
+  PAGEIND:    "Textiles",   // Page Industries — Jockey
+  GOCOLORS:   "Textiles",   // Go Fashion — Go Colors apparel
+  METROBRAND: "Textiles",   // Metro Brands — footwear
+  RAYMOND:    "Textiles",   // Raymond — fabric (post-demerger)
+  RAYMONDLSL: "Textiles",   // Raymond Lifestyle — apparel/retail
+  KKCL:       "Textiles",   // Kewal Kiran — Killer Jeans
+  VIPCLOTHNG: "Textiles",   // VIP Clothing — innerwear
+  LIBERTSHOE: "Textiles",   // Liberty Shoes — footwear
+  MIRZAINT:   "Textiles",   // Mirza International — Red Tape footwear
+  ZODIACLOTH: "Textiles",   // Zodiac Clothing — formal shirts
+  GOKEX:      "Textiles",   // Gokaldas Exports — apparel exporter
+  HIMATSEIDE: "Textiles",   // Himatsingka Seide — bedlinen
+  BANSWRAS:   "Textiles",   // Banswara Syntex — yarn/fabric
+  SANGAMIND:  "Textiles",   // Sangam — yarn/fabric
+  ICIL:       "Textiles",   // Indo Count — bedlinen
+  KITEX:      "Textiles",   // Kitex Garments — infant wear
+  FILATEX:    "Textiles",   // Filatex India — polyester yarn
+  RSWM:       "Textiles",   // RSWM (LNJ Bhilwara) — yarn
+  BSL:        "Textiles",   // BSL Limited — suiting
+  BOMDYEING:  "Textiles",   // Bombay Dyeing
+  CENTENKA:   "Textiles",   // Century Enka — nylon yarn
+  NITINSPIN:  "Textiles",   // Nitin Spinners
+  PRECOT:     "Textiles",   // Precot — cotton yarn
+  CHEVIOT:    "Textiles",   // Cheviot — jute
+  LOVABLE:    "Textiles",   // Lovable Lingerie
+  KHADIM:     "Textiles",   // Khadim India — footwear
+
+  // ── Construction (capital goods + EPC) ────────────────────────────
+  OMINFRAL:   "Construction",   // Om Infra — hydro mech EPC
+  TARMAT:     "Construction",   // Tarmat — runway/road construction
+  UNIVASTU:   "Construction",   // Univastu India
+  CEIGALL:    "Construction",   // Ceigall India — road EPC
+  SEPC:       "Construction",   // SEPC Limited — EPC
+  USK:        "Construction",   // Udayshivakumar Infra — Karnataka EPC
+  BLKASHYAP:  "Construction",   // B. L. Kashyap — civil
+  SHANKARA:   "Construction",   // Shankara Building Products
+  JYOTISTRUC: "Construction",   // Jyoti Structures — transmission EPC
+  SPMLINFRA:  "Construction",   // SPML Infra — water EPC
+  VPRPL:      "Construction",   // Vishnu Prakash R Punglia — water/road
+  TRF:        "Construction",   // TRF — material handling
+  TIL:        "Construction",   // TIL — material handling cranes
+  WPIL:       "Construction",   // WPIL — pumps for water/EPC
+  VESUVIUS:   "Construction",   // Vesuvius India — refractories
+  IFGLEXPOR:  "Construction",   // IFGL Refractories
+  LMW:        "Construction",   // LMW — textile machinery
+  SALZERELEC: "Construction",   // Salzer Electronics — switchgear
+  ELECTHERM:  "Construction",   // Electrotherm — induction furnaces
+  CENTUM:     "Construction",   // Centum Electronics — defence/aero
+  AVANTEL:    "Construction",   // Avantel — defence comms
+  RISHABH:    "Construction",   // Rishabh Instruments — test/measure
+
+  // ── Infrastructure (logistics + roads + waste + dredging) ─────────
+  BRNL:       "Infrastructure", // Bharat Road Network — road BOT
+  GAYAHWS:    "Infrastructure", // Gayatri Highways
+  NOIDATOLL:  "Infrastructure", // Noida Toll Bridge — DND BOT
+  NAVKARCORP: "Infrastructure", // Navkar Corp — CFS logistics
+  GATEWAY:    "Infrastructure", // Gateway Distriparks
+  TCI:        "Infrastructure", // Transport Corporation of India
+  WCIL:       "Infrastructure", // Western Carriers India
+  GLOTTIS:    "Infrastructure", // Glottis — freight forwarding
+  ARSHIYA:    "Infrastructure", // Arshiya — FTWZ logistics
+  AWHCL:      "Infrastructure", // Antony Waste Handling
+  SIGNPOST:   "Infrastructure", // Signpost India — outdoor media infra
+  SEAMECLTD:  "Infrastructure", // Seamec — offshore support vessels
+  DREDGECORP: "Infrastructure", // Dredging Corporation of India
+
+  // ── Industrial pipes (Infrastructure default per Groww) ───────────
+  PRINCEPIPE: "Infrastructure", // Prince Pipes
+  APOLLOPIPE: "Infrastructure", // Apollo Pipes
+  HITECH:     "Infrastructure", // Hi-Tech Pipes
+  INDIANHUME: "Infrastructure", // Indian Hume Pipe
+  VENUSPIPES: "Infrastructure", // Venus Pipes & Tubes
+  TIJARIA:    "Infrastructure", // Tijaria Polypipes
+  TEXMOPIPES: "Infrastructure", // Texmo Pipes
+  SCODATUBES: "Infrastructure", // Scoda Tubes
+  GANDHITUBE: "Infrastructure", // Gandhi Special Tubes
+  EKC:        "Infrastructure", // Everest Kanto Cylinder
+  KRITI:      "Infrastructure", // Kriti Industries — PVC
+  PPL:        "Infrastructure", // Prakash Pipes
+
+  // ── Jewellery (Diamond, Gems & Jewellery per Groww) ────────────────
+  TBZ:         "Jewellery",  // Tribhovandas Bhimji Zaveri
+  SHANTIGOLD:  "Jewellery",  // Shanti Gold International
+  SHRINGARMS:  "Jewellery",  // Shringar House of Mangalsutra
+  DPABHUSHAN:  "Jewellery",  // D. P. Abhushan
+  LGHL:        "Jewellery",  // Laxmi Goldorna House
 };
 
 /**
