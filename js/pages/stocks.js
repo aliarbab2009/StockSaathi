@@ -664,7 +664,7 @@ export function renderStocks(main) {
             badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
           } else if (q.source && q.source !== "mf-static" && q.source !== "synthetic") {
             badge = q.stale
-              ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Stale feed">DELAYED</span>`
+              ? _stalenessBadge(q, getInstrument(sym))
               : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
           } else {
             badge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
@@ -739,7 +739,7 @@ export function renderStocks(main) {
         liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
       } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
         liveBadge = quote.stale
-          ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;">DELAYED</span>`
+          ? _stalenessBadge(quote, inst)
           : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
       } else {
         liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
@@ -1293,7 +1293,7 @@ export function renderStocks(main) {
                 liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
               } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
                 liveBadge = quote.stale
-                  ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;">DELAYED</span>`
+                  ? _stalenessBadge(quote, inst)
                   : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
               } else {
                 liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
@@ -2147,7 +2147,7 @@ function renderStockCardBody(inst, state, wlSet, opts = null) {
       liveBadge = `<span class="pill stock-card-ms-pill market-status" tabindex="0" data-ms-state="${ms.state}" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
     } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
       liveBadge = quote.stale
-        ? `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;">DELAYED</span>`
+        ? _stalenessBadge(quote, inst)
         : `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
     } else {
       liveBadge = `<span class="pill" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim);" title="Live feed syncing">SYNCING</span>`;
@@ -2306,7 +2306,7 @@ function renderStockTileBody(inst, state, wlSet, opts = null) {
       liveBadge = `<span class="pill stock-card-ms-pill market-status" tabindex="0" data-ms-state="${ms.state}" style="font-size: 8px; padding: 0 5px; background: var(--bg-subtle); color: var(--text-dim);">${lbl}</span>`;
     } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
       liveBadge = quote.stale
-        ? `<span class="pill pill-yellow" style="font-size: 8px; padding: 0 5px;">DELAYED</span>`
+        ? _stalenessBadge(quote, inst, { size: "mini" })
         : `<span class="pill pill-green" style="font-size: 8px; padding: 0 5px;" title="NSE · Live">LIVE</span>`;
     } else {
       liveBadge = `<span class="pill" style="font-size: 8px; padding: 0 5px; background: var(--bg-subtle); color: var(--text-dim);" title="Syncing">SYNCING</span>`;
