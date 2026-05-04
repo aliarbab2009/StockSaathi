@@ -2097,11 +2097,10 @@ function renderStockCard(inst, state, wlSet) {
     badge = `<span class="pill stock-card-ms-pill market-status" tabindex="0" data-ms-state="${ms.state}" style="font-size: 9px; padding: 1px 6px; background: var(--bg-subtle); color: var(--text-dim); position: relative;">${lbl}${pop}</span>`;
   } else if (quote?.source && quote.source !== "mf-static" && quote.source !== "synthetic") {
     if (quote.stale) {
-      const ageLabel = quote.staleAgeMinutes >= 60
-        ? `${(quote.staleAgeMinutes / 60).toFixed(1)}h old`
-        : `${quote.staleAgeMinutes}m old`;
-      const asOf = quote.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
-      badge = `<span class="pill pill-yellow" style="font-size: 9px; padding: 1px 6px;" title="Data as of ${asOf} IST — upstream feed is behind">DELAYED ${ageLabel}</span>`;
+      // 2026-05-04: was misleading 'DELAYED Xm old' for every stale quote.
+      // Now uses the helper which distinguishes low-volume (LAST HH:MM,
+      // neutral) from real feed lag (LAGGING HH:MM, yellow).
+      badge = _stalenessBadge(quote, inst);
     } else {
       badge = `<span class="pill pill-green" style="font-size: 9px; padding: 1px 6px;" title="NSE · Live">LIVE</span>`;
     }
