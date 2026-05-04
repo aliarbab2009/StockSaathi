@@ -43,9 +43,15 @@ async function verifyPassword(password, expectedHex, saltHex) {
 // ---------- Validation (shared) ------------------------------------------
 export function validateEmail(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim()); }
 export function validatePassword(pw) {
+  // 2026-05-04: dropped the require-letter + require-number rules.
+  // Real-world impact: a teacher on mobile reported failures despite
+  // "using letters and numbers" — turned out swipe-input + autocorrect
+  // were mangling characters and the layered error messages compounded
+  // the confusion. Modern password guidance (NIST SP 800-63B 5.1.1.2)
+  // explicitly recommends AGAINST composition rules — they push users
+  // toward predictable patterns ("Password1") and away from longer
+  // unique passwords. We keep the 8-char minimum as the floor.
   if (!pw || pw.length < 8) return "Password must be at least 8 characters.";
-  if (!/[A-Za-z]/.test(pw)) return "Password must contain a letter.";
-  if (!/[0-9]/.test(pw)) return "Password must contain a number.";
   return null;
 }
 export function validateUsername(u) {
