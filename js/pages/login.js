@@ -64,14 +64,31 @@ export function renderLogin(main) {
     btn.disabled = true;
     btn.textContent = "Logging in…";
     try {
-      // Trim BOTH ends. Mobile autofill / swipe-input frequently leaves
-      // trailing spaces that the user can't see. A trailing space would
-      // make Supabase reject a perfectly correct password as "Incorrect
-      // email or password." — confusing and impossible to debug from the
-      // user's side.
+      // 2026-05-04 EMERGENCY REVERT: removed .trim() on the password field.
+      // While trimming on REGISTER/RESET is fine (we control the new value),
+      // trimming on LOGIN broke users whose existing Supabase-stored password
+      // hash was computed from a value that had whitespace. Trim → different
+      // value → hash mismatch → 'Invalid credentials' on a correct password.
+      // Email handle still trims (case-folded too server-side anyway).
       const handle = main.querySelector("#l-handle").value.trim();
-      const pw = main.querySelector("#l-pw").value.trim();
-      await loginAccount({ emailOrUsername: handle, password: pw });
+      const pwRaw = main.querySelector("#l-pw").value;
+      // Try as-typed first. If Supabase rejects, retry trimmed — covers the
+      // "I typed my password and got an extra space from autofill" case
+      // without breaking accounts whose hash includes whitespace.
+      let lastErr = null;
+      try {
+        await loginAccount({ emailOrUsername: handle, password: pwRaw });
+      } catch (err) {
+        lastErr = err;
+        const trimmed = pwRaw.trim();
+        if (trimmed && trimmed !== pwRaw) {
+          try {
+            await loginAccount({ emailOrUsername: handle, password: trimmed });
+            lastErr = null;
+          } catch (e2) { lastErr = e2; }
+        }
+      }
+      if (lastErr) throw lastErr;
       // Refresh Supabase user cache, then trigger store reload
       const { refreshCurrentUser } = await import("../auth/accounts.js");
       await refreshCurrentUser();
