@@ -58,8 +58,13 @@ export function renderLogin(main) {
     btn.disabled = true;
     btn.textContent = "Logging in…";
     try {
-      const handle = main.querySelector("#l-handle").value;
-      const pw = main.querySelector("#l-pw").value;
+      // Trim BOTH ends. Mobile autofill / swipe-input frequently leaves
+      // trailing spaces that the user can't see. A trailing space would
+      // make Supabase reject a perfectly correct password as "Incorrect
+      // email or password." — confusing and impossible to debug from the
+      // user's side.
+      const handle = main.querySelector("#l-handle").value.trim();
+      const pw = main.querySelector("#l-pw").value.trim();
       await loginAccount({ emailOrUsername: handle, password: pw });
       // Refresh Supabase user cache, then trigger store reload
       const { refreshCurrentUser } = await import("../auth/accounts.js");

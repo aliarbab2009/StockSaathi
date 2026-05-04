@@ -101,8 +101,10 @@ export function renderResetPassword(main) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     errBox.innerHTML = "";
-    const pw = main.querySelector("#rp-pw").value;
-    const pw2 = main.querySelector("#rp-pw2").value;
+    // Trim BOTH ends — mobile autofill / swipe-input frequently leaves
+    // trailing spaces that the user can't see.
+    const pw = main.querySelector("#rp-pw").value.trim();
+    const pw2 = main.querySelector("#rp-pw2").value.trim();
     const vErr = validatePassword(pw);
     if (vErr) return showErr(vErr);
     if (pw !== pw2) return showErr("Passwords don't match.");

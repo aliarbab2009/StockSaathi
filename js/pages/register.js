@@ -109,7 +109,9 @@ export function renderRegister(main) {
       const name = main.querySelector("#r-name").value.trim();
       const username = main.querySelector("#r-username").value.trim();
       const email = main.querySelector("#r-email").value.trim();
-      const pw = main.querySelector("#r-pw").value;
+      // Trim password too — mobile autofill / swipe-input frequently leaves
+      // trailing spaces that the user can't see.
+      const pw = main.querySelector("#r-pw").value.trim();
 
       if (!name || name.length < 2) return showErr("Please enter your full name.");
       const uerr = validateUsername(username); if (uerr) return showErr(uerr);
