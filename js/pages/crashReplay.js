@@ -539,16 +539,17 @@ function renderReplay(main, scenario) {
     }
 
     // Chart — we supply interpolated series up to currentIdx full range.
-    // Animate ONLY on the first paint per scenario (subsequent scrubber
-    // ticks pass animate:false to avoid replaying the 1.5s draw-in).
+    // The 1.5s chart-draw animation was redundant after the generating-
+    // stage's mini-sparkline already showed the user the chart shape
+    // live during generation. Replaying the same line over 1.5s on
+    // arrival just made every replay feel ~1.5s slower for nothing.
+    // Render the chart in its final state immediately.
     const heldSeries = frames.map(f => f.held);
     const panicSeries = frames.map(f => f.panic);
-    const isFirstPaint = !chartRoot.dataset.ssDrawn;
     chartRoot.innerHTML = dualLineChart({
       held: heldSeries, panic: panicSeries, height: 340, width: 900,
-      currentIndex: currentIdx, animate: isFirstPaint,
+      currentIndex: currentIdx,
     });
-    if (isFirstPaint) chartRoot.dataset.ssDrawn = "1";
 
     // Show final banner at end
     finalBanner.style.display = currentIdx >= frames.length - 1 ? "" : "none";
