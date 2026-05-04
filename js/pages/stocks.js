@@ -2538,3 +2538,47 @@ function _renderPersonalCoda() {
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 function escapeAttr(s) { return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
+
+// =============================================================================
+// STALENESS BADGE — replaces the misleading "DELAYED" pill that was showing
+// on every stock whose last NSE tick was > 90s old during market hours.
+//
+// User feedback (2026-05-04): "why so many delayed?". Pattern was:
+//   - LIVE on liquid stocks (3M, 3i Infotech, 63 moons) — they tick every
+//     few seconds during the session
+//   - DELAYED on small/microcaps (3B Films, 7NR Retail, A-1 Ltd) — they
+//     just don't trade every 90s. Yahoo's timestamp is the genuine NSE
+//     last-trade time, not when WE fetched. So the price IS the most
+//     recent available; only the wording was misleading.
+//
+// New rules:
+//   - Quote fresh (< 90s) AND market open       →  LIVE          (green)
+//   - Quote stale AND looks low-volume          →  LAST HH:MM    (neutral)
+//   - Quote stale AND looks high-volume         →  LAGGING HH:MM (yellow)
+//
+// Low-volume heuristic: today's reported volume < 50000 shares OR the
+// instrument is categorised as small/micro cap. Either signal alone is
+// enough. The "LAST HH:MM" wording is neutral — accurate without implying
+// our system is broken.
+function _isLowVolumeStock(inst, quote) {
+  const vol = quote?.volume || 0;
+  if (vol > 0 && vol < 50000) return true;
+  const cap = inst?.cap_bucket || inst?.capBucket || "";
+  if (cap === "micro" || cap === "small") return true;
+  return false;
+}
+function _stalenessBadge(quote, inst, opts) {
+  const o = opts || {};
+  const fontSize = o.size === "mini" ? "8px" : "9px";
+  const padding  = o.size === "mini" ? "0 5px" : "1px 6px";
+  const asOf = quote?.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata"
+  }) : "";
+  const isLowVol = _isLowVolumeStock(inst, quote);
+  if (isLowVol) {
+    const tip = `Low-volume stock — last trade at ${asOf} IST. Price is the most recent available; this stock just doesn't trade every minute.`;
+    return `<span class="pill" style="font-size:${fontSize}; padding:${padding}; background: var(--bg-subtle); color: var(--text-dim);" title="${escapeAttr(tip)}">LAST ${asOf}</span>`;
+  }
+  const tip = `Upstream feed is behind. Last tick at ${asOf} IST.`;
+  return `<span class="pill pill-yellow" style="font-size:${fontSize}; padding:${padding};" title="${escapeAttr(tip)}">LAGGING ${asOf}</span>`;
+}
