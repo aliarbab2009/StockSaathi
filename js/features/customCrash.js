@@ -341,12 +341,13 @@ const _PHASE_A_ALIASES = [
   { tokens: ["trump", "tariff"], year: "2025",
     out: { startIso: "2025-04-01", endIso: "2025-06-30", symbol: "^NSEI",
            hint: "Trump tariff war, Apr 2025" } },
-  // BSE early days / "first opened" / 1990-1992 boom
+  // BSE early days / "first opened" / Liberalisation-era boom
+  // Range capped at 24 months (opHistory rejects > 2 years).
   { tokens: ["stock", "market", "first"],
-    out: { startIso: "1990-01-01", endIso: "1992-03-31", symbol: "^BSESN",
+    out: { startIso: "1990-04-01", endIso: "1992-03-31", symbol: "^BSESN",
            hint: "BSE Sensex early-1990s boom (curated archive)" } },
   { tokens: ["bse", "first"],
-    out: { startIso: "1990-01-01", endIso: "1992-03-31", symbol: "^BSESN",
+    out: { startIso: "1990-04-01", endIso: "1992-03-31", symbol: "^BSESN",
            hint: "BSE early-1990s, Liberalisation-era boom" } },
   { tokens: ["liberalisation"],
     out: { startIso: "1991-06-01", endIso: "1992-03-31", symbol: "^BSESN",
