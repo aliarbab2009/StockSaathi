@@ -3116,8 +3116,8 @@
 }
 .generating-stage.gen-fading-out {
   opacity: 0;
-  transform: translateY(-8px);
-  transition: opacity 220ms ease, transform 220ms ease;
+  transform: translateY(-4px);
+  transition: opacity 80ms ease, transform 80ms ease;
 }
 @media (prefers-reduced-motion: reduce) {
   .gen-stage-row[data-state="active"] .gen-stage-icon { animation: none; }

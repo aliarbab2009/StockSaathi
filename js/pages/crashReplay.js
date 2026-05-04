@@ -257,17 +257,26 @@ function renderSelector(main) {
       advanceGeneratingStage(main, "phaseB", "done", `${total} days`);
     };
 
+    const triggerStartedAt = performance.now();
     try {
       const scenario = await generateCustomCrash(q, { onProgress, onChartReady });
       registerCustomCrash(scenario);
-      // Mark all stages done.
       advanceGeneratingStage(main, "phaseC", "done");
-      // Smooth fade-out then navigate.
-      const stage = main.querySelector("#gen-stage");
-      if (stage) stage.classList.add("gen-fading-out");
+      // FAST-SNAP: if the whole generation resolved in under 600ms (a
+      // cross-user cache hit, basically), the user barely had time to
+      // see the stage at all. Skip the fade entirely and snap-navigate.
+      // For real generations (~3s+) we keep the fade because the user
+      // needs the visual cue that we're done.
+      const elapsed = performance.now() - triggerStartedAt;
+      const FAST_THRESHOLD = 600;
+      const FADE_MS = elapsed < FAST_THRESHOLD ? 0 : 80;
+      if (FADE_MS > 0) {
+        const stage = main.querySelector("#gen-stage");
+        if (stage) stage.classList.add("gen-fading-out");
+      }
       setTimeout(() => {
         location.hash = "#/crash-replay/" + scenario.id;
-      }, 230);
+      }, FADE_MS);
     } catch (e) {
       const msg = String(e?.message || "unknown error");
       // Mark current active stage as error, give user a moment to read,
