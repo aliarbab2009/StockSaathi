@@ -9,6 +9,7 @@
 import { setNewPassword, validatePassword } from "../auth/accounts.js";
 import { switchUser } from "../state.js";
 import { navigate } from "../router.js";
+import { wirePasswordToggle } from "./login.js";
 
 const RECOVERY_WAIT_MS = 5000;
 
@@ -27,12 +28,18 @@ export function renderResetPassword(main) {
         <form class="auth-form" id="rp-form" autocomplete="off" style="display:none;">
           <div class="field">
             <label class="label" for="rp-pw">New password</label>
-            <input class="input" id="rp-pw" type="password" required autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
-            <div class="muted text-xs" style="margin-top: 4px;">8+ characters, with 1 letter and 1 number.</div>
+            <div class="auth-pw-wrap">
+              <input class="input" id="rp-pw" type="password" required autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
+              <button type="button" class="auth-pw-toggle" id="rp-pw-toggle" aria-label="Show password" aria-pressed="false" tabindex="0">👁</button>
+            </div>
+            <div class="muted text-xs" style="margin-top: 4px;">At least 8 characters. Tap the eye icon to check what you typed.</div>
           </div>
           <div class="field">
             <label class="label" for="rp-pw2">Confirm new password</label>
-            <input class="input" id="rp-pw2" type="password" required autocomplete="new-password" minlength="8" placeholder="Type it again" />
+            <div class="auth-pw-wrap">
+              <input class="input" id="rp-pw2" type="password" required autocomplete="new-password" minlength="8" placeholder="Type it again" />
+              <button type="button" class="auth-pw-toggle" id="rp-pw2-toggle" aria-label="Show password" aria-pressed="false" tabindex="0">👁</button>
+            </div>
           </div>
           <div id="rp-error" role="alert"></div>
           <button type="submit" class="btn btn-primary btn-block btn-lg" id="rp-btn">Set new password</button>
@@ -91,6 +98,10 @@ export function renderResetPassword(main) {
     form.style.display = "";
     expired.style.display = "none";
     main.querySelector("#rp-pw")?.focus();
+    // Wire show/hide toggles on both new-password fields. Critical on
+    // mobile for verifying what swipe-input actually typed.
+    wirePasswordToggle(main, "#rp-pw", "#rp-pw-toggle");
+    wirePasswordToggle(main, "#rp-pw2", "#rp-pw2-toggle");
   }
   function showExpired() {
     waiting.style.display = "none";

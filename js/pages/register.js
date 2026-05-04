@@ -8,6 +8,7 @@ import {
 } from "../auth/accounts.js";
 import { switchUser } from "../state.js";
 import { navigate } from "../router.js";
+import { wirePasswordToggle } from "./login.js";
 
 export function renderRegister(main) {
   let stage = "form";    // "form" → "otp" → done
@@ -70,8 +71,11 @@ export function renderRegister(main) {
             </div>
             <div class="field">
               <label class="label" for="r-pw">Password</label>
-              <input class="input" id="r-pw" name="password" type="password" required autocomplete="new-password" placeholder="At least 8 characters" minlength="8" />
-              <div class="muted text-xs" style="margin-top: 4px;">At least 8 characters, with 1 letter and 1 number.</div>
+              <div class="auth-pw-wrap">
+                <input class="input" id="r-pw" name="password" type="password" required autocomplete="new-password" placeholder="At least 8 characters" minlength="8" />
+                <button type="button" class="auth-pw-toggle" id="r-pw-toggle" aria-label="Show password" aria-pressed="false" tabindex="0">👁</button>
+              </div>
+              <div class="muted text-xs" style="margin-top: 4px;">At least 8 characters. Tip: tap the eye icon to check what you typed.</div>
             </div>
 
             <label class="flex items-start gap-2" style="font-size: var(--text-sm); color: var(--text-muted); line-height: 1.5; margin-top: var(--sp-2);">
@@ -101,6 +105,9 @@ export function renderRegister(main) {
     const form = main.querySelector("#reg-form");
     const errBox = main.querySelector("#reg-error");
     const btn = main.querySelector("#reg-btn");
+    // Show / hide password toggle. Critical on mobile where users can't
+    // see what swipe-input / autocorrect actually typed.
+    wirePasswordToggle(main, "#r-pw", "#r-pw-toggle");
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();

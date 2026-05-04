@@ -29,7 +29,10 @@ export function renderLogin(main) {
               <span>Password</span>
               <a href="#/reset-password-request" class="dim text-xs" style="font-weight:500;">Forgot password?</a>
             </label>
-            <input class="input" id="l-pw" name="password" type="password" required autocomplete="current-password" placeholder="At least 8 characters" />
+            <div class="auth-pw-wrap">
+              <input class="input" id="l-pw" name="password" type="password" required autocomplete="current-password" placeholder="Your password" />
+              <button type="button" class="auth-pw-toggle" id="l-pw-toggle" aria-label="Show password" aria-pressed="false" tabindex="0">👁</button>
+            </div>
           </div>
           <div id="login-error" role="alert"></div>
           <button type="submit" class="btn btn-primary btn-block btn-lg" id="login-btn">Log in</button>
@@ -51,6 +54,9 @@ export function renderLogin(main) {
   const form = main.querySelector("#login-form");
   const errBox = main.querySelector("#login-error");
   const btn = main.querySelector("#login-btn");
+  // Show / hide password toggle. Critical on mobile where users can't
+  // see what swipe-input / autocorrect actually typed.
+  wirePasswordToggle(main, "#l-pw", "#l-pw-toggle");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -88,3 +94,24 @@ function escapeHtml(s) {
   const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML;
 }
 function escapeAttr(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+// Wire a click handler on a password-toggle button that flips the
+// associated input between type="password" and type="text". Updates the
+// aria-pressed state and the button glyph. Exported pattern — the same
+// helper is reused in register.js and resetPassword.js.
+export function wirePasswordToggle(root, inputSel, btnSel) {
+  const input = root.querySelector(inputSel);
+  const btn = root.querySelector(btnSel);
+  if (!input || !btn) return;
+  btn.addEventListener("click", () => {
+    const isText = input.type === "text";
+    input.type = isText ? "password" : "text";
+    btn.setAttribute("aria-pressed", isText ? "false" : "true");
+    btn.setAttribute("aria-label", isText ? "Show password" : "Hide password");
+    btn.textContent = isText ? "👁" : "🙈";
+    // Restore caret to end so user can keep typing.
+    input.focus();
+    const len = input.value.length;
+    try { input.setSelectionRange(len, len); } catch {}
+  });
+}
