@@ -583,7 +583,13 @@ export async function findAccountByHandle(handleOrEmail) {
 function prettifySbError(msg) {
   if (!msg) return "Something went wrong.";
   if (/already registered/i.test(msg) || /user already/i.test(msg)) return "An account with this email already exists. Try logging in.";
-  if (/invalid login/i.test(msg)) return "Incorrect email or password.";
+  if (/invalid login/i.test(msg)) {
+    // 2026-05-04: bare "Incorrect email or password." gives no hint why,
+    // and on mobile the most common silent culprit is auto-capitalised
+    // first letter (autocorrect) or autofill capitalisation. Explicitly
+    // cue the user toward the things that are usually wrong.
+    return "Incorrect email or password. Passwords are case-sensitive — if you're on mobile, check that your keyboard didn't auto-capitalise the first letter. Tap the eye icon to verify what you typed.";
+  }
   if (/invalid email/i.test(msg)) return "That email doesn't look valid.";
   if (/password should be/i.test(msg)) return "Password must be at least 6 characters.";
   if (/rate limit/i.test(msg) || /too many requests/i.test(msg)) return "Too many signups from this address. Wait a few minutes and try again — or turn off email confirmation in Supabase (Authentication → Providers → Email).";
