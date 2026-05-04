@@ -23,7 +23,10 @@
       "source": "/js/data/:name(universeFull|mfFull).:hash([a-f0-9]{8}).json",
       "has": [{ "type": "header", "key": "accept-encoding", "value": ".*br.*" }],
       "destination": "/js/data/:name.:hash.json.br"
-    }
+    },
+    { "source": "/privacy",   "destination": "/privacy.html" },
+    { "source": "/terms",     "destination": "/terms.html" },
+    { "source": "/grievance", "destination": "/grievance.html" }
   ],
   "headers": [
     {

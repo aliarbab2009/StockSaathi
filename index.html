@@ -7,8 +7,74 @@
   <meta name="theme-color" content="#0A0B0F" media="(prefers-color-scheme: dark)" />
   <meta name="color-scheme" content="light dark" />
 
-  <title>StockSaathi — Invest virtually, learn for real</title>
-  <meta name="description" content="AI-coached Indian stock investing simulator for teens. Real stocks, virtual money, behavioral reflection — not advice." />
+  <title>StockSaathi: Free Paper Trading Simulator for Indian Teens</title>
+  <meta name="description" content="StockSaathi is a free paper trading simulator for Indian teens 13-18. Learn stock investing with virtual money, real NSE prices, no broker, no risk. SEBI-disclaimed." />
+  <meta name="keywords" content="paper trading simulator india, stock market simulator for teens, learn stock investing india free, virtual trading app, NSE simulator" />
+  <meta name="author" content="Ali Arbab" />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="https://stocksaathi.co.in/" />
+  <link rel="alternate" hreflang="en-IN" href="https://stocksaathi.co.in/" />
+
+  <!-- Open Graph (Facebook / LinkedIn / WhatsApp) -->
+  <meta property="og:title" content="StockSaathi: Free Paper Trading Simulator for Indian Teens" />
+  <meta property="og:description" content="Learn the Indian stock market with virtual money. Real NSE prices, crash replays, AI coach. Built for teens 13-18. Free, educational, SEBI-disclaimed." />
+  <meta property="og:url" content="https://stocksaathi.co.in/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://stocksaathi.co.in/og-image.svg" />
+  <meta property="og:site_name" content="StockSaathi" />
+  <meta property="og:locale" content="en_IN" />
+
+  <!-- Twitter / X cards -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="StockSaathi: Free Paper Trading Simulator for Indian Teens" />
+  <meta name="twitter:description" content="Learn Indian stock investing with virtual money. Real NSE prices, no broker, no risk. Built for teens 13-18." />
+  <meta name="twitter:image" content="https://stocksaathi.co.in/og-image.svg" />
+
+  <!-- Structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "@id": "https://stocksaathi.co.in/#webapp",
+        "name": "StockSaathi",
+        "url": "https://stocksaathi.co.in/",
+        "description": "Free paper trading simulator teaching Indian teens 13-18 how the stock market works. Virtual money, real NSE prices, AI coach, crash replays.",
+        "applicationCategory": "EducationalApplication",
+        "operatingSystem": "Web Browser",
+        "browserRequirements": "Requires modern browser with JavaScript enabled",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "INR" },
+        "audience": { "@type": "EducationalAudience", "educationalRole": "student", "audienceType": "Teens 13-18 in India" },
+        "inLanguage": "en-IN",
+        "isAccessibleForFree": true,
+        "publisher": { "@id": "https://stocksaathi.co.in/#org" }
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://stocksaathi.co.in/#org",
+        "name": "StockSaathi",
+        "url": "https://stocksaathi.co.in/",
+        "logo": "https://stocksaathi.co.in/og-image.svg",
+        "founder": { "@type": "Person", "name": "Ali Arbab" },
+        "foundingDate": "2026",
+        "areaServed": { "@type": "Country", "name": "India" },
+        "knowsLanguage": ["en-IN", "hi-IN"]
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://stocksaathi.co.in/#faq",
+        "mainEntity": [
+          { "@type": "Question", "name": "Is StockSaathi safe for my teenager?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. StockSaathi uses only virtual money. Teens cannot lose, deposit, or withdraw real money. There is no broker connection, no payment processor, and no real trades. The platform is SEBI-disclaimed as an educational simulator only." } },
+          { "@type": "Question", "name": "Does StockSaathi cost anything?", "acceptedAnswer": { "@type": "Answer", "text": "StockSaathi is completely free. There are no ads, no premium tier, no in-app purchases, and no payment information collected." } },
+          { "@type": "Question", "name": "Are stock prices on StockSaathi real?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. StockSaathi uses real NSE end-of-day prices for Indian stocks. However, all trades on the platform are simulated with virtual money." } },
+          { "@type": "Question", "name": "Does StockSaathi give investment advice?", "acceptedAnswer": { "@type": "Answer", "text": "No. StockSaathi is purely educational and does not provide investment advice. Always consult a SEBI-registered investment adviser for real financial decisions." } },
+          { "@type": "Question", "name": "Can teachers use StockSaathi in class?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. The crash-replay mode lets students experience real historical events like 2008 or COVID with virtual money. There is no teacher account required and no student data is sold." } }
+        ]
+      }
+    ]
+  }
+  </script>
 
   <!-- iOS / PWA -->
   <meta name="mobile-web-app-capable" content="yes" />
@@ -36,8 +102,101 @@
 
   <header id="nav-root" class="nav"></header>
 
-  <!-- tabindex="-1" so the skip-link actually moves focus to main content. -->
-  <main id="main" class="main" aria-live="polite" tabindex="-1"></main>
+  <!-- tabindex="-1" so the skip-link actually moves focus to main content.
+       Contains a STATIC hero block visible to crawlers + no-JS visitors.
+       JS replaces this with the SPA shell after hydration. The static
+       block uses the .ss-static-hero class which the SPA can detect and
+       wipe on hydration without flashing. -->
+  <main id="main" class="main" aria-live="polite" tabindex="-1">
+    <div class="ss-static-hero">
+      <style>
+        .ss-static-hero{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;background:#0A0B0F;color:#E5E7EB;line-height:1.6;margin:0 auto;max-width:1100px;padding:0 20px}
+        .ss-static-hero *{box-sizing:border-box}
+        .ss-static-hero a{color:#22C55E;text-decoration:none}
+        .ss-static-hero a:hover{text-decoration:underline}
+        .ss-hero{padding:64px 20px 48px;text-align:center;background:radial-gradient(ellipse at top,rgba(34,197,94,0.08),transparent 60%)}
+        .ss-badge{display:inline-block;background:rgba(34,197,94,0.12);color:#22C55E;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:600;margin-bottom:20px;border:1px solid rgba(34,197,94,0.25)}
+        .ss-hero h1{font-size:clamp(32px,5vw,52px);line-height:1.15;margin:0 0 18px;color:#fff;font-weight:800;letter-spacing:-0.5px}
+        .ss-hero h1 .accent{color:#22C55E}
+        .ss-lede{font-size:clamp(16px,2vw,20px);max-width:680px;margin:0 auto 32px;color:#9CA3AF}
+        .ss-cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:18px}
+        .ss-btn{display:inline-block;padding:14px 26px;border-radius:10px;font-weight:600;font-size:15px;transition:transform 0.15s}
+        .ss-btn:hover{transform:translateY(-1px);text-decoration:none}
+        .ss-btn-primary{background:#22C55E;color:#0A0B0F}
+        .ss-btn-secondary{background:transparent;color:#E5E7EB;border:1px solid #2A2D35}
+        .ss-meta{font-size:13px;color:#6B7280;margin-top:8px}
+        .ss-section{padding:56px 20px;border-top:1px solid #16181F}
+        .ss-section h2{font-size:clamp(24px,3vw,34px);margin:0 0 12px;color:#fff;text-align:center;font-weight:700}
+        .ss-section .sub{text-align:center;color:#9CA3AF;max-width:600px;margin:0 auto 36px}
+        .ss-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+        .ss-card{background:#11131A;border:1px solid #1F222C;border-radius:14px;padding:24px}
+        .ss-card h3{margin:0 0 10px;color:#fff;font-size:18px}
+        .ss-card p{margin:0;color:#9CA3AF;font-size:15px}
+        .ss-card .icon{width:44px;height:44px;border-radius:10px;background:rgba(34,197,94,0.12);color:#22C55E;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px;font-weight:700}
+        .ss-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px;counter-reset:s}
+        .ss-step{position:relative;padding:24px 24px 24px 70px;background:#11131A;border:1px solid #1F222C;border-radius:14px;counter-increment:s}
+        .ss-step::before{content:counter(s);position:absolute;left:20px;top:24px;width:36px;height:36px;border-radius:50%;background:#22C55E;color:#0A0B0F;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px}
+        .ss-step h3{margin:0 0 6px;color:#fff;font-size:17px}
+        .ss-step p{margin:0;color:#9CA3AF;font-size:14px}
+        .ss-aside{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
+        .ss-aside-block{background:linear-gradient(180deg,#11131A,#0E1015);border:1px solid #1F222C;border-radius:14px;padding:22px}
+        .ss-aside-block h3{margin:0 0 8px;color:#22C55E;font-size:16px;font-weight:700}
+        .ss-aside-block p{margin:0;color:#D1D5DB;font-size:14px}
+        details.ss-faq{background:#11131A;border:1px solid #1F222C;border-radius:12px;padding:18px 22px;margin-bottom:12px}
+        details.ss-faq summary{cursor:pointer;font-weight:600;color:#fff;font-size:16px;list-style:none;display:flex;justify-content:space-between;align-items:center}
+        details.ss-faq summary::after{content:"+";color:#22C55E;font-size:22px;font-weight:400;margin-left:12px}
+        details.ss-faq[open] summary::after{content:"−"}
+        details.ss-faq p{color:#9CA3AF;margin:14px 0 0;font-size:15px}
+        @media (max-width:600px){.ss-section{padding:40px 16px}.ss-hero{padding:48px 16px 36px}}
+      </style>
+      <header class="ss-hero">
+        <span class="ss-badge">SEBI-disclaimed · Paper trading only · Built in India</span>
+        <h1>Learn the <span class="accent">Indian stock market</span> with zero risk.</h1>
+        <p class="ss-lede">StockSaathi is a free paper-trading simulator for Indian teens. Real NSE and BSE prices, virtual rupees, an AI Coach that flags emotional decisions before you make them.</p>
+        <div class="ss-cta-row">
+          <a href="#/portfolio" class="ss-btn ss-btn-primary">Open the simulator</a>
+          <a href="#/crash-replay" class="ss-btn ss-btn-secondary">See how it works</a>
+        </div>
+        <p class="ss-meta">No real money. No brokerage account. No card. Ages 13-18.</p>
+      </header>
+      <section class="ss-section">
+        <h2>Three things that make StockSaathi different</h2>
+        <p class="sub">Most demo apps give you fake numbers and call it a day. We do more.</p>
+        <div class="ss-grid">
+          <div class="ss-card"><div class="icon">₹</div><h3>Real Indian stock prices</h3><p>Live quotes for Sensex, Nifty 50, and 500+ NSE and BSE tickers. The same data your parents see on their broker app, fed straight into your virtual portfolio.</p></div>
+          <div class="ss-card"><div class="icon">AI</div><h3>AI Coach that pushes back</h3><p>The coach watches for revenge trades, FOMO buys, and panic sells. Before a bad order goes through, it asks the question your inner adult should have asked.</p></div>
+          <div class="ss-card"><div class="icon">⏱</div><h3>Time Travel through real crashes</h3><p>Trade through the Harshad Mehta scam, the dot-com bust, 2008, demonetisation, and COVID. See how your strategy would have actually held up.</p></div>
+        </div>
+      </section>
+      <section class="ss-section">
+        <h2>How it works</h2>
+        <p class="sub">From sign-up to first trade in under three minutes.</p>
+        <div class="ss-steps">
+          <div class="ss-step"><h3>Pick a starting balance</h3><p>You begin with ₹1,00,000 in virtual money. Adjust it later in settings to match your real-world savings target.</p></div>
+          <div class="ss-step"><h3>Browse and buy</h3><p>Search any stock by name or ticker. Read the live chart, place a market or limit order, and the trade settles instantly at the real-time price.</p></div>
+          <div class="ss-step"><h3>Get coached, get better</h3><p>Each week, your AI report card shows what you got right, where bias crept in, and how the same money would have grown in a Nifty index fund.</p></div>
+        </div>
+      </section>
+      <section class="ss-section">
+        <h2>For students, parents, and teachers</h2>
+        <p class="sub">A safe place to make every beginner mistake before any of them costs real money.</p>
+        <div class="ss-aside">
+          <div class="ss-aside-block"><h3>If you are a student</h3><p>Build a track record before you turn 18. Try strategies, lose virtual money, and learn why every adult told you index funds existed.</p></div>
+          <div class="ss-aside-block"><h3>If you are a parent</h3><p>No card, no PAN, no real trades. Your child gets the same market your demat shows you, but with rupees that cannot leave the simulator.</p></div>
+          <div class="ss-aside-block"><h3>If you are a teacher</h3><p>Free to use in commerce, economics, and finance classrooms. Set a class-wide simulation, compare strategies, run quarterly report-card reviews.</p></div>
+        </div>
+      </section>
+      <section class="ss-section">
+        <h2>Frequently asked questions</h2>
+        <p class="sub">The questions parents ask first, answered straight.</p>
+        <details class="ss-faq"><summary>Is this safe for my child?</summary><p>Yes. StockSaathi is a paper-trading simulator. There is no real money, no card on file, no PAN, no demat, and no way to deposit or withdraw rupees. The worst thing that can happen is your child learns the Indian stock market is harder than YouTubers make it look.</p></details>
+        <details class="ss-faq"><summary>Does this involve real money in any way?</summary><p>No. Every rupee on StockSaathi is virtual. We never ask for bank details, UPI, or card information. We have no payment integration anywhere on the site. The simulator cannot be linked to a real broker.</p></details>
+        <details class="ss-faq"><summary>How is this different from a real broker like Zerodha or Groww?</summary><p>Real brokers execute real trades with your real rupees and report to SEBI. StockSaathi executes simulated trades with virtual rupees, and SEBI rules for brokers do not apply because no securities change hands. We display SEBI-style risk disclaimers because the educational content discusses markets, not because we are a broker.</p></details>
+        <details class="ss-faq"><summary>What happens when my child turns 18?</summary><p>Nothing automatic. The account stays a paper-trading account forever. If they want a real demat account at 18, they choose a SEBI-registered broker themselves. We do not refer, recommend, or partner with any broker, and we never will.</p></details>
+        <details class="ss-faq"><summary>How is data privacy handled for a minor?</summary><p>We collect the minimum needed to log in: an email and a display name. No phone, no address, no PAN, no Aadhaar. Trade data stays on your device first and syncs only if you opt in. You can delete every byte from the settings page or by emailing the grievance officer. Full details on the <a href="/privacy">privacy page</a>.</p></details>
+      </section>
+    </div>
+  </main>
 
   <aside id="coach-root" class="coach-panel" aria-label="Coach panel"></aside>
 
