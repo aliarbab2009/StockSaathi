@@ -279,25 +279,62 @@ function renderSelector(main) {
       }, FADE_MS);
     } catch (e) {
       const msg = String(e?.message || "unknown error");
-      // Mark current active stage as error, give user a moment to read,
-      // then rewind to the selector page with the error visible inline.
-      const activeRow = main.querySelector(".gen-stage-row[data-state='active']");
-      if (activeRow) advanceGeneratingStage(main, activeRow.dataset.stage, "error");
+      // Mark current active stage as error. NOTE: the inline-overlay flow
+      // uses .gen-flow-node, NOT .gen-stage-row (the old full-takeover
+      // selector). Earlier code used the wrong selector so the error
+      // state never showed.
+      const activeNode = main.querySelector(".gen-flow-node[data-state='active']");
+      if (activeNode) advanceGeneratingStage(main, activeNode.dataset.stage, "error");
       const stage = main.querySelector("#gen-stage");
       if (stage) {
-        // Append the error message to the stage card.
+        // Inline error message + actionable suggestions.
         const err = document.createElement("p");
-        err.style.cssText = "margin: var(--sp-3) 0 0 0; color: var(--negative); font-size: var(--text-sm);";
+        err.style.cssText = "margin: var(--sp-3) 0 var(--sp-2) 0; color: var(--negative); font-size: var(--text-sm);";
         const isAuthIssue = /quota|key|rate-?limit/i.test(msg);
-        const extra = isAuthIssue ? "" : " Try a different phrasing, or pick one of the curated replays.";
+        const extra = isAuthIssue ? "" : " Pick an event below, or rephrase.";
         err.textContent = msg + extra;
         stage.appendChild(err);
-        // Add a "Back to scenarios" button.
+        // Suggestion chips for events that DO have data.
+        const chips = document.createElement("div");
+        chips.style.cssText = "display: flex; flex-wrap: wrap; gap: 8px; margin: var(--sp-2) 0 var(--sp-3) 0;";
+        const SUGGESTIONS = [
+          "Harshad Mehta 1992",
+          "Dot Com 2000",
+          "Global Financial Crisis 2008",
+          "COVID March 2020",
+          "Adani Hindenburg Jan 2023",
+        ];
+        for (const s of SUGGESTIONS) {
+          const c = document.createElement("button");
+          c.type = "button";
+          c.className = "crash-sugg-chip";
+          c.textContent = s;
+          c.addEventListener("click", () => {
+            // Re-render the selector first (so input + chips are back in
+            // their original DOM), then prefill input + click Generate.
+            renderSelector(main);
+            const newInput = main.querySelector("#custom-crash-input");
+            const newBtn = main.querySelector("#custom-crash-btn");
+            if (newInput && newBtn) {
+              newInput.value = s;
+              newInput.dispatchEvent(new Event("input", { bubbles: true }));
+              newBtn.click();
+            }
+          });
+          chips.appendChild(c);
+        }
+        stage.appendChild(chips);
+        // "Back to scenarios" button. CRITICAL: setting location.hash to
+        // the same value (we're ALREADY at #/crash-replay) does NOT fire
+        // hashchange, so the previous bare hash assignment did nothing.
+        // Re-call renderSelector(main) directly to restore the page.
         const back = document.createElement("button");
         back.className = "btn btn-primary btn-sm";
-        back.style.cssText = "margin-top: var(--sp-3);";
+        back.style.cssText = "margin-top: var(--sp-2);";
         back.textContent = "← Back to scenarios";
-        back.addEventListener("click", () => { location.hash = "#/crash-replay"; });
+        back.addEventListener("click", () => {
+          renderSelector(main);
+        });
         stage.appendChild(back);
       }
     }
