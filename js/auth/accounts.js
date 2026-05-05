@@ -281,13 +281,48 @@ export async function loginAccount({ emailOrUsername, password }) {
   return acc;
 }
 
+// LOGOUT — hardened 2026-05-05 after user report "LOGOUT DOESNT WORK".
+// Five parallel agents traced it to four compounding issues:
+//   1. _cachedUser was never nulled here (only deleteCurrentAccount did).
+//      Synchronous currentUser() callers kept seeing the old user.
+//   2. ss.sb.session.v1 in localStorage could survive signOut() under
+//      GoTrue lock-deadlock conditions (sync.js:17-23 documents this).
+//   3. autoRefreshToken can race against signOut and write a fresh
+//      token AFTER signOut tried to remove it.
+//   4. Click handlers were not awaiting this promise (fixed in nav.js
+//      and settings.js separately) — but even when they did, the cache
+//      bug above defeated them.
+// Fix order matters: clear in-memory cache FIRST so any synchronous
+// re-read returns null immediately. Then race the network signOut
+// against a 3s timeout (Supabase signOut can hang under network
+// flakiness — better to lose the server-side session destroy than
+// strand the user logged in client-side). Finally, defensively
+// removeItem the storage key to defeat any auto-refresh that wrote
+// a token while we were waiting.
 export async function logoutAccount() {
+  // 1. Null caches synchronously — any re-render between now and the
+  //    next tick will see no user.
+  _cachedUser = null;
+  try { writeSession(null); } catch {}
+
+  // 2. Network signOut, raced against a 3s timeout.
   const client = await sb();
   if (client) {
-    await client.auth.signOut();
-    return;
+    try {
+      await Promise.race([
+        client.auth.signOut(),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
+    } catch {
+      // Swallow — we're forcibly logging out client-side regardless.
+    }
   }
-  writeSession(null);
+
+  // 3. Defensive cleanup — even if signOut "succeeded" the storage
+  //    key may have been re-written by an in-flight token refresh.
+  try {
+    localStorage.removeItem("ss.sb.session.v1");
+  } catch {}
 }
 
 /**
