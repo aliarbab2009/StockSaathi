@@ -211,10 +211,26 @@ export function mountNav() {
       dd.classList.toggle("open");
       avatar.setAttribute("aria-expanded", dd.classList.contains("open"));
     });
-    root.querySelector("#logout-btn")?.addEventListener("click", () => {
-      logoutAccount();
-      switchUser();
-      navigate("/");
+    root.querySelector("#logout-btn")?.addEventListener("click", async (e) => {
+      // Disable while pending so a double-click can't fire two parallel
+      // signOut requests + race the navigation. Logout button text gets
+      // a brief 'Signing out...' so the user has feedback if signOut
+      // happens to be slow (sub-3s expected, 3s hard timeout in
+      // logoutAccount itself).
+      const btn = e.currentTarget;
+      if (btn.dataset.busy === "1") return;
+      btn.dataset.busy = "1";
+      const orig = btn.textContent;
+      btn.textContent = "Signing out…";
+      try {
+        await logoutAccount();
+      } finally {
+        switchUser();
+        navigate("/");
+        // Best-effort restore (the nav re-renders on navigate so this
+        // is mostly defensive in case the nav-rerender doesn't fire).
+        try { btn.textContent = orig; btn.dataset.busy = "0"; } catch {}
+      }
     });
     root.querySelector("#nav-burger-btn")?.addEventListener("click", openDrawer);
     // Mobile bottom nav "More" button opens the same drawer as the top-bar
@@ -334,11 +350,20 @@ function renderDrawer(state, allLinks, active, pfValue, ms) {
   );
   panel.querySelector("[data-close-drawer]")?.addEventListener("click", closeDrawer);
   panel.querySelector("#drawer-theme-toggle")?.addEventListener("click", toggleTheme);
-  panel.querySelector("#drawer-logout")?.addEventListener("click", () => {
-    logoutAccount();
-    switchUser();
-    closeDrawer();
-    navigate("/");
+  panel.querySelector("#drawer-logout")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (btn.dataset.busy === "1") return;
+    btn.dataset.busy = "1";
+    const orig = btn.textContent;
+    btn.textContent = "Signing out…";
+    try {
+      await logoutAccount();
+    } finally {
+      switchUser();
+      closeDrawer();
+      navigate("/");
+      try { btn.textContent = orig; btn.dataset.busy = "0"; } catch {}
+    }
   });
 }
 
