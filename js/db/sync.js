@@ -34,13 +34,27 @@ export async function bootSync() {
   const client = await sb();
   if (!client) return;   // local mode, nothing to do
 
-  // Refresh user profile cache on auth changes
+  // Refresh user profile cache on auth changes.
+  //
+  // 2026-05-05 fix: SIGNED_OUT used to do nothing here (comment said
+  // "state will be cleared by the UI"). But cross-tab logouts left
+  // sibling tabs visually stuck on the logged-in nav because no UI
+  // re-render was triggered. Same problem if a session expires: GoTrue
+  // fires SIGNED_OUT but the nav doesn't update.
+  //
+  // Now: on SIGNED_OUT, explicitly call switchUser() — which fires
+  // emit() on all subscribers, so the nav (and every other subscribed
+  // component) re-renders with isAuthed=false.
   client.auth.onAuthStateChange(async (event, session) => {
     await refreshCurrentUser();
     if (session?.user) {
       await loadAllFromDb();
+    } else if (event === "SIGNED_OUT") {
+      try {
+        const { switchUser } = await import("../state.js");
+        switchUser();
+      } catch {}
     }
-    // sign-out — state will be cleared by the UI
   });
 
   // Initial boot — if already logged in, load everything. Bounded
