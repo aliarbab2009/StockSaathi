@@ -148,10 +148,19 @@ export function renderSettings(main) {
       }
     });
 
-    main.querySelector("#logout-btn2")?.addEventListener("click", () => {
-      logoutAccount();
-      switchUser();
-      navigate("/");
+    main.querySelector("#logout-btn2")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      if (btn.dataset.busy === "1") return;
+      btn.dataset.busy = "1";
+      const orig = btn.textContent;
+      btn.textContent = "Signing out…";
+      try {
+        await logoutAccount();
+      } finally {
+        switchUser();
+        navigate("/");
+        try { btn.textContent = orig; btn.dataset.busy = "0"; } catch {}
+      }
     });
 
     main.querySelector("#change-pw-btn")?.addEventListener("click", async () => {
