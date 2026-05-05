@@ -418,6 +418,27 @@ async function sendAndReply(userText) {
   m_pending = true;
   m_abortController = new AbortController();
 
+  // Off-topic gate. FIRES BEFORE THE LLM CALL. User-reported 2026-05-05:
+  // "help me cook maggi" was bypassing this entirely (it was imported
+  // but never invoked), hitting Gemini Flash with no tools, and the model
+  // regurgitated a verbatim BTC few-shot example from persona.js — answer
+  // came back as "Bitcoin is at ₹76,50,662..." for a cooking question.
+  // Now: any off-topic message gets the canonical refusal and saves the
+  // tokens. The OFF_TOPIC_PATTERNS in persona.js were also broadened to
+  // catch bare-cook-verb constructions like "help me cook maggi".
+  if (isOffTopic(userText)) {
+    const ownerSession_ = getActiveSession(sessionsData);
+    ownerSession_.messages.push({ role: "assistant", text: offTopicRedirect(userText), ts: Date.now() });
+    saveSessions(sessionsData);
+    if (sessionsData.activeId === ownerSession_.id) {
+      chatLog = ownerSession_.messages;
+      render();
+    }
+    m_pending = false;
+    m_abortController = null;
+    return;
+  }
+
   // Capture the OWNER session at send time. If the user switches sessions
   // or hits + New while the stream is running, we still write tokens into
   // the session that owns the user's message — avoiding cross-session

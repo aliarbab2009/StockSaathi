@@ -115,7 +115,13 @@ Always call tools when specific data is needed. Never make up numbers. Never pre
 // Narrow patterns so legitimate finance asks don't get falsely refused.
 // -----------------------------------------------------------------------------
 const OFF_TOPIC_PATTERNS = [
-  /\b(recipe for|how to cook|how to bake|how to make (maggi|maggy|biryani|pasta|noodles|dessert|chai|food))\b/i,
+  // Cooking / food. Original "how to cook X" missed bare "cook maggi" /
+  // "help me cook maggi" — user-reported 2026-05-05: that exact message
+  // bypassed the gate, hit the LLM with no tools, and Gemini regurgitated
+  // a verbatim BTC few-shot example from the system prompt. Broaden to
+  // catch any cooking verb adjacent to a food noun, with or without
+  // "how to" prefix.
+  /\b(recipe for|how to (cook|bake|make)|(cook|bake|fry|boil|prepare|make)\s+(maggi|maggy|biryani|pasta|noodles|dessert|chai|food|rice|dal|paneer|curry|sabzi|roti|paratha|samosa|chai|tea))\b/i,
   /\b(write (a |me )?(function|script|program|code) (in|for)|fix this (bug|error|code)|debug this|syntax error|compile error)\b/i,
   /\b(do my homework|write my essay|solve this (physics|chemistry|biology) problem|ncert solution|jee|neet|cbse exam question)\b/i,
   /\b(girlfriend|boyfriend|crush on|breakup|dating advice|my (parents|mom|dad) (hate|love|don'?t understand) me)\b/i,
