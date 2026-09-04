@@ -6,7 +6,7 @@
 // =============================================================================
 
 const LLM_API_URL = "https://api.anthropic.com/v1/messages";
-const LLM_MODEL = "claude-sonnet-4-5-20250929";  // remote model identifier string required by the upstream API
+const LLM_MODEL = "claude-sonnet-5";  // remote model identifier string required by the upstream API
 const LLM_TIMEOUT_MS = 8000;
 
 const SYSTEM_PROMPT = `You are a financial-behavior reflection companion for Indian students aged 13-18 using a virtual-money investment simulator. You are NOT a financial advisor. You NEVER recommend buying or selling. You observe patterns and ask Socratic questions.

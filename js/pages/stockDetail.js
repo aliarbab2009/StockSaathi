@@ -85,6 +85,20 @@ let _zoomDetach = null;                      // cleanup fn returned by attachCha
 let _gestureActive = false;                  // true while a zoom/pan gesture is in flight
 let _prevLastDataMs = null;                  // tracked for sticky-right-edge logic in refreshHistory
 
+async function withRequestTimeout(promiseFactory, { timeoutMs, timeoutMessage }) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promiseFactory(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // Compute today's IST market session boundaries (09:15 → 15:30) as ms
 // timestamps. Using an explicit "+05:30" offset string makes this work
 // regardless of the user's machine timezone — pacific, eastern,
@@ -1404,10 +1418,13 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
       // 8-15 s the first time in a session; 12 s was too tight and
       // made successful AMOs look like failures. At 25 s anything
       // that hasn't come back is genuinely broken.
-      const res = await Promise.race([
-        placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("AMO request timed out after 25s — Supabase may be unreachable. Open DevTools console for details.")), 25000)),
-      ]);
+      const res = await withRequestTimeout(
+        () => placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
+        {
+          timeoutMs: 25_000,
+          timeoutMessage: "AMO request timed out after 25s — Supabase may be unreachable. Open DevTools console for details.",
+        },
+      );
       console.log("[AMO] placed", res);
       toast({
         kind: "success",
@@ -1480,13 +1497,13 @@ async function reviewTrade(inst, symbol, curPrice, holding) {
     const originalLabel = btn?.textContent;
     if (btn) { btn.disabled = true; btn.textContent = "Placing limit…"; }
     try {
-      await Promise.race([
-        placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
-        new Promise((_, rej) => setTimeout(
-          () => rej(new Error("Limit order timed out after 25s — Supabase may be unreachable. Check console.")),
-          25000
-        )),
-      ]);
+      await withRequestTimeout(
+        () => placeLimitOrder({ symbol, side: ui.side, qty, limitPricePaise: limitPaise }),
+        {
+          timeoutMs: 25_000,
+          timeoutMessage: "Limit order timed out after 25s — Supabase may be unreachable. Check console.",
+        },
+      );
       toast({ kind: "success", message: `${ui.side} limit placed: ${formatQty(qty, inst.kind)} ${symbol} @ ₹${limitRupees.toFixed(2)}. Fills automatically when market crosses.` });
     } catch (e) {
       console.error("[limit] placeLimitOrder failed:", e);

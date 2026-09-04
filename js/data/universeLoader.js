@@ -418,8 +418,8 @@ const SYMBOL_CANONICAL_OVERRIDES = {
   // =========================================================================
   // HOTFIX67c (2026-05-03) — mass cleanup from 5-agent brute-force pass.
   // User: "btw there's only one aviation sector in stocksaathi (INDIGO) ...
-  //        brute force for all other sectors using 5 claude opus 4.7 agents
-  //        no limits". 446 verified-in-universe overrides covering Aviation
+  //        brute force for all other sectors, no limits". 446
+  //        verified-in-universe overrides covering Aviation
   //        (4), Financial Services (45), IT (16), Telecom (5+cables→Power
   //        moved to Power section), Pharma (21), Healthcare (16), FMCG (38),
   //        Consumer Durables (18), Auto (48), Power (37), Metals (24),

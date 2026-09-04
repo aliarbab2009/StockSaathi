@@ -22,6 +22,20 @@ const _recentFills = new Map();     // order-id → ts, debounce re-fires
 const _noQuoteAttempts = new Map(); // order-id → count of ticks with no upstream quote
 const _NO_QUOTE_CANCEL_AFTER = 12;  // ~2 min at 12s tick — auto-cancel stuck orders
 
+async function withRpcTimeout(promiseFactory, timeoutMs, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promiseFactory(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // AUTH LOCK CONTENTION — why no getSession / getUser here anymore.
 //
 // v135 wrapped placeLimitOrder's client.auth.getSession() and this file's
@@ -95,12 +109,16 @@ export async function placeLimitOrder({ symbol, side, qty, limitPricePaise }) {
   // bubbles back as a PostgREST error we can catch below.
   console.info("[limit] RPC start");
   const t0 = Date.now();
-  const { data, error } = await client.rpc("place_limit_order", {
-    p_symbol: symbol,
-    p_side: side,
-    p_qty: qty,
-    p_limit_price_paise: Math.round(limitPricePaise),
-  });
+  const { data, error } = await withRpcTimeout(
+    () => client.rpc("place_limit_order", {
+      p_symbol: symbol,
+      p_side: side,
+      p_qty: qty,
+      p_limit_price_paise: Math.round(limitPricePaise),
+    }),
+    25_000,
+    "place_limit_order"
+  );
   console.info(`[limit] RPC done in ${Date.now() - t0}ms`, { ok: !error, hasData: !!data });
   if (error) {
     console.error("[limit] RPC error:", error);
